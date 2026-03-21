@@ -8,6 +8,7 @@
     "sync:runtimes": "node scripts/sync-runtimes.mjs",
     "check:runtimes": "node scripts/sync-runtimes.mjs --check",
     "test:mcp": "node scripts/mcp/meta-runtime-server.mjs --self-test",
+    "prepare:openclaw-local": "node scripts/prepare-openclaw-local.mjs",
     "eval:agents": "node scripts/eval-meta-agents.mjs",
     "validate": "node scripts/validate-project.mjs",
     "check": "npm run check:runtimes && npm run validate"

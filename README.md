@@ -69,19 +69,29 @@ npm install
 npm run sync:runtimes
 ```
 
-### 3. 验证仓库状态
+### 3. 准备 OpenClaw 本地授权镜像
+
+```bash
+npm run prepare:openclaw-local
+```
+
+这一步会把你本机已经授权好的 `~/.openclaw/agents/main/agent/` 里的
+`auth.json / auth-profiles.json / models.json`
+同步到 Meta_Kim 的 8 个本地 meta agent 运行时目录。
+
+### 4. 验证仓库状态
 
 ```bash
 npm run validate
 ```
 
-### 4. 全量检查
+### 5. 全量检查
 
 ```bash
 npm run check
 ```
 
-### 5. 运行时验收
+### 6. 运行时验收
 
 ```bash
 npm run eval:agents
@@ -122,6 +132,7 @@ bash install-deps.sh
 ```bash
 npm install
 npm run sync:runtimes
+npm run prepare:openclaw-local
 ```
 
 2. 把 `openclaw/openclaw.template.json` 或本机生成的 `openclaw/openclaw.local.json` 合并到你的 OpenClaw 配置里。
@@ -152,6 +163,7 @@ openclaw agent --local --agent meta-warden -m "Read your SOUL.md first, then int
 
 - `npm run sync:runtimes`：重新生成 OpenClaw workspace、共享 skill 镜像、OpenClaw 配置模板
 - `npm run test:mcp`：测试本地 MCP 服务是否能启动
+- `npm run prepare:openclaw-local`：同步你本机已授权的 OpenClaw 主 agent 认证状态到 8 个 meta agent
 - `npm run eval:agents`：跑 Claude / Codex / OpenClaw 三端的真实验收
 - `npm run validate`：校验主源、派生产物、Hook、MCP 配置是否一致
 - `npm run check`：先检查派生产物是否最新，再执行完整校验

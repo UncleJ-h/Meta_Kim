@@ -68,7 +68,8 @@ async function validateRequiredFiles() {
     "openclaw/openclaw.template.json",
     "codex/config.toml.example",
     "scripts/mcp/meta-runtime-server.mjs",
-    "scripts/eval-meta-agents.mjs"
+    "scripts/eval-meta-agents.mjs",
+    "scripts/prepare-openclaw-local.mjs"
   ];
 
   for (const relativePath of requiredFiles) {
@@ -208,6 +209,10 @@ async function validatePackageJson() {
   assert(pkg.scripts?.["sync:runtimes"], "package.json is missing sync:runtimes.");
   assert(pkg.scripts?.validate, "package.json is missing validate.");
   assert(pkg.scripts?.["eval:agents"], "package.json is missing eval:agents.");
+  assert(
+    pkg.scripts?.["prepare:openclaw-local"],
+    "package.json is missing prepare:openclaw-local."
+  );
   assert(pkg.dependencies?.["@modelcontextprotocol/sdk"], "package.json is missing @modelcontextprotocol/sdk.");
   assert(pkg.dependencies?.zod, "package.json is missing zod.");
   assert(pkg.license === "MIT", "package.json license must be MIT.");

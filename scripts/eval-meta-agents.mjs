@@ -25,8 +25,8 @@ const claudeSchema = JSON.stringify({
 
 const claudeCases = {
   "meta-warden": {
-    ownGroups: [["统筹", "协调", "编排"], ["质量", "关卡", "仲裁"], ["综合", "整合", "最终"]],
-    refuseGroups: [["具体分析", "分析"], ["工具发现", "Scout", "scout"]],
+    ownGroups: [["统筹", "协调", "编排", "质量标准", "CEO"], ["质量", "关卡", "仲裁"], ["综合", "整合", "最终"]],
+    refuseGroups: [["具体分析", "分析"], ["工具发现", "Scout", "scout", "SOUL"]],
     artifactGroups: [["报告", "综合", "go/no-go", "仲裁"]],
   },
   "meta-genesis": {
