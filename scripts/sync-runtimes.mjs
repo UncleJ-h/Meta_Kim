@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,8 @@ const sharedSkillsDir = path.join(repoRoot, "shared-skills");
 const templateConfigPath = path.join(openclawDir, "openclaw.template.json");
 const localConfigPath = path.join(openclawDir, "openclaw.local.json");
 const checkOnly = process.argv.includes("--check");
+const genericOpenClawModel =
+  process.env.META_KIM_TEMPLATE_OPENCLAW_MODEL || "claude-sonnet-4-5";
 
 const preferredOrder = [
   "meta-warden",
@@ -96,6 +99,141 @@ function sortAgents(agents) {
     }
     return leftIndex - rightIndex;
   });
+}
+
+function parseAgentPresentation(agent) {
+  const titleMatch = agent.title.match(/^(.*?)(?::\s*(.*?))?(?:\s+([^\s]+))?$/u);
+  const displayName = titleMatch?.[1]?.trim() || agent.id;
+  const localizedRole = titleMatch?.[2]?.trim() || agent.description;
+  const emoji = titleMatch?.[3]?.trim() || "🤖";
+
+  return {
+    displayName,
+    localizedRole,
+    emoji,
+  };
+}
+
+function buildBootstrap(agent) {
+  const { displayName, localizedRole } = parseAgentPresentation(agent);
+
+  return `# BOOTSTRAP.md - ${agent.id}
+
+此 workspace 已预装 Meta_Kim 的元架构资产，不需要从零塑造人格。
+
+## 冷启动顺序
+
+1. 先读 \`IDENTITY.md\`，确认你是 \`${displayName}\`，职责是 ${localizedRole}。
+2. 再读 \`SOUL.md\`，明确自己的边界和质量标准。
+3. 再读 \`TOOLS.md\` 与 \`AGENTS.md\`，决定哪些请求应该委派。
+4. 只有用户明确要求补充长期上下文时，才更新 \`USER.md\`。
+
+## 第一轮回复要求
+
+- 先用一句话复述你当前只负责什么。
+- 不要吞掉别的元 agent 的职责。
+- 跨边界冲突默认升级给 \`meta-warden\`。
+`;
+}
+
+function buildIdentity(agent) {
+  const { displayName, localizedRole, emoji } = parseAgentPresentation(agent);
+
+  return `# IDENTITY.md - ${agent.id}
+
+- **Name:** ${displayName}
+- **Creature:** Meta_Kim 元 agent
+- **Vibe:** 专注、克制、边界清晰，主责 ${localizedRole}
+- **Emoji:** ${emoji}
+- **Avatar:** 
+
+## Identity Notes
+
+- Agent ID: \`${agent.id}\`
+- Core role: ${agent.description}
+- Canonical source: \`${agent.sourceFile}\`
+`;
+}
+
+function buildUser() {
+  return `# USER.md - About Your Human
+
+- **Name:**
+- **What to call them:**
+- **Pronouns:** _(optional)_
+- **Timezone:**
+- **Notes:**
+
+## Context
+
+补充这位用户和 Meta_Kim 项目有关的长期偏好，但不要记录无关隐私。
+`;
+}
+
+async function readJsonIfExists(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function pickPreferredModelFromProviders(providers) {
+  const candidates = [];
+
+  for (const [providerId, provider] of Object.entries(providers || {})) {
+    for (const model of provider.models || []) {
+      if (!Array.isArray(model.input) || !model.input.includes("text")) {
+        continue;
+      }
+
+      candidates.push({
+        qualifiedId: `${providerId}/${model.id}`,
+        reasoning: Boolean(model.reasoning),
+      });
+    }
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const preferredPatterns = [/M2\.7/i, /M2\.5/i, /sonnet/i, /opus/i, /gpt/i];
+  for (const pattern of preferredPatterns) {
+    const match = candidates.find((candidate) => pattern.test(candidate.qualifiedId));
+    if (match) {
+      return match.qualifiedId;
+    }
+  }
+
+  return (
+    candidates.find((candidate) => candidate.reasoning)?.qualifiedId ||
+    candidates[0].qualifiedId
+  );
+}
+
+async function detectLocalOpenClawModel() {
+  const explicit =
+    process.env.META_KIM_OPENCLAW_MODEL || process.env.OPENCLAW_DEFAULT_MODEL;
+  if (explicit) {
+    return explicit;
+  }
+
+  const globalConfig = await readJsonIfExists(
+    path.join(os.homedir(), ".openclaw", "openclaw.json")
+  );
+  const configuredPrimary = globalConfig?.agents?.defaults?.model?.primary;
+  if (typeof configuredPrimary === "string" && configuredPrimary.trim()) {
+    return configuredPrimary.trim();
+  }
+
+  const mainModels = await readJsonIfExists(
+    path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "models.json")
+  );
+  return pickPreferredModelFromProviders(mainModels?.providers) || genericOpenClawModel;
 }
 
 async function loadAgents() {
@@ -205,13 +343,37 @@ function buildOpenClawConfig(agents, workspaceRoot) {
   return {
     agents: {
       defaults: {
-        model: "claude-sonnet-4-5",
+        model: genericOpenClawModel,
       },
       list: agents.map((agent, index) => ({
         id: agent.id,
         default: index === 0,
         name: agent.title,
         workspace: path.join(workspaceRoot, agent.id),
+      })),
+    },
+    bindings: [],
+    tools: {
+      agentToAgent: {
+        enabled: true,
+        allow: agents.map((agent) => agent.id),
+      },
+    },
+  };
+}
+
+function buildLocalOpenClawConfig(agents, workspaceRoot, model) {
+  return {
+    agents: {
+      defaults: {
+        model,
+      },
+      list: agents.map((agent, index) => ({
+        id: agent.id,
+        default: index === 0,
+        name: agent.title,
+        workspace: path.join(workspaceRoot, agent.id),
+        model,
       })),
     },
     bindings: [],
@@ -260,11 +422,21 @@ async function main() {
   const agents = await loadAgents();
   const teamDirectory = buildWorkspaceDirectory(agents);
   const portableSkill = await fs.readFile(claudeSkillPath, "utf8");
+  const localOpenClawModel = await detectLocalOpenClawModel();
   const changedFiles = [];
 
   for (const agent of agents) {
     const workspaceDir = path.join(openclawWorkspacesDir, agent.id);
     const writes = await Promise.all([
+      writeGeneratedFile(
+        path.join(workspaceDir, "BOOTSTRAP.md"),
+        buildBootstrap(agent)
+      ),
+      writeGeneratedFile(
+        path.join(workspaceDir, "IDENTITY.md"),
+        buildIdentity(agent)
+      ),
+      writeGeneratedFile(path.join(workspaceDir, "USER.md"), buildUser()),
       writeGeneratedFile(path.join(workspaceDir, "SOUL.md"), buildSoul(agent)),
       writeGeneratedFile(path.join(workspaceDir, "AGENTS.md"), teamDirectory),
       writeGeneratedFile(
@@ -287,9 +459,10 @@ async function main() {
     agents,
     "__REPO_ROOT__/openclaw/workspaces"
   );
-  const localConfig = buildOpenClawConfig(
+  const localConfig = buildLocalOpenClawConfig(
     agents,
-    path.join(repoRoot, "openclaw", "workspaces")
+    path.join(repoRoot, "openclaw", "workspaces"),
+    localOpenClawModel
   );
 
   if ((await writeGeneratedJson(templateConfigPath, templateConfig)).changed) {
@@ -337,7 +510,9 @@ async function main() {
     return;
   }
 
-  console.log(`Synced ${agents.length} agents into OpenClaw runtime assets.`);
+  console.log(
+    `Synced ${agents.length} agents into OpenClaw runtime assets with local model ${localOpenClawModel}.`
+  );
 }
 
 await main();

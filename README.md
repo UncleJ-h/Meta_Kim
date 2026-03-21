@@ -81,6 +81,17 @@ npm run validate
 npm run check
 ```
 
+### 5. 运行时验收
+
+```bash
+npm run eval:agents
+```
+
+这一步会做三件事：
+- 验证 Claude Code 是否识别 8 个元 agent，并逐个跑角色边界自检
+- 验证 Codex 是否能从仓库入口、skill、MCP 入口读到正确接入点
+- 验证 OpenClaw 本地配置是否可用，并对代表性元 agent 做真实冒烟
+
 ## 五、怎么在不同运行时使用
 
 ### Claude Code
@@ -114,6 +125,7 @@ npm run sync:runtimes
 ```
 
 2. 把 `openclaw/openclaw.template.json` 或本机生成的 `openclaw/openclaw.local.json` 合并到你的 OpenClaw 配置里。
+   本机生成的 `openclaw/openclaw.local.json` 会优先跟随 `~/.openclaw/openclaw.json` 里的当前 primary model，而不是写死仓库默认值。
 3. 安装 portable skill：
 
 ```bash
@@ -122,6 +134,9 @@ openclaw skill install ./openclaw/skills/meta-theory.md
 
 4. 让 OpenClaw 的 agent workspace 指向 `openclaw/workspaces/<agent-id>/`。
 5. 每个 workspace 内已经自动生成：
+   - `BOOTSTRAP.md`
+   - `IDENTITY.md`
+   - `USER.md`
    - `SOUL.md`
    - `AGENTS.md`
    - `TOOLS.md`
@@ -137,6 +152,7 @@ openclaw agent --local --agent meta-warden -m "Read your SOUL.md first, then int
 
 - `npm run sync:runtimes`：重新生成 OpenClaw workspace、共享 skill 镜像、OpenClaw 配置模板
 - `npm run test:mcp`：测试本地 MCP 服务是否能启动
+- `npm run eval:agents`：跑 Claude / Codex / OpenClaw 三端的真实验收
 - `npm run validate`：校验主源、派生产物、Hook、MCP 配置是否一致
 - `npm run check`：先检查派生产物是否最新，再执行完整校验
 
@@ -192,6 +208,9 @@ Meta_Kim 的“跨运行时”不是假装三套系统完全一样。
 
 因此当前仓库也同步补上了：
 - `.codex/skills/meta-theory.md`
+- `openclaw/workspaces/*/BOOTSTRAP.md`
+- `openclaw/workspaces/*/IDENTITY.md`
+- `openclaw/workspaces/*/USER.md`
 - `openclaw/workspaces/*/TOOLS.md`
 - `openclaw/workspaces/*/skills/meta-theory/SKILL.md`
 

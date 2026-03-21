@@ -1,3 +1,4 @@
 node_modules/
 npm-debug.log*
 openclaw/openclaw.local.json
+openclaw/workspaces/*/.openclaw/

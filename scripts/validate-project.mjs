@@ -67,7 +67,8 @@ async function validateRequiredFiles() {
     "openclaw/skills/meta-theory.md",
     "openclaw/openclaw.template.json",
     "codex/config.toml.example",
-    "scripts/mcp/meta-runtime-server.mjs"
+    "scripts/mcp/meta-runtime-server.mjs",
+    "scripts/eval-meta-agents.mjs"
   ];
 
   for (const relativePath of requiredFiles) {
@@ -110,6 +111,12 @@ async function validateOpenClawArtifacts(agentIds) {
   const sortedConfigIds = [...configIds].sort();
 
   assert(
+    typeof templateConfig.agents?.defaults?.model === "string" &&
+      templateConfig.agents.defaults.model.length >= 1,
+    "openclaw/openclaw.template.json is missing a default model."
+  );
+
+  assert(
     JSON.stringify(sortedConfigIds) === JSON.stringify(sortedAgentIds),
     "openclaw/openclaw.template.json agent list is out of sync with .claude/agents."
   );
@@ -122,7 +129,15 @@ async function validateOpenClawArtifacts(agentIds) {
   );
 
   for (const agentId of agentIds) {
-    for (const fileName of ["SOUL.md", "AGENTS.md", "HEARTBEAT.md", "TOOLS.md"]) {
+    for (const fileName of [
+      "BOOTSTRAP.md",
+      "IDENTITY.md",
+      "USER.md",
+      "SOUL.md",
+      "AGENTS.md",
+      "HEARTBEAT.md",
+      "TOOLS.md"
+    ]) {
       const workspaceFile = path.join(openclawWorkspacesDir, agentId, fileName);
       assert(await exists(workspaceFile), `Missing OpenClaw workspace file: ${path.relative(repoRoot, workspaceFile)}`);
     }
@@ -192,6 +207,7 @@ async function validatePackageJson() {
   const pkg = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
   assert(pkg.scripts?.["sync:runtimes"], "package.json is missing sync:runtimes.");
   assert(pkg.scripts?.validate, "package.json is missing validate.");
+  assert(pkg.scripts?.["eval:agents"], "package.json is missing eval:agents.");
   assert(pkg.dependencies?.["@modelcontextprotocol/sdk"], "package.json is missing @modelcontextprotocol/sdk.");
   assert(pkg.dependencies?.zod, "package.json is missing zod.");
   assert(pkg.license === "MIT", "package.json license must be MIT.");
@@ -200,7 +216,11 @@ async function validatePackageJson() {
 async function validateGitignore() {
   const gitignorePath = path.join(repoRoot, ".gitignore");
   const gitignore = await fs.readFile(gitignorePath, "utf8");
-  for (const expected of ["node_modules/", "openclaw/openclaw.local.json"]) {
+  for (const expected of [
+    "node_modules/",
+    "openclaw/openclaw.local.json",
+    "openclaw/workspaces/*/.openclaw/"
+  ]) {
     assert(gitignore.includes(expected), `.gitignore is missing ${expected}`);
   }
 }
