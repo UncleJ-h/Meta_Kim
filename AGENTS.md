@@ -73,7 +73,7 @@ Do not treat these as the long-term maintenance source:
 - `.agents/skills`
 - `openclaw/workspaces`
 
-Those are generated mirrors maintained by sync tooling.
+Those are runtime mirrors maintained by sync tooling.
 
 ## Working Loop
 
@@ -85,7 +85,7 @@ After changing canonical source files:
 
 ## Industry Agent Foundry
 
-This repository also contains a new production scaffold for a department-first industry library.
+This repository also contains a department-first industry library.
 
 See:
 
@@ -99,7 +99,7 @@ The current matrix is:
 - 20 industries
 - 5 departments per industry
 - 100 department-level agents
-- 1000 generated specialist agents
+- 1000 specialist agents
 - organization and orchestration assets for multi-department routing
 - runtime-pack projections for Claude Code, Codex, and OpenClaw under `factory/runtime-packs/`
 

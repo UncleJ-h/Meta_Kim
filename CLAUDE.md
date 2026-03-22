@@ -62,7 +62,7 @@ So in practice:
 
 - `.claude/agents/*.md` must keep valid YAML frontmatter or Claude Code will not register them as project agents.
 - `.claude/agents/*.md` and `.claude/skills/meta-theory/SKILL.md` are the only long-term canonical edit targets.
-- `.codex/agents/*`, `.agents/skills/*`, and `openclaw/workspaces/*` are derived artifacts and should not become the maintenance source.
+- `.codex/agents/*`, `.agents/skills/*`, and `openclaw/workspaces/*` are runtime mirrors and should not become the maintenance source.
 - After changing prompts, skills, or runtime contracts, run:
   - `npm run sync:runtimes`
   - `npm run validate`

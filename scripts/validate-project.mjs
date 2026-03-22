@@ -127,10 +127,7 @@ async function validateRequiredFiles() {
     "openclaw/skills/meta-theory.md",
     "openclaw/openclaw.template.json",
     "codex/config.toml.example",
-    "factory/industry-coverage-matrix.md",
-    "factory/flagship-20.md",
     "factory/department-call-protocol.json",
-    "factory/orchestration-playbooks.md",
     "factory/organization-map.json",
     "factory/agent-library/agent-index.json",
     "factory/flagship-complete/index.json",
@@ -435,10 +432,14 @@ async function validateFactoryRelease() {
   const legacyPaths = [
     "factory/generated",
     "factory/catalog",
+    "factory/flagship-20",
     "factory/flagship-batch-1",
     "factory/flagship-batch-2",
     "factory/flagship-batch-3",
     "factory/flagship-batch-4",
+    "factory/industry-coverage-matrix.md",
+    "factory/flagship-20.md",
+    "factory/orchestration-playbooks.md",
     "scripts/generate-industry-agents.mjs",
     "scripts/compile-foundry-runtime-packs.mjs",
     "scripts/build-flagship-batch-1.mjs",
@@ -468,6 +469,40 @@ async function validateFactoryRelease() {
       !(await exists(path.join(repoRoot, relativePath))),
       `Legacy release-build artifact should not exist in public repo: ${relativePath}`
     );
+  }
+
+  const factoryRootEntries = await fs.readdir(path.join(repoRoot, "factory"), {
+    withFileTypes: true
+  });
+  for (const entry of factoryRootEntries) {
+    assert(
+      !(entry.isFile() && entry.name.endsWith(".md")),
+      `factory/ should not contain user-facing Markdown docs: factory/${entry.name}`
+    );
+  }
+
+  const factoryMarkdownFiles = await walkFiles(path.join(repoRoot, "factory"), ".md");
+  for (const filePath of factoryMarkdownFiles) {
+    const baseName = path.basename(filePath).toLowerCase();
+    assert(
+      !baseName.startsWith("readme"),
+      `Nested README files are not allowed in factory/: ${path.relative(repoRoot, filePath)}`
+    );
+  }
+  const factoryTomlFiles = await walkFiles(path.join(repoRoot, "factory"), ".toml");
+  const forbiddenFactoryDocRefs = [
+    "factory/industry-coverage-matrix.md",
+    "factory/flagship-20.md",
+    "factory/orchestration-playbooks.md"
+  ];
+  for (const filePath of [...factoryMarkdownFiles, ...factoryTomlFiles]) {
+    const raw = await fs.readFile(filePath, "utf8");
+    for (const marker of forbiddenFactoryDocRefs) {
+      assert(
+        !raw.includes(marker),
+        `${path.relative(repoRoot, filePath)} still references removed release doc ${marker}.`
+      );
+    }
   }
 
   const departmentCount = await countFiles(

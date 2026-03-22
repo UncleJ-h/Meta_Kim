@@ -10,519 +10,308 @@
 
 **跨 Claude Code / Codex / OpenClaw 的意图放大元架构工程**
 
-论文评测、三端适配、元 agent 组织体系，统一落在一个可开源、可复用、可演化的仓库里。
+Meta_Kim 用一套统一的方法，把元 agent、skill、MCP、hook、memory、workspace 和运行时镜像组织成同一个可开源、可复用、可扩展的系统。
 
 </div>
 
-**Meta_Kim 不是一个“多放几个 agent 文件”的仓库。**
+## 这是什么项目
 
-**它是一套试图在 Claude Code、Codex、OpenClaw 三个运行时里，建立同一套意图放大规矩的元架构工程。**
+Meta_Kim 不是聊天产品，不是 SaaS，不是一个“大 prompt”，也不是把很多 agent 文件堆在一起。
 
-这个项目背后的判断很明确：
+它是一套跨运行时的工程化方法：
 
-**AI 时代真正的分水岭，不只是模型，而是你会不会组织复杂问题。**
+- 用户先给出原始意图
+- 系统先做意图放大，而不是直接急着回答
+- 系统按元架构决定该拆给谁、该跳过什么、该先做什么
+- 最后在 Claude Code、Codex、OpenClaw 三个运行时里保持同一套底层规矩
 
-今天很多人用 AI 的方式，其实不是在做系统，而是在许愿：
+一句话说：
 
-- 扔一句大需求进去
-- 等一个完整世界吐出来
-- 单次能跑，就以为方法成立
+**Meta_Kim 关心的不是“单次答得像不像”，而是“复杂任务能不能被持续、稳定、可治理地完成”。**
 
-Meta_Kim 不站这个方向。
+## 元的理念
 
-它要立的是另一套东西：
+在 Meta_Kim 里：
 
-- 用户说的是原始意图，不是完整任务
-- 系统不能急着答，必须先做结构化理解
-- 复杂问题不能一口吞，必须先拆、先组、先编排
-- 一次生成成功不值钱，能反复稳定做出来才值钱
-- 这套规矩不能只在一个软件里成立，而要在三个运行时里都成立
+**元 = 为了支持意图放大而存在的最小可治理单元。**
 
-这就是 Meta_Kim 的出发点。
+它至少要满足五个条件：
 
-* * *
+- 能独立理解
+- 足够小，便于控制
+- 边界清晰，知道自己不负责什么
+- 可替换，不会一换就让系统整体塌掉
+- 可复用，能被重复编排
 
-## 如果你要看发布版行业层，直接看这些
+Meta_Kim 不把“元”当修辞，而是把它当架构粒度。
 
-- [`factory/industry-coverage-matrix.md`](factory/industry-coverage-matrix.md)
-- [`factory/flagship-20.md`](factory/flagship-20.md)
-- [`factory/agent-library/`](factory/agent-library)
-- [`factory/flagship-complete/agents/`](factory/flagship-complete/agents)
-- [`factory/flagship-complete/index.json`](factory/flagship-complete/index.json)
-- [`factory/runtime-packs/`](factory/runtime-packs)
-- [`factory/runtime-packs/summary.json`](factory/runtime-packs/summary.json)
+## 方法主线
 
-项目说明统一放在根目录 README。  
-`factory/` 下面只保留内容、索引和运行时资产，不放二级说明书。
+Meta_Kim 的核心链路只有一条：
 
-### `factory/` 发布地图
-
-`factory/` 里面真正的发布主层只有 3 个目录：
-
-- `agent-library/`：完整的 100 个部门 + 1000 个 specialist 人类可读库
-- `flagship-complete/`：20 个旗舰成品层
-- `runtime-packs/`：Claude Code / Codex / OpenClaw 三端导入层
-
-`factory/` 根部剩下那些文件，不是第二套说明书，而是索引和协议：
-
-- `industry-coverage-matrix.md`：行业和部门覆盖总表
-- `flagship-20.md`：第一批 20 个旗舰部门 seed 总表
-- `organization-map.json`：机器可读组织图
-- `department-call-protocol.json`：默认路由与 handoff 规则
-- `orchestration-playbooks.md`：跨部门协作流程
-
-## 这项目到底在立什么
-
-Meta_Kim 想建立的，不是一个“更会说话”的 AI。
-
-它想建立的是一套更成熟的工作方式：
-
-**先把人的原始意图看清、补全、组织起来，再开始执行。**
-
-所以这个仓库不是聊天产品，不是网页，不是 SaaS，也不是一个大 prompt。
-
-它更像一个 AI 助手的内核工程，里面会同时出现：
-
-- agent
-- skill
-- MCP
-- hook
-- memory
-- workspace
-- 配置模板
-- 同步脚本
-- 校验脚本
-
-因为 Meta_Kim 不是在做“回答器”，而是在做“组织器”。
-
-## Meta_Kim 的四条主线
-
-Meta_Kim 真正的主线，不是只讲“元”。
-
-它讲的是一整条链：
-
-**元 → 组织镜像 → 节奏编排 → 意图放大**
+**元 -> 组织镜像 -> 节奏编排 -> 意图放大**
 
 ```mermaid
 flowchart LR
     A["元<br/>最小可治理单元"] --> B["组织镜像<br/>把元组织成结构"]
-    B --> C["节奏编排<br/>决定什么时候给什么"]
+    B --> C["节奏编排<br/>控制时机、顺序、插队与跳过"]
     C --> D["意图放大<br/>把原始意图展开成可执行任务"]
 ```
 
-这四个词分别解决四个不同的问题：
+这四段分别解决四个问题：
 
-- `元`：解决“怎么拆”
-- `组织镜像`：解决“怎么组”
-- `节奏编排`：解决“怎么发”
-- `意图放大`：解决“怎么成”
+- `元`：怎么拆
+- `组织镜像`：怎么组
+- `节奏编排`：怎么发
+- `意图放大`：怎么成
 
-如果少一段，这套方法都不完整。
+缺任何一段，这套方法都不完整。
 
-### 1. 元
+## 系统怎么工作
 
-**元 = 系统里最小的可治理单元。**
+默认工作路径不是“用户提问 -> 直接生成”。
 
-注意，不是“最小零件”，也不是“最小执行块”，而是：
-
-**最小可治理单元。**
-
-一个东西想配叫“元”，至少要满足五个标准：
-
-- 独立：能单独被理解、讨论、调用
-- 足够小：粒度合适，再往下拆就开始反噬
-- 边界清晰：知道自己负责什么，不负责什么
-- 可替换：换掉它，系统不至于整体塌掉
-- 可复用：不是只活一次的临时拼装件
-
-所以 Meta_Kim 讲“元”，不是为了把事情拆碎，而是为了把复杂重新变得可控。
-
-### 2. 组织镜像
-
-**组织镜像不是修辞，不是比喻，它是一种架构方法。**
-
-它的意思是：
-
-把真实组织里的这些机制，映射进 AI 系统：
-
-- 层级委派
-- 职责分工
-- 独立工作空间
-- 评审反馈
-- 持续进化
-
-这样一来，系统就不再像一堆插件或一锅共享上下文，而开始像一个真正能运转的组织。
-
-组织镜像主要解决三个老问题：
-
-- 串味：A 角色的判断跑进 B 角色的工作空间
-- 协调爆炸：角色一多，链路迅速打结
-- 认知过载：设计者要手搓所有关系，最后人在伺候系统
-
-Meta_Kim 要的不是“agent 多”，而是“agent 被组织成结构”。
-
-### 3. 节奏编排
-
-只有“拆”和“组”还不够。
-
-成熟系统还得会出牌。
-
-**节奏编排解决的不是“谁先谁后”这么简单，而是系统该在什么时机，给什么、不给什么、跳过什么、插队什么。**
-
-这部分非常关键。
-
-它至少包括这些能力：
-
-- 什么时候给用户内容
-- 什么时候不给
-- 哪些内容先给，哪些晚给
-- 哪些步骤应该跳过
-- 哪些风险需要插队处理
-- 哪些时刻应该留白，而不是继续输出
-
-所以 Meta_Kim 不是只关心“流程编排”，还关心“节奏编排”。
-
-它强调：
-
-- 系统不只要会做事
-- 系统还要会出牌
-- 系统不只要会推动
-- 系统还要知道什么时候沉默
-
-### 4. 意图放大
-
-**意图放大 = 高层意图被结构性展开后的结果。**
-
-这不是把一句话说得更长，而是把一句话里原本缺失的关键部分补出来。
-
-比如用户说：
-
-> 帮我做一个项目。
-
-在 Meta_Kim 看来，这根本还不算任务，因为它至少缺：
-
-- 真实目标
-- 范围边界
-- 风险约束
-- 受众对象
-- 成功标准
-- 交付形态
-- 执行顺序
-
-所以 Meta_Kim 的第一步不是回答，而是把这些缺口补出来。
-
-这就叫意图放大。
-
-## 为什么这套方法不是空话
-
-Meta_Kim 反对一个很常见的幻觉：
-
-**很多人把“一次生成成功”，误以为“系统已经成立”。**
-
-不是。
-
-一次生成成功，只能说明单次结果看起来成立。
-
-真正成熟的系统，至少得有治理链路。
-
-这条成熟链路至少包含十步：
-
-1. 方向
-2. 规划
-3. 执行
-4. 评审
-5. 元评审
-6. 修订
-7. 验证
-8. 汇总
-9. 反馈
-10. 进化
-
-这十步的重要性在于，它把系统从“会动”拉向“可靠、可复用、可演化”。
-
-```mermaid
-flowchart LR
-    A["方向"] --> B["规划"] --> C["执行"] --> D["评审"] --> E["元评审"]
-    E --> F["修订"] --> G["验证"] --> H["汇总"] --> I["反馈"] --> J["进化"]
-```
-
-所以 Meta_Kim 真正在意的，不是第一次能写多好，而是：
-
-- 会不会判断
-- 会不会纠偏
-- 会不会验证
-- 会不会回滚
-- 会不会把这一轮经验变成下一轮能力
-
-换句话说：
-
-**Meta_Kim 不是在追求一次漂亮结果，而是在追求一条可持续的自我校正链路。**
-
-## 元不是一层，它至少有三层
-
-“元”至少分三层：
+而是：
 
 ```mermaid
 flowchart TD
-    A["元体系"] --> B["执行元<br/>直接下场做事"]
-    A --> C["编排元<br/>负责调度、节奏、退回、插队"]
-    A --> D["基础设施元<br/>提供提示词、技能、记忆、规则、安全"]
+    A["用户原始意图"] --> B["meta-warden<br/>统一入口"]
+    B --> C["意图放大<br/>目标、边界、约束、交付物"]
+    C --> D["按需调度其他元 agent"]
+    D --> E["部门 / specialist / skill / MCP / hook 协作"]
+    E --> F["统一汇总输出"]
 ```
 
-### 执行元
+默认前门只有一个：
 
-直接下场干业务活的元。
+- `meta-warden`
 
-比如：
+其它 7 个元 agent 是后台结构，不是面向用户的菜单。
 
-- 写
-- 查
-- 分析
-- 审校
-- 修订
+## 8 个元 agent
 
-执行元最重要的不是“全能”，而是“职责纯”。
-
-### 编排元
-
-不一定自己下场写内容，但负责调度整个系统的元。
-
-它要决定：
-
-- 谁先上
-- 谁后上
-- 谁依赖谁
-- 哪一步必须线性
-- 哪一步可以并行
-- 出错退回哪一步
-- 什么时候跳过
-- 什么时候插队
-
-编排元是系统的大脑，不是系统的喇叭。
-
-### 基础设施元
-
-它本身未必直接产出业务结果，但没有它，系统就做不起来。
-
-比如：
-
-- 提示词体系
-- skill 体系
-- 工具体系
-- 知识体系
-- 记忆体系
-- 工作流体系
-- 规则基线
-- 权限控制
-- 安全与回滚机制
-
-有些元不是做事的元，而是造能力的元。
-
-这就是基础设施元的意义。
-
-## Meta_Kim 在工程上怎么落地
-
-Meta_Kim 做的不是“理论展示”。
-
-它做的是把这条主线真正压进三个运行时里：
-
-- Claude Code
-- Codex
-- OpenClaw
-
-重点不是让三家看起来长得一模一样。
-
-重点是让三家都遵守同一套底层规矩。
-
-```mermaid
-flowchart TD
-    A["Meta_Kim 核心方法<br/>元 → 组织镜像 → 节奏编排 → 意图放大"] --> B["Claude Code<br/>CLAUDE.md + .claude/ + .mcp.json"]
-    A --> C["Codex<br/>AGENTS.md + .codex/ + .agents/ + codex/config.toml.example"]
-    A --> D["OpenClaw<br/>openclaw/workspaces/ + openclaw/openclaw.template.json"]
-```
-
-| 运行时 | 用户看到的入口 | 仓库里的主要落点 | 作用 |
-| --- | --- | --- | --- |
-| Claude Code | `CLAUDE.md` | `.claude/`、`.mcp.json` | 让 Claude Code 按 Meta_Kim 的元职责、治理规则和上下文约束工作 |
-| Codex | `AGENTS.md` | `.codex/`、`.agents/`、`codex/config.toml.example` | 让 Codex 使用同一套元结构、技能映射和项目约束 |
-| OpenClaw | `openclaw/workspaces/` | `openclaw/` | 让 OpenClaw 的本地 workspace agent 也进入同一套组织结构和节奏逻辑 |
-
-也就是说：
-
-- 外层壳可以不同
-- 运行时入口可以不同
-- 配置格式可以不同
-
-但底层核必须一致。
-
-这正是“同一意图，多种交付壳”的工程化版本。
-
-## 8 个元 agent 不是菜单，而是组织结构
-
-这 8 个元 agent 是 Meta_Kim 当前的组织骨架。
-
-- `meta-warden`：总入口、统筹、仲裁、最终整合
+- `meta-warden`：统一入口、统筹、仲裁、最终汇总
 - `meta-conductor`：编排、调度、节奏控制
 - `meta-genesis`：人格、提示词、`SOUL.md`
-- `meta-artisan`：skill、MCP、工具能力匹配
+- `meta-artisan`：skill、MCP、工具与能力匹配
 - `meta-sentinel`：hook、安全、权限、回滚
-- `meta-librarian`：记忆、知识、连续性
+- `meta-librarian`：记忆、知识连续性、上下文策略
 - `meta-prism`：质量审查、漂移检测、反 AI 套话
-- `meta-scout`：外部工具发现与评估
+- `meta-scout`：外部能力发现与评估
 
-如果只从结构上看，它们大致可以理解成：
+如果你第一次接触这个项目，只需要先记住：
 
-- 编排层：`meta-warden`、`meta-conductor`
-- 基础设施层：`meta-genesis`、`meta-artisan`、`meta-sentinel`、`meta-librarian`
-- 治理与发现层：`meta-prism`、`meta-scout`
+**默认入口是 `meta-warden`。**
 
-如果你第一次接触这个项目，先记住一句就够：
+## 三个运行时怎么承接
 
-**`meta-warden` 是总入口，其他元 agent 是它背后的组织结构。**
+Meta_Kim 不是强行把三个运行时做成一模一样。
 
-## 仓库怎么读
+它做的是：
 
-正确读法不是一上来钻脚本。
+- 保持同一套底层方法
+- 用每个运行时自己的原生结构去承接它
 
-正确顺序是：
+| 运行时 | 用户入口 | 仓库落点 | 作用 |
+| --- | --- | --- | --- |
+| Claude Code | `CLAUDE.md` | `.claude/`、`.mcp.json` | 元 agent、skill、hook、MCP 的主源运行时 |
+| Codex | `AGENTS.md` | `.codex/`、`.agents/`、`codex/config.toml.example` | Codex 原生 agent / skill 镜像 |
+| OpenClaw | `openclaw/workspaces/` | `openclaw/` | OpenClaw 的本地 workspace agent 和模板配置 |
 
-1. 先看 `README.md`
-作用：理解项目立场、主线、概念、落地方式。
+## 怎么用，怎么触发
 
-2. 再看 `CLAUDE.md` 和 `AGENTS.md`
-作用：理解 Claude Code 和 Codex 怎么承接这套体系。
+### 默认触发方式
 
-3. 再看 `.claude/agents/`
-作用：看 8 个元 agent 的职责定义。
+如果你想用这套系统，最稳的方式就是直接让它走统一入口。
 
-4. 最后再看 `.codex/`、`.agents/`、`openclaw/`
-作用：理解这些职责是怎么被投影到不同运行时里的。
+示例：
 
-一句话说：
+```text
+请以 meta-warden 为统一入口，先做意图放大，再判断是否需要调用其他元 agent。
+```
 
-**先理解它立什么规矩，再看它怎么把规矩做成工程。**
+### 什么时候显式点名其他元 agent
 
-## 仓库结构
+- 你要定义 prompt / persona / `SOUL.md`：点 `meta-genesis`
+- 你要做 skill / MCP / 工具匹配：点 `meta-artisan`
+- 你要处理 hook / 安全 / 权限 / 回滚：点 `meta-sentinel`
+- 你要处理记忆和长期上下文：点 `meta-librarian`
+- 你要处理流程编排和节奏：点 `meta-conductor`
+- 你要做质量审查：点 `meta-prism`
+- 你要找外部能力、外部工具：点 `meta-scout`
+
+### 在 Claude Code 里怎么用
+
+1. 用 Claude Code 打开仓库
+2. Claude Code 会读取：
+   - `CLAUDE.md`
+   - `.claude/agents/`
+   - `.claude/skills/`
+   - `.mcp.json`
+3. 直接发起任务，例如：
+
+```text
+请以 meta-warden 为统一入口，审查这个项目的架构，并给出下一步方案。
+```
+
+### 在 Codex 里怎么用
+
+1. 用 Codex 打开仓库
+2. Codex 会读取：
+   - `AGENTS.md`
+   - `.codex/agents/`
+   - `.agents/skills/`
+3. 如果要接本地 MCP，再参考：
+   - `codex/config.toml.example`
+
+### 在 OpenClaw 里怎么用
+
+1. 先准备本地环境：
+
+```bash
+npm install
+npm run prepare:openclaw-local
+```
+
+2. 然后直接运行某个元 agent，例如：
+
+```bash
+openclaw agent --local --agent meta-warden --message "请先做意图放大，再决定该调哪些元 agent" --json --timeout 120
+```
+
+## 项目结构
 
 ```text
 Meta_Kim/
-├─ .claude/        Claude Code 主源，包括 agents、skills、hooks、settings
-├─ .codex/         Codex 会直接读取的仓库内 agents 与 skills
-├─ .agents/        Codex 项目级 skills 目录
-├─ codex/          Codex 全局配置示例，不是另一套运行时
+├─ .claude/        Claude Code 主源：agents、skills、hooks、settings
+├─ .codex/         Codex 仓库内 agents 与 skills 镜像
+├─ .agents/        Codex 项目级 skills 镜像
+├─ codex/          Codex 全局配置示例
 ├─ openclaw/       OpenClaw workspace、模板配置、运行时镜像
-├─ factory/        发布版行业 agent 层：agent 库、20 个旗舰、协议文件、运行时包
-├─ images/         README 用的公开图片资源
-├─ scripts/        同步、校验、MCP、自检、OpenClaw 本地准备脚本
-├─ shared-skills/  跨运行时共享的技能镜像
-├─ AGENTS.md       Codex / 通用运行时入口说明
+├─ factory/        发布版行业 agent 层与三端导入包
+├─ images/         README 使用的公开图片资源
+├─ scripts/        同步、校验、MCP、自检、OpenClaw 准备脚本
+├─ shared-skills/  跨运行时共享技能镜像
+├─ AGENTS.md       Codex / 跨运行时入口说明
 ├─ CLAUDE.md       Claude Code 入口说明
 ├─ .mcp.json       Claude Code 项目级 MCP 配置
 ├─ README.md       英文主 README
 └─ README.zh-CN.md 中文 README
 ```
 
-如果你只关心“GitHub 上真正发布什么”，最该看的就是：
+本地私有目录不属于公开发布面：
 
-- `.claude/`
-- `.codex/`
-- `.agents/`
-- `openclaw/`
-- `factory/`
-- `scripts/`
-- `shared-skills/`
-
-你在自己电脑上可能还会看到一些本地目录，但它们不是公开发布面：
-
-- `meta/`：本地研究稿和草稿，已忽略
-- `image/`：本地截图/临时导出目录，已忽略
+- `meta/`：作者本地研究稿与文章目录，已忽略
+- `image/`：本地截图和临时导出目录，已忽略
 - `node_modules/`：本地依赖目录，已忽略
 
 ### 为什么会有 `codex/`
 
-这点最容易让人误会。
+Codex 的配置分两层：
 
-因为 Codex 的配置模型分成两部分：
+- 仓库内资产：放在 `.codex/` 和 `.agents/`
+- 用户电脑里的全局配置：不能直接写进仓库根部
 
-- 一部分是仓库内资产，所以放在 `.codex/` 和 `.agents/`
-- 一部分是用户电脑里的全局配置，所以仓库里只能放一个示例文件
-
-因此：
+所以：
 
 - `.codex/` 是 Codex 真正会直接读取的仓库内内容
-- `codex/` 只是一个配置示例目录，用来告诉你怎么写 `~/.codex/config.toml`
+- `codex/` 只是一个配置示例目录，用来说明 `~/.codex/config.toml` 应该怎么接
 
-它不是重复目录，也不是偏心 Codex，只是 Codex 的配置方式和另外两家不一样。
+## `factory/` 里到底有什么
 
-## 这些命令什么时候才需要跑
+`factory/` 仅包含发布资产和机器索引。
 
-不是每个看这个仓库的人，都需要把所有命令跑一遍。
+### 三个主目录
+
+- `factory/agent-library/`
+  - 完整人类可读库
+  - 包含 `100` 个部门 agent 和 `1000` 个 specialist agent
+- `factory/flagship-complete/`
+  - `20` 个旗舰 agent 成品层
+- `factory/runtime-packs/`
+  - Claude Code / Codex / OpenClaw 三端导入包
+  - 总计 `1100` 个运行时包
+
+### 机器索引
+
+- `factory/organization-map.json`
+  - 完整组织图
+- `factory/department-call-protocol.json`
+  - 默认路由与 handoff 规则
+- `factory/agent-library/agent-index.json`
+  - 全量 agent 索引
+- `factory/flagship-complete/index.json`
+  - 20 个旗舰索引
+- `factory/flagship-complete/summary.json`
+  - 旗舰总包统计
+- `factory/runtime-packs/summary.json`
+  - 三端运行时总包统计
+
+### 行业覆盖
+
+当前行业层覆盖：
+
+- 游戏
+- 互联网
+- 金融
+- AI
+- 医疗
+- 股票
+- 投资
+- Web3
+- 自媒体
+- 电商
+- 教育
+- 法律
+- 制造
+- 物流
+- 房地产
+- 能源
+- 汽车
+- 旅游与酒店
+- 生物科技
+- 公共部门
+
+每个行业统一使用 5 类部门模板：
+
+- `strategy-office`
+- `growth-operations`
+- `product-delivery`
+- `risk-compliance`
+- `research-intelligence`
+
+## 这些命令什么时候要跑
 
 ### `npm install`
 
-作用：安装这个仓库依赖的 Node 包。
-
-什么时候需要：
-- 第一次把项目下载到本地，准备真正使用或验证它
-
-什么时候不需要：
-- 只是看文档
-- 只是改纯文字
+第一次拉项目到本地，准备使用或验证时执行。
 
 ### `npm run sync:runtimes`
 
-作用：把主源同步成三端真正要吃的运行时文件。
-
-你可以把它理解成“重新生成三端产物”。
-
-什么时候需要：
-- 你改了 agent
-- 你改了 skill
-- 你改了运行时配置
-- 你想确保 Claude Code / Codex / OpenClaw 三端重新对齐
-
-什么时候不需要：
-- 你只改了 README
-- 你只改了许可证
+你改了主源 agent、skill、运行时配置之后执行。  
+作用是把主源重新同步成 Claude Code / Codex / OpenClaw 三端镜像。
 
 ### `npm run prepare:openclaw-local`
 
-作用：给 OpenClaw 做本机准备。
-
-OpenClaw 除了读仓库文件，还依赖你电脑用户目录下的本地授权和 agent 状态。
-
-什么时候需要：
-- 你准备在自己电脑上真正跑 OpenClaw
-
-什么时候不需要：
-- 你不用 OpenClaw
-- 你只是看项目结构
+只有你准备在本机真正跑 OpenClaw 时才需要。  
+作用是补 OpenClaw 本地授权和状态准备。
 
 ### `npm run verify:all`
 
-作用：做总验收。
+准备发布、提交、开源，或者刚改完运行时资产时执行。  
+作用是统一做校验和验收。
 
-它会统一检查三端资产有没有漏、有没有坏、能不能对上。
+## 最简单的开始方式
 
-什么时候需要：
-- 你准备提交
-- 你准备发布
-- 你准备开源
-- 你改了一批运行时资产，想确认没配坏
+### 只是想了解项目
 
-什么时候不需要：
-- 你只是看说明
-- 你只是小改一段文档
+先读这三个文件：
 
-## 最简单的使用方式
+- `README.md`
+- `CLAUDE.md`
+- `AGENTS.md`
 
-### 如果你只是第一次看项目
-
-你什么命令都不用跑。
-
-先把这份 README 看完，再去看 `CLAUDE.md`、`AGENTS.md`、`.claude/agents/`。
-
-### 如果你第一次把它拉到本地，想确认它不是空壳
+### 想验证项目可运行
 
 在仓库根目录执行：
 
@@ -532,71 +321,50 @@ npm run sync:runtimes
 npm run verify:all
 ```
 
-### 如果你还要在本机跑 OpenClaw
+### 想看已经做好的行业 agent
 
-再补一条：
+直接看：
 
-```bash
-npm run prepare:openclaw-local
-```
-
-### 如果你要看已经做好的行业层最终结果
-
-直接看这几个目录和文件：
-
-- `factory/industry-coverage-matrix.md`
 - `factory/agent-library/`
-- `factory/flagship-complete/`
+- `factory/flagship-complete/agents/`
 - `factory/runtime-packs/`
 
 ## 方法依据与论文
 
-这个仓库的方法依据来自作者关于“基于元的意图放大”的详细评测。
+Meta_Kim 的方法依据来自“基于元的意图放大”评测与方法沉淀。
 
 - 论文页面：<https://zenodo.org/records/18957649>
 - DOI：`10.5281/zenodo.18957649`
 
-论文负责回答：
+论文负责解释方法论基础。  
+本仓库负责把这套方法落成可运行的工程资产。
 
-- 为什么是“元”
-- 为什么不是只靠模型
-- 为什么组织镜像和节奏编排是必要层
-- 为什么意图放大是结果层，而不是起点层
-
-仓库负责回答：
-
-- 怎么把这套东西做成三端都能跑的工程资产
-
-## 作者与联系
+## 作者与支持
 
 <div align="center">
-  <img src="images/二维码基础款.png" alt="联系方式" width="600"/>
-  <p><strong>获取更多 AI 资讯、项目更新和技术交流入口</strong></p>
+  <img src="images/二维码基础款.png" alt="联系方式" width="560"/>
   <p>
-    🌐 <a href="https://www.aiking.dev/">aiking.dev</a> |
     GitHub <a href="https://github.com/KimYx0207">KimYx0207</a> |
     𝕏 <a href="https://x.com/KimYx0207">@KimYx0207</a> |
+    官网 <a href="https://www.aiking.dev/">aiking.dev</a> |
     微信公众号：<strong>老金带你玩AI</strong>
   </p>
   <p>
-    开源知识库与长期更新入口：
-    <a href="https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf">飞书知识库</a>
+    飞书知识库：
+    <a href="https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf">长期更新入口</a>
   </p>
 </div>
 
-## 支持作者
-
 <div align="center">
-  <p><strong>如果这套方法、仓库结构或文档对你有帮助，欢迎支持作者继续迭代。</strong></p>
   <table align="center">
     <tr>
       <td align="center">
-        <img src="images/微信.jpg" alt="微信收款码" width="260"/>
+        <img src="images/微信.jpg" alt="微信收款码" width="220"/>
         <br/>
         <strong>微信支付</strong>
       </td>
       <td align="center">
-        <img src="images/支付宝.jpg" alt="支付宝收款码" width="260"/>
+        <img src="images/支付宝.jpg" alt="支付宝收款码" width="220"/>
         <br/>
         <strong>支付宝</strong>
       </td>
@@ -604,22 +372,8 @@ npm run prepare:openclaw-local
   </table>
 </div>
 
-## 适合谁
-
-这个项目适合下面这几类人：
-
-- 想把一套 agent 方法同时落到多个 AI 运行时的人
-- 不满足于堆 prompt，而是想做可治理 agent 架构的人
-- 想把 skill、MCP、hook、memory、workspace 一起纳入工程治理的人
-- 想让同一套方法在 Claude Code、Codex、OpenClaw 三端都成立的人
-- 想做的不只是“能跑的 demo”，而是“有组织能力的系统”的人
-
 ## License
 
 本项目采用 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 许可协议。
 
 你可以分享、改编、再发布，但需要保留署名并标注修改。
-
-## 一句话总结
-
-**Meta_Kim 不是在教 AI 多说话，而是在教 AI 先学会组织复杂问题。**
