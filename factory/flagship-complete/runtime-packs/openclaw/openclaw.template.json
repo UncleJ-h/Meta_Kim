@@ -1,0 +1,170 @@
+{
+  "agents": {
+    "defaults": {
+      "model": "claude-sonnet-4-5"
+    },
+    "list": [
+      {
+        "id": "flagship-game-strategy-office",
+        "default": false,
+        "name": "Flagship Game Strategy Office",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-game-strategy-office"
+      },
+      {
+        "id": "flagship-internet-growth-operations",
+        "default": false,
+        "name": "Flagship Internet Growth & Operations",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-internet-growth-operations"
+      },
+      {
+        "id": "flagship-finance-strategy-office",
+        "default": false,
+        "name": "Flagship Finance Strategy Office",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-finance-strategy-office"
+      },
+      {
+        "id": "flagship-ai-product-delivery",
+        "default": false,
+        "name": "Flagship AI Product & Delivery",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-ai-product-delivery"
+      },
+      {
+        "id": "flagship-healthcare-risk-compliance",
+        "default": false,
+        "name": "Flagship Healthcare Risk & Compliance",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-healthcare-risk-compliance"
+      },
+      {
+        "id": "flagship-stocks-research-intelligence",
+        "default": false,
+        "name": "Flagship Stocks Research & Intelligence",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-stocks-research-intelligence"
+      },
+      {
+        "id": "flagship-investment-research-intelligence",
+        "default": false,
+        "name": "Flagship Investment Research & Intelligence",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-investment-research-intelligence"
+      },
+      {
+        "id": "flagship-web3-risk-compliance",
+        "default": false,
+        "name": "Flagship Web3 Risk & Compliance",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-web3-risk-compliance"
+      },
+      {
+        "id": "flagship-media-growth-operations",
+        "default": false,
+        "name": "Flagship Creator Media Growth & Operations",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-media-growth-operations"
+      },
+      {
+        "id": "flagship-ecommerce-growth-operations",
+        "default": false,
+        "name": "Flagship E-Commerce Growth & Operations",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-ecommerce-growth-operations"
+      },
+      {
+        "id": "flagship-education-product-delivery",
+        "default": false,
+        "name": "Flagship Education Product & Delivery",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-education-product-delivery"
+      },
+      {
+        "id": "flagship-legal-risk-compliance",
+        "default": false,
+        "name": "Flagship Legal Risk & Compliance",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-legal-risk-compliance"
+      },
+      {
+        "id": "flagship-manufacturing-product-delivery",
+        "default": false,
+        "name": "Flagship Manufacturing Product & Delivery",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-manufacturing-product-delivery"
+      },
+      {
+        "id": "flagship-logistics-growth-operations",
+        "default": false,
+        "name": "Flagship Logistics Growth & Operations",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-logistics-growth-operations"
+      },
+      {
+        "id": "flagship-real-estate-strategy-office",
+        "default": false,
+        "name": "Flagship Real Estate Strategy Office",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-real-estate-strategy-office"
+      },
+      {
+        "id": "flagship-energy-strategy-office",
+        "default": false,
+        "name": "Flagship Energy Strategy Office",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-energy-strategy-office"
+      },
+      {
+        "id": "flagship-automotive-product-delivery",
+        "default": false,
+        "name": "Flagship Automotive Product & Delivery",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-automotive-product-delivery"
+      },
+      {
+        "id": "flagship-travel-growth-operations",
+        "default": false,
+        "name": "Flagship Travel & Hospitality Growth & Operations",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-travel-growth-operations"
+      },
+      {
+        "id": "flagship-biotech-research-intelligence",
+        "default": false,
+        "name": "Flagship Biotech Research & Intelligence",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-biotech-research-intelligence"
+      },
+      {
+        "id": "flagship-public-sector-strategy-office",
+        "default": false,
+        "name": "Flagship Public Sector Strategy Office",
+        "workspace": "__REPO_ROOT__\\factory\\flagship-complete\\runtime-packs\\openclaw\\workspaces\\flagship-public-sector-strategy-office"
+      }
+    ]
+  },
+  "bindings": [],
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        },
+        "boot-md": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "tools": {
+    "agentToAgent": {
+      "enabled": true,
+      "allow": [
+        "flagship-game-strategy-office",
+        "flagship-internet-growth-operations",
+        "flagship-finance-strategy-office",
+        "flagship-ai-product-delivery",
+        "flagship-healthcare-risk-compliance",
+        "flagship-stocks-research-intelligence",
+        "flagship-investment-research-intelligence",
+        "flagship-web3-risk-compliance",
+        "flagship-media-growth-operations",
+        "flagship-ecommerce-growth-operations",
+        "flagship-education-product-delivery",
+        "flagship-legal-risk-compliance",
+        "flagship-manufacturing-product-delivery",
+        "flagship-logistics-growth-operations",
+        "flagship-real-estate-strategy-office",
+        "flagship-energy-strategy-office",
+        "flagship-automotive-product-delivery",
+        "flagship-travel-growth-operations",
+        "flagship-biotech-research-intelligence",
+        "flagship-public-sector-strategy-office"
+      ]
+    }
+  }
+}

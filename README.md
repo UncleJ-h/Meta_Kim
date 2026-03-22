@@ -197,6 +197,7 @@ See:
 - [`scripts/generate-industry-agents.mjs`](scripts/generate-industry-agents.mjs)
 - [`factory/generated/industry-coverage-matrix.md`](factory/generated/industry-coverage-matrix.md)
 - [`factory/generated/flagship-20.md`](factory/generated/flagship-20.md)
+- [`factory/flagship-complete/README.md`](factory/flagship-complete/README.md)
 - [`factory/flagship-batch-1/README.md`](factory/flagship-batch-1/README.md)
 - [`factory/flagship-batch-2/README.md`](factory/flagship-batch-2/README.md)
 - [`factory/flagship-batch-3/README.md`](factory/flagship-batch-3/README.md)
@@ -301,6 +302,7 @@ This command now does two things:
 - regenerates the department seeds and specialist briefs under `factory/generated/`
 - compiles runtime-ready import packs under `factory/runtime-packs/`
 - rebuilds all 20 hand-polished flagship agents under `factory/flagship-batch-{1..4}/`
+- also rebuilds the unified flagship bundle under `factory/flagship-complete/`
 
 ### `npm run check:agent-foundry`
 
@@ -329,6 +331,15 @@ Use this when:
 
 - you want to rebuild all 20 hand-polished flagship agents
 - you want the full flagship layer refreshed without touching the broader foundry logic manually
+- you want one single directory that contains the entire polished flagship layer
+
+### `npm run build:flagship-complete`
+
+Use this when:
+
+- you only care about the unified 20-agent polished bundle
+- you do not want to inspect the four flagship batches separately
+- you want the simplest single import surface for the flagship layer
 
 ## Simplest Way to Start
 

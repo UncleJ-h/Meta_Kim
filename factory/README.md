@@ -66,6 +66,10 @@ factory/
 │  ├─ README.md
 │  ├─ agents/*.md
 │  └─ runtime-packs/<runtime>/*
+├─ flagship-complete/
+│  ├─ README.md
+│  ├─ agents/*.md
+│  └─ runtime-packs/<runtime>/*
 └─ README.md
 ```
 
@@ -138,16 +142,34 @@ The remaining flagship layers are now complete as well:
 - `flagship-batch-4/`
 - together they bring the hand-polished flagship total to **20 agents**
 
+There is also a unified flagship bundle now:
+
+- `flagship-complete/`
+- all 20 hand-polished flagship agents in one place
+- one combined Claude Code / Codex / OpenClaw import surface
+
 ## Build
 
 ```bash
 npm run build:agent-foundry
 ```
 
+To rebuild only the unified 20-agent flagship bundle:
+
+```bash
+npm run build:flagship-complete
+```
+
 ## Check
 
 ```bash
 npm run check:agent-foundry
+```
+
+To verify only the unified 20-agent flagship bundle:
+
+```bash
+npm run check:flagship-complete
 ```
 
 ## Design Principle
