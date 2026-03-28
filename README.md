@@ -14,11 +14,11 @@
   <img alt="License" src="https://img.shields.io/badge/license-CC%20BY%204.0-f59e0b"/>
 </p>
 
-**An open-source meta-architecture for intent amplification across Claude Code, Codex, and OpenClaw**
+**An open-source governance layer that makes AI coding assistants handle complex tasks properly — across Claude Code, Codex, and OpenClaw.**
 
-Meta_Kim is about teaching AI systems to organize complex work before they answer.
+Most AI coding tools jump straight to writing code. Meta_Kim adds a step in between: clarify what you actually need, plan who does what, then execute with review.
 
-**Meta -> Organizational Mirroring -> Rhythm Orchestration -> Intent Amplification**
+The result: fewer broken multi-file changes, clearer agent responsibilities, and reusable patterns instead of one-shot hacks.
 
 </div>
 
@@ -55,13 +55,30 @@ Meta_Kim is about teaching AI systems to organize complex work before they answe
   </table>
 </div>
 
+## When You Need This
+
+| Your situation | Without Meta_Kim | With Meta_Kim |
+|---|---|---|
+| "Refactor the auth module across 6 files" | AI jumps in, changes files, breaks things in other modules | Clarifies scope first, assigns the right agents, reviews cross-module impact |
+| "Design a new agent for my project" | You get a generic template that doesn't fit your domain | System asks what you need, checks existing agents first, only creates if necessary |
+| "My agents keep stepping on each other's toes" | Confusion, duplicated work, nobody knows who owns what | Clear ownership boundaries, governance flow, quality gates |
+
+**If you only edit one file at a time, you don't need this.** Meta_Kim helps when work spans multiple files, modules, or requires coordination between different capabilities.
+
+## What It Does
+
+1. **Clarifies before executing** — asks follow-up questions when your request is vague, instead of guessing
+2. **Searches before assuming** — checks if an existing agent/skill already does what you need
+3. **Routes to the right agent** — breaks complex work into governable units with clear ownership
+4. **Reviews every output** — code quality, security, architecture compliance, boundary violations
+5. **Learns from each run** — captures reusable patterns, records failures for prevention
+
 ## At a Glance
 
-- Default front door: `meta-warden`
-- Organizational backbone: `8` meta agents
-- Supported runtimes: Claude Code, Codex, OpenClaw
-- Primary behavior: amplify intent first, then execute and coordinate
-- Business run discipline: `one department -> one primary deliverable -> one closed handoff chain`
+- 8 specialized meta agents behind one default entry point
+- Works on Claude Code, Codex, and OpenClaw with the same governance logic
+- Every task goes through: Clarify → Search → Execute → Review → Evolve
+- Discipline: one department, one primary deliverable, one closed handoff chain
 
 ## Quick Start (Clone to Working in 5 Minutes)
 
@@ -121,13 +138,21 @@ Gives you a quick read on all 8 agents: version, frontmatter completeness, bound
 
 ### Step 6: Start Using (in Claude Code)
 
-Open the repo with Claude Code and say:
+Open the repo with Claude Code and just describe what you need:
 
 ```text
-Use meta-warden as the unified entry point, amplify intent first, then determine whether other meta agents need to be invoked.
+I need to refactor the authentication system — it's spread across 5 files and nobody knows which one handles token refresh anymore.
 ```
 
-Or describe a complex task directly — the system will automatically invoke the 8-stage governance flow.
+```text
+Design me an agent that can handle data export jobs for this project.
+```
+
+```text
+Something's wrong — my agents keep writing code that conflicts with each other.
+```
+
+The system automatically routes your request through the right governance flow. You don't need to know anything about meta agents, stages, or internal routing.
 
 ## What This Project Is
 
@@ -135,14 +160,7 @@ Meta_Kim is not a chatbot product, not a SaaS app, not a single giant prompt, an
 
 It is an engineering system built around one idea:
 
-**raw intent should be amplified into executable work before the system starts answering.**
-
-That means:
-
-- the user starts with intent, not a finished specification
-- the system first clarifies objective, boundaries, constraints, and deliverables
-- work is routed through governable units instead of one giant undifferentiated context
-- the same underlying discipline holds across Claude Code, Codex, and OpenClaw
+**AI should understand what you actually need before it starts writing code.**
 
 At the engineering level, it organizes:
 
@@ -172,52 +190,32 @@ Meta is an architectural unit here, not decoration.
 
 ## Core Method
 
-Meta_Kim is built around one chain:
+Meta_Kim follows one chain:
 
-**Meta -> Organizational Mirroring -> Rhythm Orchestration -> Intent Amplification**
-
-```mermaid
-flowchart LR
-    A["Meta<br/>smallest governable unit"] --> B["Organizational Mirroring<br/>turn units into structure"]
-    B --> C["Rhythm Orchestration<br/>control timing, sequencing, skipping, escalation"]
-    C --> D["Intent Amplification<br/>expand raw intent into executable work"]
-```
+**Decompose into governable units → Define clear boundaries → Orchestrate timing and routing → Amplify raw intent into executable work**
 
 Each part solves a different problem:
 
-- `Meta`: decomposition
-- `Organizational Mirroring`: structure
-- `Rhythm Orchestration`: timing and routing
-- `Intent Amplification`: completion
+- `Meta (decomposition)`: break work into smallest governable units
+- `Organizational Mirroring (structure)`: define who owns what, who doesn't touch what
+- `Rhythm Orchestration (timing)`: control when things happen, what can run in parallel, when to pause
+- `Intent Amplification (completion)`: turn "I want X" into a complete, executable specification
 
 ## How the System Works
 
-The default path is not “user asks -> model answers”.
-
-It is:
+You don't need to know the internals. But if you're curious:
 
 ```mermaid
 flowchart TD
-    A["Raw user intent"] --> B["meta-warden<br/>default front door"]
-    B --> C["Intent amplification<br/>objective, boundaries, constraints, deliverables"]
-    C --> D["Optional routing to other meta agents"]
-    D --> E["Departments / specialists / skills / MCP / hooks"]
-    E --> F["One unified result"]
+    A[“You describe what you need”] --> B[“System clarifies scope<br/>asks follow-ups if vague”]
+    B --> C[“System searches capabilities<br/>finds existing agents/skills first”]
+    C --> D[“System routes to specialists<br/>only creates new agents when necessary”]
+    D --> E[“Agents execute<br/>with clear ownership boundaries”]
+    E --> F[“Everything gets reviewed<br/>code quality, security, architecture”]
+    F --> G[“Patterns are captured<br/>for reuse next time”]
 ```
 
-The user-facing default is:
-
-- `meta-warden`
-
-The other seven meta agents are internal structure, not the public menu.
-
-Every valid business run must keep a single organizing thread:
-
-- one department
-- one primary deliverable
-- one closed handoff chain
-
-If a plan bundles unrelated goals into the same run, `meta-conductor` should reject it and `meta-warden` should keep it out of public display.
+Under the hood, 8 specialized meta agents handle different concerns (governance, workflow, identity, skills, safety, memory, quality, discovery). You never interact with them directly — the system coordinates them automatically.
 
 ## The Eight Meta Agents
 
@@ -242,87 +240,57 @@ Meta_Kim keeps one operating logic while letting each runtime use its native int
 
 ## How To Use It
 
-### The 8-Stage Governance Flow
+### Auto Mode (just talk normally)
 
-Every complex task goes through this pipeline automatically:
-
-```mermaid
-flowchart TD
-    A["1. Critical<br/>Clarify by asking — question unclear requirements"] --> B["2. Fetch<br/>Search existing capabilities — find before assuming"]
-    B --> C["3. Execution<br/>Execute — Meta relay chain"]
-    C --> D["4. Review<br/>Review — code quality / UX / security"]
-    D --> E["5. Meta-Review<br/>Meta review — boundary detection / architecture compliance"]
-    E --> F["6. Evolution<br/>Intent Amplification — crystallize reusable patterns"]
-    F --> G["Output unified result"]
-```
-
-**Three Iron Rules run through the entire process:**
-- **Critical > Guessing** — ask first when requirements are unclear, never assume
-- **Fetch > Assuming** — search and verify first, never assume something exists
-- **Review > Trust** — every deliverable must be reviewed, never trust a single-pass result
-
-### Two Trigger Modes
-
-**Mode 1 — Auto-trigger (recommended for complex tasks):**
-
-Just describe a complex task. If it involves multi-file changes, the system **automatically** runs all 8 stages. No need to know the stages exist.
-
-Example: `"Help me implement a user authentication system"` → governance flow activates automatically.
-
-**Mode 2 — Manual specialist trigger:**
-
-Explicitly name a meta agent when you know exactly what you need.
-
-### Default trigger
-
-- prompt identity or `SOUL.md`: `meta-genesis`
-- skills, MCP, tool selection: `meta-artisan`
-- hooks, permissions, rollback, safety: `meta-sentinel`
-- memory and long-term context: `meta-librarian`
-- workflow and timing: `meta-conductor`
-- quality review: `meta-prism`
-- external tools and ecosystem scan: `meta-scout`
-
-### In Claude Code
-
-Claude Code reads:
-
-- `CLAUDE.md`
-- `.claude/agents/`
-- `.claude/skills/`
-- `.mcp.json`
-
-Example:
+For complex tasks, just describe what you need. The governance flow activates automatically when the system detects multi-file or cross-module work.
 
 ```text
-Use meta-warden as the entry point, amplify the intent, then review this project architecture and propose next steps.
+"Build a notification system — email, SMS, and in-app — with a shared queue and retry logic."
 ```
 
-### In Codex
+```text
+"The checkout flow is broken across 3 services. Fix the race condition and add proper error handling."
+```
 
-Codex reads:
+The system will: ask clarifying questions if needed → search existing agents → route to the right specialist → execute → review → capture patterns.
 
-- `AGENTS.md`
-- `.codex/agents/`
-- `.agents/skills/`
+### Manual Mode (when you know what you want)
 
-If you want local MCP wiring as well, use:
+If you specifically want to design, review, or audit agents:
 
-- `codex/config.toml.example`
+```text
+"Design an agent for handling data export jobs in this project."
+```
 
-### In OpenClaw
+```text
+"Audit my agent definitions — are the boundaries clean?"
+```
 
-Prepare local state first:
+```text
+"My agents keep overlapping responsibilities. Fix the organizational structure."
+```
+
+### Per-Runtime Setup
+
+#### In Claude Code
+
+Claude Code automatically reads `CLAUDE.md`, `.claude/agents/`, `.claude/skills/`, and `.mcp.json`. Just open the project and talk.
+
+#### In Codex
+
+Codex reads `AGENTS.md`, `.codex/agents/`, and `.agents/skills/`. For MCP wiring, see `codex/config.toml.example`.
+
+#### In OpenClaw
 
 ```bash
 npm install
 npm run prepare:openclaw-local
 ```
 
-Then run an agent directly:
+Then talk to the agent directly:
 
 ```bash
-openclaw agent --local --agent meta-warden --message "Amplify the intent first, then decide which meta agents to route to." --json --timeout 120
+openclaw agent --local --agent meta-warden --message "I need a system to handle batch data exports with progress tracking." --json --timeout 120
 ```
 
 ## Repository Structure
