@@ -7,49 +7,49 @@
       {
         "id": "meta-warden",
         "default": true,
-        "name": "Meta-Warden: 元部门经理 🔬",
+        "name": "Meta-Warden: Meta Department Manager",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-warden"
       },
       {
         "id": "meta-genesis",
         "default": false,
-        "name": "Meta-Genesis: 灵魂元 🧬",
+        "name": "Meta-Genesis: Soul Meta 🧬",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-genesis"
       },
       {
         "id": "meta-artisan",
         "default": false,
-        "name": "Meta-Artisan: 技艺元 🎨",
+        "name": "Meta-Artisan: Craft Meta 🎨",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-artisan"
       },
       {
         "id": "meta-sentinel",
         "default": false,
-        "name": "Meta-Sentinel: 哨兵元 🛡️",
+        "name": "Meta-Sentinel: Sentinel Meta",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-sentinel"
       },
       {
         "id": "meta-librarian",
         "default": false,
-        "name": "Meta-Librarian: 典藏元 📚",
+        "name": "Meta-Librarian: Archive Meta",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-librarian"
       },
       {
         "id": "meta-conductor",
         "default": false,
-        "name": "Meta-Conductor: 编排元 🎼",
+        "name": "Meta-Conductor: Orchestration Meta",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-conductor"
       },
       {
         "id": "meta-prism",
         "default": false,
-        "name": "Meta-Prism: 迭代审查员 🔍",
+        "name": "Meta-Prism: Iterative Reviewer",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-prism"
       },
       {
         "id": "meta-scout",
         "default": false,
-        "name": "Meta-Scout: 工具发现者 🔭",
+        "name": "Meta-Scout: Tool Discoverer 🔭",
         "workspace": "__REPO_ROOT__\\openclaw\\workspaces\\meta-scout"
       }
     ]

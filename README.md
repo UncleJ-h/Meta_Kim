@@ -30,7 +30,7 @@ Meta_Kim is about teaching AI systems to organize complex work before they answe
     GitHub <a href="https://github.com/KimYx0207">KimYx0207</a> |
     𝕏 <a href="https://x.com/KimYx0207">@KimYx0207</a> |
     Website <a href="https://www.aiking.dev/">aiking.dev</a> |
-    WeChat Official Account: <strong>老金带你玩AI</strong>
+    WeChat Official Account: <strong>Lao Jin Takes You Through AI</strong>
   </p>
   <p>
     Feishu knowledge base:
@@ -124,7 +124,7 @@ Gives you a quick read on all 8 agents: version, frontmatter completeness, bound
 Open the repo with Claude Code and say:
 
 ```text
-请以 meta-warden 为统一入口，先做意图放大，再判断是否需要调用其他元 agent。
+Use meta-warden as the unified entry point, amplify intent first, then determine whether other meta agents need to be invoked.
 ```
 
 Or describe a complex task directly — the system will automatically invoke the 8-stage governance flow.
@@ -248,18 +248,18 @@ Every complex task goes through this pipeline automatically:
 
 ```mermaid
 flowchart TD
-    A["1. Critical<br/>追问澄清 — 追问不清的需求"] --> B["2. Fetch<br/>搜索现有能力 — 先找不做假设"]
-    B --> C["3. Execution<br/>执行 — 元接力链路"]
-    C --> D["4. Review<br/>评审 — 代码质量/UX/安全"]
-    D --> E["5. Meta-Review<br/>元评审 — 越界检测/架构合规"]
-    E --> F["6. Evolution<br/>意图放大 — 沉淀可复用模式"]
-    F --> G["输出统一结果"]
+    A["1. Critical<br/>Clarify by asking — question unclear requirements"] --> B["2. Fetch<br/>Search existing capabilities — find before assuming"]
+    B --> C["3. Execution<br/>Execute — Meta relay chain"]
+    C --> D["4. Review<br/>Review — code quality / UX / security"]
+    D --> E["5. Meta-Review<br/>Meta review — boundary detection / architecture compliance"]
+    E --> F["6. Evolution<br/>Intent Amplification — crystallize reusable patterns"]
+    F --> G["Output unified result"]
 ```
 
-**Three iron laws贯穿全程：**
-- **Critical > 猜测** — 需求不清先追问，不假设
-- **Fetch > 假设** — 先搜索验证，不假设存在
-- **Review > 信任** — 任何产出必须评审，不信任单次结果
+**Three Iron Rules run through the entire process:**
+- **Critical > Guessing** — ask first when requirements are unclear, never assume
+- **Fetch > Assuming** — search and verify first, never assume something exists
+- **Review > Trust** — every deliverable must be reviewed, never trust a single-pass result
 
 ### Two Trigger Modes
 
@@ -267,7 +267,7 @@ flowchart TD
 
 Just describe a complex task. If it involves multi-file changes, the system **automatically** runs all 8 stages. No need to know the stages exist.
 
-Example: `"帮我实现一个用户认证系统"` → governance flow activates automatically.
+Example: `"Help me implement a user authentication system"` → governance flow activates automatically.
 
 **Mode 2 — Manual specialist trigger:**
 
