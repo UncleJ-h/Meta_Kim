@@ -1,134 +1,236 @@
 # Meta_Kim for Claude Code
 
-Meta_Kim is not a Claude-only repository.
+Claude Code is the canonical editing runtime for Meta_Kim.
 
-Its purpose is to make one meta-based intent-amplification discipline hold across Claude Code, Codex, and OpenClaw, while Claude Code remains the canonical editing runtime.
+## Human Summary
 
-## What “Meta” Means in This Repo
+If you only remember three things:
+
+- `meta-warden` is the default public front door.
+- `.claude/agents/*.md`, `.claude/skills/meta-theory/SKILL.md`, and `contracts/workflow-contract.json` are the long-term source of truth.
+- After editing canonical files, resync and validate before trusting the result.
+
+## Read This Repository Correctly
+
+Meta_Kim is not Claude-only logic.
+
+It is:
+
+**one intent-amplification system projected into Claude Code, Codex, and OpenClaw, with Claude Code as the canonical editing home.**
+
+## What “Meta” Means
 
 In Meta_Kim:
 
 **meta = the smallest governable unit that exists to support intent amplification**
 
-The eight meta agents are not here for visual complexity. They exist to:
+A valid meta unit must:
 
-- break complex work into governable units
-- preserve clear boundaries between responsibilities
-- keep the whole system aligned with intent amplification rather than shallow task dumping
+- own one clear responsibility class
+- define its refusal boundary
+- be independently reviewable
+- be replaceable
+- be safe to roll back
 
-## Public and Private Layers
+## Claude Code’s Role In The Project
 
-The long-form local research manuscript under `docs/` is private research material and is intentionally not part of the public GitHub payload.
-
-Claude Code should align with the project goal, but should not depend on that private manuscript.
-
-## Desired Claude-Side Behavior
-
-The end state in Claude Code should be:
-
-1. the user provides raw intent
-2. the system amplifies the intent first
-3. specialized meta agents are invoked only when needed
-4. the system returns a unified result
-
-So in practice:
-
-- `meta-warden` should be treated as the default front door
-- the other meta agents are backstage specialists
-
-### ⚠️ CRITICAL: You Are the Dispatcher, Not the Executor
-
-**This is the most important behavioral rule in Meta_Kim:**
-
-When you receive a complex development task (Type C — multi-file, cross-module, or requiring multiple capabilities):
-
-- **You do NOT write code directly.** You are the orchestrator.
-- **You MUST use the meta-theory skill** (`Skill("meta-theory")`) and follow the 8-stage spine.
-- **You MUST spawn sub-agents via `Task()`** for each sub-task in Stage 4 Execution.
-  - The `Task()` call is non-negotiable. Do not skip it and try to do the work yourself.
-- **Your job ends at Stage 4 dispatch.** After spawning agents, wait for their results, then proceed to Stage 5 Review.
-
-**Anti-pattern to AVOID:**
-```
-User: build a notification system
-→ You: *immediately starts writing code across 10 files*
-```
-
-**Correct pattern:**
-```
-User: build a notification system
-→ Critical: clarify scope
-→ Fetch: search existing agents
-→ Thinking: plan sub-tasks, design card deck
-→ Execution: Task(code-reviewer), Task(backend-architect), Task(frontend-developer)...
-→ Review: check each agent's output
-→ Meta-Review + Verification + Evolution
-```
-
-If you find yourself about to write code without having spawned an agent first: STOP. Ask "Who owns this? Should this be a Task() call?"
-
-## Canonical Claude Sources
+Claude Code is where the main editable sources live:
 
 - `.claude/agents/*.md`
-  canonical definitions for the eight meta agents
 - `.claude/skills/meta-theory/SKILL.md`
-  canonical skill source
+- `contracts/workflow-contract.json`
 - `.claude/settings.json`
-  Claude Code permissions and hooks (7 project-level hooks: dangerous-bash blocker, git-push confirm, auto-format, typecheck, console.log warn, subagent context injection, session-end audit)
 - `.mcp.json`
-  project-level MCP entry for Claude Code
+
+Those files define the canonical agent prompts, skill behavior, project hooks, permissions, and MCP entry. Other runtime assets are derived from them.
+
+## Capability-First Rule
+
+Meta_Kim’s canonical orchestration method is capability-first, not name-first.
+
+That means:
+
+- do not begin from a hardcoded agent name
+- define the capability needed first
+- search local agents, mirrored capabilities, and indexed/global capabilities
+- dispatch the best ownership match
+
+The intended pattern is:
+
+```text
+Need capability X
+-> Search who declares ownership of X
+-> Match the best fit
+-> Dispatch
+```
+
+Hardcoded named dispatch without a search step is not the canonical design.
+
+## Critical Rule: Dispatch Before You Execute
+
+For complex development work, Claude Code should behave as the dispatcher first, not the all-in-one executor.
+
+Treat these as complex tasks:
+
+- multi-file work
+- cross-module changes
+- tasks that need multiple capabilities or ownership domains
+
+For those tasks:
+
+1. use the `meta-theory` skill
+2. follow the 8-stage spine
+3. in `Execution`, spawn sub-agents via `Task()`
+4. keep the main thread focused on scope, delegation, review, and synthesis
+
+The 8-stage spine is:
+
+1. `Critical`
+2. `Fetch`
+3. `Thinking`
+4. `Execution`
+5. `Review`
+6. `Meta-Review`
+7. `Verification`
+8. `Evolution`
+
+## The 8-Stage Spine vs. The Business Workflow Contract
+
+Meta_Kim uses two workflow layers that should not be collapsed into one.
+
+The execution backbone is the 8-stage spine:
+
+```text
+Critical -> Fetch -> Thinking -> Execution -> Review -> Meta-Review -> Verification -> Evolution
+```
+
+The department-run contract is defined separately in `contracts/workflow-contract.json`:
+
+```text
+direction -> planning -> execution -> review -> meta_review -> revision -> verify -> summary -> feedback -> evolve
+```
+
+The relationship is:
+
+- the 8-stage spine governs execution logic
+- the business workflow governs run contract, deliverable closure, and display discipline
+- business phases do not rename or replace the underlying execution stages
+
+## Hidden Skeleton And Public-Display Discipline
+
+Under the readable stage flow, Meta_Kim also depends on a hidden governance skeleton.
+
+Typical state layers include:
+
+- `stageState`
+- `controlState`
+- `gateState`
+- `surfaceState`
+- `capabilityState`
+- `agentInvocationState`
+
+This skeleton is not a second front-end. It exists so the system can manage skips, interrupts, gates, verification closure, and evolution logging without inventing ad hoc rules each run.
+
+Claude-side synthesis should also respect public-display discipline. A run is not truly display-ready just because it has content. The workflow contract expects verification closure, summary closure, single-deliverable discipline, and deliverable-chain closure before public-ready claims are valid.
+
+### Anti-Pattern
+
+```text
+User: build a notification system
+You: start editing many files directly without delegation
+```
+
+### Correct Pattern
+
+```text
+User: build a notification system
+You:
+- Critical: clarify scope
+- Fetch: search existing capabilities
+- Thinking: define ownership and deliverables
+- Execution: Task(...) the right specialists
+- Review: inspect outputs
+- Verification: confirm the applied state
+- Evolution: capture the reusable pattern
+```
 
 ## The Eight Meta Agents
 
 - `meta-warden`: coordination, arbitration, final synthesis
-- `meta-genesis`: prompt identity and `SOUL.md`
-- `meta-artisan`: skills, MCP, and tool-fit design
-- `meta-sentinel`: safety, hooks, permissions, rollback
-- `meta-librarian`: memory, knowledge continuity, context policy
-- `meta-conductor`: workflow, sequencing, rhythm
-- `meta-prism`: quality review and drift detection
+- `meta-conductor`: workflow, sequencing, rhythm control
+- `meta-genesis`: `SOUL.md`, persona, prompt architecture
+- `meta-artisan`: skills, MCP, tool fit, capability loadout
+- `meta-sentinel`: safety, permissions, hooks, rollback
+- `meta-librarian`: memory, continuity, context policy
+- `meta-prism`: quality review, drift detection, anti-slop review
 - `meta-scout`: external capability discovery and evaluation
 
-## Hard Rules
+## Project Hooks In Claude Code
 
-- `.claude/agents/*.md` must keep valid YAML frontmatter or Claude Code will not register them as project agents.
-- `.claude/agents/*.md` and `.claude/skills/meta-theory/SKILL.md` are the only long-term canonical edit targets.
-- `.codex/agents/*`, `.agents/skills/*`, and `openclaw/workspaces/*` are runtime mirrors and should not become the maintenance source.
-- After changing prompts, skills, or runtime contracts, run:
-  - `npm run sync:runtimes`
-  - `npm run validate`
-- To integrate your global capabilities (agents, skills, hooks, plugins, commands):
-  - `npm run discover:global`
-- If you need runtime-level acceptance instead of file-level validation, also run:
-  - `npm run eval:agents`
-  - Optional (especially Windows PATH / shims): set `META_KIM_CLAUDE_BIN`, `META_KIM_CODEX_BIN`, or `META_KIM_OPENCLAW_BIN` to an absolute CLI path — see README `eval:agents` section.
-- For full validation + acceptance, run:
-  - `npm run verify:all`
-- For a quick health check of all 8 meta agents:
-  - `node scripts/agent-health-report.mjs`
+Claude Code has 7 project-level hooks configured in `.claude/settings.json`:
 
-## Global Capability Discovery
+- `block-dangerous-bash.mjs`
+- `pre-git-push-confirm.mjs`
+- `post-format.mjs`
+- `post-typecheck.mjs`
+- `post-console-log-warn.mjs`
+- `subagent-context.mjs`
+- `stop-console-log-audit.mjs`
 
-Meta_Kim can now discover and integrate with your globally-installed capabilities across all three runtimes:
+These cover:
 
-```bash
-npm run discover:global
-```
+- dangerous command blocking
+- git-push reminder
+- formatting
+- type checking
+- console logging warnings
+- subagent context injection
+- session-end console audit
 
-This generates `.claude/capability-index/global-capabilities.json` which includes:
+## Canonical vs Derived Assets
 
-**Claude Code** (`~/.claude/`):
-- Global agents, skills, hooks, plugins, and commands
-- Numbers vary by local installation — run `npm run discover:global` to see current counts
+Preferred long-term edit targets:
 
-**OpenClaw** (`~/.openclaw/`):
-- Skills and workspace configurations
+- `.claude/agents/*.md`
+- `.claude/skills/meta-theory/SKILL.md`
+- `contracts/workflow-contract.json`
+- `docs/meta.md`
 
-**Codex** (`~/.codex/`):
-- Skills and custom agents
+Files that should usually remain derived or runtime-specific:
 
-The meta-theory skill's Fetch phase automatically checks this index, allowing the meta architecture to route requests to your global capabilities when appropriate.
+- `.codex/agents/*.toml`
+- `.agents/skills/meta-theory/`
+- `.codex/skills/meta-theory.md`
+- `shared-skills/meta-theory.md`
+- `openclaw/workspaces/*`
+
+## Required Maintenance Loop
+
+After changing canonical prompts, skills, hooks, or runtime-facing contracts:
+
+1. run `npm run sync:runtimes`
+2. run `npm run discover:global`
+3. run `npm run validate`
+4. run `npm run eval:agents` when runtime acceptance matters
+5. run `npm run verify:all` before release or after larger changes
+
+Useful supporting commands:
+
+- `npm run check:runtimes`
+- `npm run probe:clis`
+- `npm run test:mcp`
+- `node scripts/agent-health-report.mjs`
+
+## Reading Notes
+
+For human readers:
+
+- start with `README.md` or `README.zh-CN.md`
+- read this file to understand Claude Code’s role
+- read `AGENTS.md` if you also care about Codex
+- read `docs/repo-map.md` for the directory map
+- read `docs/meta.md` only when you want the long-form theory
 
 ## One-Line Summary
 
-Claude Code is the canonical editing runtime for Meta_Kim, not a separate product logic. Its job is to help this meta-based intent-amplification system land cleanly before the same system is projected into Codex and OpenClaw.
+Claude Code is not a separate product logic here. It is the canonical authoring runtime for the Meta_Kim governance system.

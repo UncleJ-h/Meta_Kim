@@ -124,6 +124,52 @@
     "rejectMultiTopicRuns": true,
     "rejectDetachedWorkerTasks": true,
     "requireClosedDeliverableChain": true,
+    "queryBypassRule": {
+      "onlyPureQueryMayBypassAgentOwner": true,
+      "pureQueryCriteria": [
+        "no_file_or_code_change",
+        "no_external_side_effect",
+        "no_durable_execution_artifact",
+        "no_downstream_handoff_required"
+      ]
+    },
+    "executionOwnership": {
+      "executionRequiresAgentOwner": true,
+      "anonymousExecutionForbidden": true,
+      "existingOwnerPreferred": true,
+      "createOwnerBeforeExecutionWhen": [
+        "recurring_capability_gap",
+        "project_specific_domain_gap",
+        "workflow_blocked_by_missing_declared_owner"
+      ],
+      "temporaryFallback": {
+        "allowed": true,
+        "subagentType": "generalPurpose",
+        "emergencyOnly": true,
+        "oneOffPreferred": true,
+        "requiresExplicitOwnerLabel": true,
+        "requiresJustification": true,
+        "requiresEvolutionReview": true
+      }
+    },
+    "parallelism": {
+      "mustParallelizeIndependentTasks": true,
+      "requiresDependencyDeclaration": true,
+      "requiresParallelGroup": true,
+      "requiresMergeOwner": true
+    },
+    "protocolFirst": {
+      "enabled": true,
+      "requiredPackets": [
+        "runHeader",
+        "dispatchBoard",
+        "workerTaskPacket",
+        "workerResultPacket",
+        "reviewPacket",
+        "verificationPacket",
+        "evolutionWritebackPacket"
+      ]
+    },
     "reviewMustConsolidate": true,
     "reviewOutputProtocol": {
       "format": "deliverable-frontmatter",
@@ -151,7 +197,21 @@
       "referenceDirection",
       "handoffTarget",
       "lengthExpectation",
-      "visualOrAssetPlan"
+      "visualOrAssetPlan",
+      "owner",
+      "ownerMode",
+      "dependsOn",
+      "parallelGroup",
+      "mergeOwner",
+      "taskPacketId"
+    ],
+    "evolutionWritebackRequired": true,
+    "evolutionWritebackTargets": [
+      ".claude/agents/",
+      ".claude/skills/",
+      "contracts/workflow-contract.json",
+      "memory/scars/",
+      "memory/capability-gaps.md"
     ],
     "publicDisplayRequires": [
       "verifyPassed",
@@ -160,6 +220,81 @@
       "deliverableChainClosed",
       "consolidatedDeliverablePresent"
     ]
+  },
+  "protocols": {
+    "runHeader": {
+      "requiredFields": [
+        "department",
+        "primaryDeliverable",
+        "audience",
+        "freshnessRequirement",
+        "visualPolicy",
+        "handoffPlan"
+      ]
+    },
+    "dispatchBoard": {
+      "requiredFields": [
+        "boardId",
+        "goal",
+        "ownerResolution",
+        "primaryDeliverable",
+        "mergeStrategy"
+      ]
+    },
+    "workerTaskPacket": {
+      "requiredFields": [
+        "taskPacketId",
+        "owner",
+        "ownerMode",
+        "todayTask",
+        "output",
+        "deliverableLink",
+        "qualityBar",
+        "referenceDirection",
+        "handoffTarget",
+        "lengthExpectation",
+        "visualOrAssetPlan",
+        "dependsOn",
+        "parallelGroup",
+        "mergeOwner"
+      ]
+    },
+    "workerResultPacket": {
+      "requiredFields": [
+        "taskPacketId",
+        "owner",
+        "status",
+        "producedArtifacts",
+        "handoffTarget",
+        "blockingIssues"
+      ]
+    },
+    "reviewPacket": {
+      "requiredFields": [
+        "ownerCoverage",
+        "protocolCompliance",
+        "qualityGate",
+        "revisionNeeded",
+        "reviews"
+      ]
+    },
+    "verificationPacket": {
+      "requiredFields": [
+        "verified",
+        "remainingIssues",
+        "evidence",
+        "fixEvidence",
+        "closeFindings"
+      ]
+    },
+    "evolutionWritebackPacket": {
+      "requiredFields": [
+        "ownerAssessment",
+        "writebacks",
+        "scarIds",
+        "syncRequired"
+      ]
+    }
   },
   "departmentVisualPolicies": {
     "game": {

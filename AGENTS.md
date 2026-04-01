@@ -1,145 +1,233 @@
-# Meta_Kim Repository Guide
+# Meta_Kim for Codex
 
-This is not a repository for casually collecting agent prompts.
+This file explains how to read and maintain this repository inside Codex.
 
-The goal is to make one meta-based intent-amplification system land consistently across Codex, Claude Code, and OpenClaw.
+## Human Summary
 
-## Start with “Meta”
+If you only remember three things:
 
-In this project:
+- Meta_Kim is one cross-runtime governance system, not three separate projects.
+- `meta-warden` is the default public front door.
+- Long-term edits belong in `.claude/` and `contracts/workflow-contract.json`; Codex-facing files are mostly mirrors or runtime adapters.
+
+## Read This Repository Correctly
+
+Do not interpret this repository as “a folder full of unrelated agent prompts”.
+
+Interpret it as:
+
+**one intent-amplification architecture, governed through meta units, projected into Claude Code, Codex, and OpenClaw.**
+
+## What “Meta” Means
+
+In Meta_Kim:
 
 **meta = the smallest governable unit that exists to support intent amplification**
 
 A valid meta unit should:
 
 - own one clear class of responsibility
-- have explicit boundaries against other meta units
-- be orchestratable rather than free-floating
-- be independently reviewable
-- be replaceable or rolled back when it fails
+- define what it refuses, not only what it does
+- be reviewable on its own
+- be replaceable
+- be safe to roll back
 
-## What This Means for Codex
+## What Codex Is Looking At
 
-If you open this repository in Codex, read it as:
+When this repository is opened in Codex:
 
-- `AGENTS.md` explains what the project is trying to achieve
-- `.codex/agents/` maps the eight meta roles into Codex-native custom agents
-- `.agents/skills/` provides the project skill mirror
+- `AGENTS.md` is the project guide you are reading now
+- `.codex/agents/*.toml` contains the 8 Codex custom-agent mirrors
+- `.agents/skills/meta-theory/` contains the project skill mirror for Codex
+- `codex/config.toml.example` shows how a user-global Codex config can wire in MCP and skills
 
-Codex should not just see “many files”.
+Important maintenance rule:
 
-It should understand:
+- `.claude/agents/*.md` and `.claude/skills/meta-theory/SKILL.md` are the canonical sources
+- `contracts/workflow-contract.json` is the canonical run-discipline and gate contract
+- `.codex/agents/*` and `.agents/skills/*` are derived runtime assets unless explicitly stated otherwise
 
-**this repository is a cross-runtime intent-amplification system.**
+## Capability-First Rule
 
-## Default Working Model
+Meta_Kim’s orchestration model is capability-first, not name-first.
 
-Users should not need to think in terms of eight specialist agents.
+That means:
+
+- do not hardcode “call agent X” as the primary design rule
+- first describe the capability needed
+- then search for who declares ownership of that capability
+- then dispatch the best match
+
+The intended pattern is:
+
+```text
+Need capability X
+-> Search agents / skills / capability index
+-> Match by ownership boundary
+-> Dispatch the best fit
+```
+
+Hardcoding a specific agent name without a search step is a design shortcut, not the canonical method.
+
+## Default Behavior In Codex
 
 The intended default behavior is:
 
 1. the user gives raw intent
-2. the system amplifies the intent first
-3. the system decides whether specialist meta agents are needed
-4. the system returns a single coherent result
+2. the system clarifies the intent first
+3. the system searches for existing capabilities
+4. the system decides whether specialist meta agents are needed
+5. the system returns one coherent result
 
-So the external front door should normally be:
+That is why the normal public front door should be:
 
 - `meta-warden`
 
-The others are backstage specialists, not the public menu.
+The other seven meta agents are backstage specialists, not the public menu.
 
-### ⚠️ CRITICAL: You Are the Dispatcher, Not the Executor
+## Critical Rule: Orchestrate Before You Execute
 
-**This is the most important behavioral rule across all runtimes (Codex, Claude Code, OpenClaw):**
+For complex development work, Codex should behave as an orchestrator first.
 
-When you receive a complex development task:
+Treat these as complex tasks:
 
-- **You do NOT write code directly.** You are the orchestrator.
-- **For Type C tasks** (multi-file, cross-module, or requiring multiple capabilities): use the 8-stage spine.
-- **You MUST spawn sub-agents** for each sub-task in Execution stage.
-- **Your job ends at Stage 4 dispatch.** After spawning agents, wait for their results, then proceed to Stage 5 Review.
+- multi-file work
+- cross-module changes
+- tasks requiring multiple capabilities or roles
 
-**Anti-pattern to AVOID:**
+For those tasks:
+
+1. `Critical`: clarify the real request
+2. `Fetch`: search for existing agents, skills, and tools
+3. `Thinking`: define ownership, deliverables, sequencing, and boundaries
+4. `Execution`: delegate using Codex-native custom agents or subagents
+5. `Review`: inspect outputs against quality and boundary rules
+6. `Meta-Review`: review the review standard itself if needed
+7. `Verification`: confirm the change actually landed
+8. `Evolution`: capture patterns and failure lessons
+
+## The 8-Stage Spine vs. The Business Workflow Contract
+
+Meta_Kim uses two workflow layers that should not be merged mentally.
+
+The execution backbone is the 8-stage spine:
+
+```text
+Critical -> Fetch -> Thinking -> Execution -> Review -> Meta-Review -> Verification -> Evolution
 ```
+
+The department-run contract is defined separately in `contracts/workflow-contract.json`:
+
+```text
+direction -> planning -> execution -> review -> meta_review -> revision -> verify -> summary -> feedback -> evolve
+```
+
+The relationship is:
+
+- the 8-stage spine governs execution
+- the business workflow governs run packaging, run discipline, and deliverable closure
+- business phases do not replace the execution spine
+
+## Hidden Skeleton And Gate Discipline
+
+Under the readable workflow, Meta_Kim also relies on a hidden governance skeleton.
+
+Typical state layers include:
+
+- `stageState`
+- `controlState`
+- `gateState`
+- `surfaceState`
+- `capabilityState`
+- `agentInvocationState`
+
+This skeleton is not a second user interface. It exists so runs can be governed without pretending unfinished work is complete.
+
+In particular, Codex-side summaries should respect the project’s public-display discipline. A run should not be treated as display-ready unless verification, summary closure, single-deliverable discipline, and deliverable-chain closure all hold under the workflow contract.
+
+Main-thread responsibility in Codex:
+
+- scope clarification
+- routing and delegation
+- quality gates
+- final synthesis
+
+What the main thread should not do for complex work:
+
+- immediately start editing across many files
+- collapse all roles into one undifferentiated response
+- bypass delegation when the task clearly spans multiple ownership areas
+
+### Anti-Pattern
+
+```text
 User: build a notification system
-→ You immediately start writing code across 10 files
+You: immediately start editing 10 files yourself
 ```
 
-**Correct pattern:**
-```
+### Correct Pattern
+
+```text
 User: build a notification system
-→ Critical: clarify scope
-→ Fetch: search existing agents
-→ Thinking: plan sub-tasks, design card deck
-→ Execution: spawn sub-agents via Task()
-→ Review: check each agent's output
-→ Meta-Review + Verification + Evolution
+You:
+- Critical: clarify scope
+- Fetch: look for existing agents and skills
+- Thinking: split ownership and define deliverables
+- Execution: delegate to the right Codex-native agents/subagents
+- Review: inspect outputs
+- Verification: confirm the real state
+- Evolution: keep the reusable pattern
 ```
-
-If you find yourself about to write code without having spawned an agent first: **STOP.** Ask "Who should handle this?"
 
 ## The Eight Meta Agents
 
 - `meta-warden`: coordination, arbitration, final synthesis
-- `meta-genesis`: prompt identity and `SOUL.md`
-- `meta-artisan`: skills, MCP, and tool mapping
-- `meta-sentinel`: safety, hooks, permissions, rollback
-- `meta-librarian`: memory, knowledge continuity, context policy
-- `meta-conductor`: workflow, sequencing, rhythm
-- `meta-prism`: quality review and drift detection
+- `meta-conductor`: workflow, sequencing, rhythm control
+- `meta-genesis`: `SOUL.md`, persona, prompt architecture
+- `meta-artisan`: skills, MCP, tool fit, capability loadout
+- `meta-sentinel`: safety, permissions, hooks, rollback
+- `meta-librarian`: memory, continuity, context policy
+- `meta-prism`: quality review, drift detection, anti-slop review
 - `meta-scout`: external capability discovery and evaluation
 
-## Project-Level Hooks (Claude Code)
+## Canonical vs Derived Files
 
-7 hooks in `.claude/settings.json` — PreToolUse (dangerous bash blocker, git push confirm), PostToolUse (auto-format, typecheck, console.log warn), SubagentStart (context injection), Stop (console.log audit).
-
-## Canonical vs Derived Assets
-
-Preferred edit targets:
+Preferred long-term edit targets:
 
 - `.claude/agents/*.md`
 - `.claude/skills/meta-theory/SKILL.md`
+- `contracts/workflow-contract.json`
+- `docs/meta.md`
 
-Do not treat these as the long-term maintenance source:
+Files that should usually be treated as mirrors or adapters:
 
-- `.codex/agents`
-- `.agents/skills`
-- `openclaw/workspaces`
+- `.codex/agents/*.toml`
+- `.agents/skills/meta-theory/`
+- `.codex/skills/meta-theory.md`
+- `shared-skills/meta-theory.md`
+- `openclaw/workspaces/*`
 
-Those are runtime mirrors maintained by sync tooling.
+## Recommended Maintenance Loop
 
-## Working Loop
-
-After changing canonical source files:
+After changing canonical files:
 
 1. run `npm run sync:runtimes`
-2. run `npm run discover:global` (required on first setup, re-run after installing new global capabilities)
+2. run `npm run discover:global`
 3. run `npm run validate`
-4. run `npm run eval:agents` when you need runtime-level acceptance
-5. run `npm run verify:all` for full validation + acceptance pass
+4. run `npm run eval:agents` when runtime acceptance matters
+5. run `npm run verify:all` before release or after larger changes
 
-### Global Capability Discovery
+Useful supporting commands:
 
-Meta_Kim now supports discovering global capabilities across all three runtimes:
+- `npm run check:runtimes`
+- `npm run probe:clis`
+- `npm run test:mcp`
+- `node scripts/agent-health-report.mjs`
 
-```bash
-npm run discover:global
-```
+## One-Line Interpretation
 
-This scans:
-- `~/.claude/` — agents, skills, hooks, plugins, commands
-- `~/.openclaw/` — agents, skills, hooks, commands
-- `~/.codex/` — agents, skills, commands
+Do not read Meta_Kim as “many agents”.
 
-And generates `.claude/capability-index/global-capabilities.json` for use by the meta-theory skill's Fetch phase. This file is gitignored — it contains local absolute paths and is regenerated on each machine.
+Read it as:
 
-This allows the meta architecture to see and integrate with your globally-installed capabilities, not just the project's 8 meta agents.
-
-## Most Important Instruction
-
-Do not interpret this repository as a showroom for “many agents”.
-
-Interpret it as:
-
-**an architecture pack centered on intent amplification, governed through meta units, and projected consistently across multiple runtimes.**
+**a cross-runtime architecture pack for intent amplification, with Codex acting as one runtime projection of the same governance system.**

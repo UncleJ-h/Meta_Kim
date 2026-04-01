@@ -440,23 +440,33 @@ The 8-stage execution spine:
 
 **Core principles** (enforced throughout all stages):
 - **Agent Invocation Principle**: Never hardcode agent names — Search who declares "Own X" → Match → Invoke
+- **Agent Ownership Rule**: Only pure `Q / Query` may bypass agent ownership. Any executable or handoff-able task must have an explicit owner.
 - **Skip-Level Gate**: meta-theory does NOT write code directly — always dispatch to Execution Layer via `Task()` invocations. Track `agentInvocationState` through the cycle: idle → discovered (Fetch) → matched → dispatched → returned/escalated.
-- **Fetch-first**: Search → Match (score 0-3) → Invoke; fallback chain is local → capability index → external search → specialist ecosystem → generic
+- **Fetch-first**: Search → Match (score 0-3) → Invoke; fallback chain is local → capability index → external search → specialist ecosystem → owner-resolution branch
+- **Protocol-first Dispatch**: Stage 4 may not start until Stage 3 has produced run header, dispatch board, worker task packets, merge plan, review packet plan, verification packet plan, and evolution writeback plan.
+- **Parallelism Discipline**: If sub-tasks are independent, they must be parallelized. Every parallel group needs declared dependencies and a merge owner.
 
 **Required Stage 3 artifacts before Stage 4 may start** (full JSON shape: `references/dev-governance.md` § Thinking Stage Output Contract):
 - `subTasks` — each task has owner, file scope, and parallel/sequential marker
+- `runHeader` — the 6-field contract for the current run
+- `dispatchBoard` — one-board summary tying all work to the sole primary deliverable
+- `workerTaskPackets` — one protocol packet per owner, including `dependsOn`, `parallelGroup`, and `mergeOwner`
+- `resultMergePlan` — how parallel or split work is consolidated into one deliverable
 - `cardDeck` — stage-card rhythm entries for the 8-stage spine (`stage`, `priority`, `laneIntent`, `skipCondition`, `interruptTrigger`; Conductor owns live dealing)
 - `deliveryShellPlan` — who gets what shell, through which delivery channel
 - `reviewPlan` — which review capabilities must run
+- `reviewPacketPlan` — owner coverage + protocol compliance + quality findings
 - `metaReviewGate` — when Stage 6 is mandatory
 - `verificationGate` — what evidence must confirm fixes
+- `verificationPacketPlan` — `fixEvidence`, `closeFindings`, regression guard expectations
+- `evolutionWritebackPlan` — which assets must be updated if the run discovers durable lessons
 - `evolutionFocus` — which structural lessons should be extracted
 
 **Stage 7 Rollback Protocol** (full spec: `references/dev-governance.md` § Rollback Protocol):
 When verification fails and fixes cause more damage than they solve, invoke the 4-level rollback protocol (file-level → sub-task level → partial → full). Iron Rule: rollback is not failure — it is the system demonstrating it knows when to stop making things worse.
 
 **Stage 8 Evolution Artifacts Storage** (full spec: `references/dev-governance.md` § Evolution Artifacts Storage):
-Evolution outputs must persist to defined locations — not left floating in conversation context. Reusable Patterns → `memory/patterns/`, Scars → `memory/scars/`, New Skills → `.claude/skills/`, Agent Boundary Adjustments → `.claude/agents/` (triggers `npm run sync:runtimes`), Capability Gap Records → `memory/capability-gaps.md`.
+Evolution outputs must persist to defined locations — not left floating in conversation context. Reusable Patterns → `memory/patterns/`, Scars → `memory/scars/`, New Skills → `.claude/skills/`, Agent Boundary Adjustments → `.claude/agents/` (triggers `npm run sync:runtimes`), Capability Gap Records → `memory/capability-gaps.md`. Every run must also decide whether the owner stays as-is, needs boundary adjustment, or should be created / retired.
 
 ---
 
@@ -546,10 +556,10 @@ Format: scenario description → problem diagnosis → Card Deck configuration (
 1. **You are the DISPATCHER, not the executor**: After receiving a trigger, determine the type, then delegate — do NOT write code yourself. For Type C tasks, use `Task()` invocations to spawn sub-agents. Track `agentInvocationState` through: idle → discovered → matched → dispatched → returned/escalated.
 2. **Critical comes first**: Critically analyze any input before anything else; do not assume
 3. **Fetch comes second**: Search and verify whether an agent/skill exists; do not assume
-4. **Thinking before delegation** (Type C): Produce or validate Stage 3 artifacts before Stage 4 — no capability match → find a better agent match (escalate if needed), do NOT self-execute
+4. **Thinking before delegation** (Type C): Produce or validate Stage 3 artifacts before Stage 4 — no capability match → resolve ownership first (existing owner / Type B creation / temporary fallback owner), do NOT self-execute
 5. **Execution = Task() calls only**: Stage 4 means spawning sub-agents via `Task()`. If you find yourself about to write code directly: STOP and ask "who should Task() this?"
-6. **Review is mandatory before closure**: No output may be treated as complete before Review, and complex runs must pass Meta-Review + Verification as well
-7. **Evolution closes the loop**: After task completion, must run the 5+1 evolution detection model (5 structural dimensions + scars codification overlay)
+6. **Review is mandatory before closure**: No output may be treated as complete before Review, and Review must also check owner coverage + protocol compliance; complex runs must pass Meta-Review + Verification as well
+7. **Evolution closes the loop**: After task completion, must run the 5+1 evolution detection model (5 structural dimensions + scars codification overlay) and write back any durable change to agent / skill / contract assets
 8. **Read references on demand**: Read `references/*.md` for deeper theoretical detail, but the core execution logic is in this file
 9. **Attention Cost**: A mature system knows when saying less is the most valuable — don't dump everything at once
 
@@ -577,7 +587,9 @@ Format: scenario description → problem diagnosis → Card Deck configuration (
 ```
 Local scan → capability index (refresh if missing/stale) → findskill search →
 specialist ecosystems (`everything-claude-code`, `gstack`, global agents/skills) →
-generalPurpose fallback (Task `subagent_type` / runtime identifier)
+owner-resolution branch:
+  recurring/project-specific gap → Type B create/compose owner
+  one-off emergency gap → temporary `generalPurpose` owner with explicit justification
 ```
 
 **Review Chain** (Type C Stage 5):
@@ -620,7 +632,7 @@ Use the following scenarios to verify skill effectiveness:
 > "I need to implement a user authentication system, including login, registration, token refresh, permission verification"
 > Expected: Go through the 8-stage execution spine, Critical → Fetch (search agents) → Thinking (plan sub-tasks) → **Execution: Task() spawns agents** (NOT self-execution) → Review → Meta-Review + Verification → Evolution
 >
-> **PASS criteria**: Stage 4 must show explicit `Task()` invocations. If the response shows direct code writing without any `Task()` calls → FAIL, Grade D. The dispatcher must delegate, not execute.
+> **PASS criteria**: Stage 4 must show explicit `Task()` invocations, every executable sub-task must have an owner, and Stage 3 must define protocol artifacts before dispatch. If the response shows direct code writing without any `Task()` calls or uses anonymous execution with no owner → FAIL, Grade D.
 
 **Test 4: Review Proposal (Type D)**
 > "Help me review whether this agent's definition is reasonable"

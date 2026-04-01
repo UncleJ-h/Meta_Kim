@@ -22,6 +22,46 @@ Need an agent for X → Search who declares "Own X" → Call the best match
 
 **⚠️ Iron Rule**: Do NOT write `call code-reviewer` or `call meta-prism` as hardcoded steps. Describe the **capability needed**; let the executor discover **who provides it** at runtime via the Search-Match-Invoke pattern.
 
+### Agent Ownership Rule
+
+Every **executable** task must have an explicit **agent owner**.
+
+Only a **pure Q / Query** may bypass agent ownership and be answered directly. A task is **not** a pure query if it does any of the following:
+- modifies files / code / configuration
+- triggers commands, network calls, or other external side effects
+- produces a durable artifact for later handoff, review, or verification
+- is expected to feed Evolution writeback into agent / skill / contract assets
+
+Rule of thumb:
+
+```
+Pure question → may answer directly
+Anything executable / handoff-able → must have an agent owner
+```
+
+### Capability Gap Resolution Ladder
+
+When Fetch does not find a clean owner, resolve the gap in this order:
+
+1. **Existing owner found** → dispatch to that owner
+2. **Durable / recurring / project-specific gap** → trigger Type B, create or compose the owner first, then dispatch
+3. **Emergency or one-off gap** → use a temporary `generalPurpose` owner with explicit justification, then review it again in Evolution
+
+**No-owner execution is illegal.** Even a temporary fallback must be named and tracked as an owner, not treated as anonymous direct execution.
+
+### Protocol-First Rule
+
+Before Stage 4 starts, Thinking must produce explicit protocol artifacts for the run:
+- `runHeader`
+- `dispatchBoard`
+- `workerTaskPackets`
+- `resultMergePlan`
+- `reviewPacketPlan`
+- `verificationPacketPlan`
+- `evolutionWritebackPlan`
+
+If these protocol artifacts do not exist, the run is not ready for Execution.
+
 ---
 
 ## 2. CORE 8-STAGE EXECUTION SPINE (Detailed)
@@ -60,12 +100,25 @@ The 8-stage spine is the **human-readable orchestration surface**. Underneath it
 
 | Category | Determination Criteria | Execution Path |
 |----------|----------------------|----------------|
-| **Q** Query | No code changes needed, just answer questions | Answer directly, skip subsequent stages |
-| **A** Action | Clear, specific execution task (fix bug, add feature, deploy) | → Orchestration Layer decomposition → dispatch to Execution Layer |
-| **P** Planning | Needs design plan before execution (new module, architecture adjustment) | → Plan first → decompose into multiple A-tasks → Dispatch one by one |
+| **Q** Query | No code/file changes, no side effects, no durable execution artifact needed | Answer directly, skip subsequent stages |
+| **A** Action | Clear, specific execution task (fix bug, add feature, deploy) | → Orchestration Layer decomposition → dispatch to an Execution owner |
+| **P** Planning | Needs design plan before execution (new module, architecture adjustment) | → Plan first → decompose into multiple A-tasks or planning owners → Dispatch one by one |
 | **S** Strategic | Involves global decisions, cross-system impact, long-term direction | → Warden arbitration → may trigger Type B creation pipeline |
 
 **Classification output field**: `taskClass: Q|A|P|S`
+
+### No-Agent Exception (strict)
+
+The only valid no-agent path is:
+
+```text
+taskClass = Q
+AND no file/code/config change
+AND no external side effect
+AND no durable artifact/handoff packet required
+```
+
+If any one of those conditions fails, the task must be treated as `A`, `P`, or `S`, and therefore must have an agent owner.
 
 ### Skip-Level Self-Reflection Gate
 
@@ -130,7 +183,7 @@ On receiving an escalation signal: re-enter Fetch (Stage 2) to find a more capab
 
 | File Changes | Complexity | Executed Path | Upgrade to 10-Step? |
 |-------------|-----------|---------------|-------------------|
-| 1 file, pure logic/style/comments | Simple | Execution → Review → Verification → Evolution (4 stages) | No — 8-stage is the minimum; even these 4 stages suffice |
+| 1 file, pure logic/style/comments | Simple | Execution → Review → Verification → Evolution (4 stages, still owner-driven) | No — 8-stage is the minimum; even these 4 stages suffice |
 | 2-5 files, 1 module | Medium | Full 8-stage spine | No — 8-stage is the complete executable chain for medium complexity |
 | >5 files OR cross-system OR multi-team | Complex | Full 8-stage spine, with escalation gates | **Yes** — upgrade to full 10-step governance when: (a) >5 files, (b) cross-system dependencies detected, (c) multi-team handoff required, (d) security-sensitive changes, or (e) business-workflow revision/summary/feedback phases are needed per the run contract |
 
@@ -148,6 +201,8 @@ On receiving an escalation signal: re-enter Fetch (Stage 2) to find a more capab
 ```json
 {
   "taskClass": "A",
+  "requiresAgentOwner": true,
+  "ownerPolicy": "existing-owner | create-owner-first | temporary-fallback-owner",
   "skipLevel": "should-dispatch",
   "complexity": "medium",
   "clarity": "confirmed",
@@ -200,10 +255,14 @@ Search known specialist ecosystems already integrated by Meta_Kim:
 - other globally installed runtime-native agents / skills from the capability index
 ```
 
-**Step 5 — Generic fallback** (if no match found):
+**Step 5 — Owner resolution branch** (if no match found):
 ```
 Mark capabilityGap: "no agent declares Own [capability]"
-Invoke Task(subagent_type="generalPurpose") with clear constraints
+IF gap is durable / recurring / project-specific
+  → trigger Type B creation pipeline before execution
+ELSE
+  → invoke Task(subagent_type="generalPurpose") as a TEMPORARY owner
+  → record justification + require Evolution follow-up
 ```
 
 ### Match Scoring
@@ -213,7 +272,17 @@ Invoke Task(subagent_type="generalPurpose") with clear constraints
 | 3 | Perfect match — "Own" covers exactly what is needed | Invoke directly |
 | 2 | Partial match — covers most, some gaps | Invoke + note gaps |
 | 1 | Weak match — tangentially related | Invoke + note significant gaps |
-| 0 | No match | Capability gap detected → Step 5 fallback |
+| 0 | No match | Capability gap detected → Step 5 owner-resolution branch |
+
+### Owner Resolution Rules
+
+| Situation | Resolution |
+|----------|------------|
+| Existing owner covers the work | Dispatch to that owner |
+| No owner, but gap is recurring / strategic / project-specific | Create or compose the owner first (Type B) |
+| No owner, gap is one-off and low-risk | Use a temporary `generalPurpose` owner and mark it for Evolution review |
+
+Temporary fallback is a **transition state**, not a mature architecture state.
 
 ### Tier-Aware Routing
 
@@ -253,6 +322,9 @@ This is a **preference**, not a hard rule — if the lightweight agent escalates
   ],
   "selected": { "name": "code-reviewer", "score": 3 },
   "capabilityGap": null,
+  "ownerMode": "existing-owner",
+  "createOwnerRecommended": false,
+  "temporaryOwnerJustification": null,
   "fallbackUsed": false
 }
 ```
@@ -291,13 +363,57 @@ Break Stage 1's task into independent sub-tasks:
       "id": 1,
       "description": "what specifically to do",
       "owner": "agent name from Stage 2",
+      "ownerMode": "existing-owner | create-owner-first | temporary-fallback-owner",
       "parallel": true,
+      "parallelGroup": "group-a",
+      "dependsOn": [],
+      "mergeOwner": "agent responsible for consolidation",
+      "taskPacketId": "task-001",
       "fileScope": ["file-or-module-a", "file-or-module-b"],
       "constraints": ["boundary1", "dependency1"]
     }
   ]
 }
 ```
+
+### Step 3.5: Protocol-First Dispatch Artifacts
+
+Thinking must lock down the execution protocol before any Task() invocation begins:
+
+```json
+{
+  "runHeader": {
+    "department": "team or department",
+    "primaryDeliverable": "single deliverable name",
+    "audience": "who the result is for",
+    "freshnessRequirement": "freshness rule",
+    "visualPolicy": "visual strategy",
+    "handoffPlan": "how the chain closes"
+  },
+  "dispatchBoard": {
+    "boardId": "dispatch-001",
+    "goal": "one sentence goal",
+    "ownerResolution": "existing-owner | create-owner-first | temporary-fallback-owner"
+  },
+  "workerTaskPackets": [
+    {
+      "packetId": "task-001",
+      "owner": "agent name",
+      "ownerMode": "existing-owner",
+      "dependsOn": [],
+      "parallelGroup": "group-a",
+      "mergeOwner": "agent name",
+      "deliverableLink": "how this packet connects back to the primary deliverable"
+    }
+  ],
+  "resultMergePlan": {
+    "mergeOwner": "agent responsible for consolidation",
+    "consolidationArtifact": "single deliverable artifact"
+  }
+}
+```
+
+Independent work that can be parallelized must be marked with the same `parallelGroup`. Any task that has no declared `owner`, `dependsOn`, and `mergeOwner` is not ready for Execution.
 
 ### Step 4: `cardDeck` (stage-card rhythm) + delivery plan
 
@@ -344,12 +460,19 @@ Thinking must translate the plan into a **`cardDeck`** — the canonical Stage 3
 ```json
 {
   "subTasks": [],
+  "runHeader": {},
+  "dispatchBoard": {},
+  "workerTaskPackets": [],
+  "resultMergePlan": {},
   "cardDeck": [],
   "deliveryShellPlan": [],
   "interruptChannels": [],
   "reviewPlan": ["code-quality", "security"],
+  "reviewPacketPlan": ["owner-coverage", "protocol-compliance", "quality-findings"],
   "metaReviewGate": "complexity=complex OR abnormal review confidence",
   "verificationGate": "all failed assertions must be re-run with fresh evidence",
+  "verificationPacketPlan": ["fixEvidence", "closeFindings", "regressionGuard"],
+  "evolutionWritebackPlan": ["agent-boundary", "skill", "contract", "scar"],
   "evolutionFocus": ["pattern reuse", "boundary drift", "process bottlenecks"]
 }
 ```
@@ -367,6 +490,7 @@ For each sub-task from Stage 3, invoke the matched agent:
 Task(
   subagent_type="<selected agent from Stage 2>",
   prompt="""
+  Packet: [workerTaskPacket JSON]
   Task: [sub-task description]
   Constraints: [boundaries from Stage 3]
   Deliverable: [expected output format]
@@ -375,8 +499,10 @@ Task(
 ```
 
 ### Step 2: Parallel/Sequential Decision
-- Sub-tasks' file sets do not overlap → **parallel** invocation
-- File sets overlap → **sequential** invocation
+- No dependency edges + non-overlapping file scopes → **must run in parallel**
+- Shared files, explicit dependency edges, or shared consolidation step → **sequential**
+- Every parallel lane must declare a `parallelGroup`
+- Every parallel group must declare one `mergeOwner`
 
 ### Step 2.5: Execute in stage order
 
@@ -389,12 +515,13 @@ Execution must respect the Stage 3 **`cardDeck`** (stage-card sequence / control
 - Which files were modified
 - Any conflicts to resolve
 - Any sub-task failures → handle via fault protocol
+- Every result returns through a `WorkerResultPacket`, not free-form orphan output
 
 ---
 
 ## STAGE 5: Review — Validate the Result (Detailed)
 
-**Trigger**: Stage 4 produced code changes. If no code changes, skip to Stage 6.
+**Trigger**: Stage 4 produced code changes or any durable execution artifact. If Stage 4 produced neither, skip to Stage 6.
 
 **⚠️ The executor does not self-review. Follow the Agent Invocation Principle.**
 
@@ -409,6 +536,17 @@ Skip-Level handling:
 ```
 IF Skip-Level detected → Record Scar → Assess impact → IF impact occurred → re-verify with agent
 ```
+
+### Step 1.5: Owner Coverage + Protocol Compliance Review
+
+Before content quality review begins, check the execution contract itself:
+- [ ] Did every executable sub-task have an explicit owner?
+- [ ] If temporary fallback owner was used, is the justification explicit?
+- [ ] Do all `WorkerResultPackets` map back to the `dispatchBoard` and primary deliverable?
+- [ ] Is there a declared `mergeOwner` for every parallel group?
+- [ ] Did the run maintain one consolidated deliverable rather than drifting into detached outputs?
+
+If any answer is no, the Review packet must record **protocol non-compliance** even if the implementation quality looks good.
 
 ### Step 2: Quality Review (dynamic, Fetch-first)
 
@@ -458,6 +596,9 @@ If files involve UI/components:
 {
   "skipLevelDetected": false,
   "skipLevelScar": null,
+  "ownerCoverage": "PASS",
+  "protocolCompliance": "PASS",
+  "temporaryOwnerFollowUp": [],
   "reviews": [
     { "type": "code-quality", "agent": "code-reviewer", "result": "PASS", "issues": [] },
     { "type": "security", "agent": "security-reviewer", "result": "FAIL", "issues": ["hardcoded API key in config.ts"] }
@@ -574,6 +715,16 @@ Use the **5+1 evolution model** after every task: the canonical 5 structural dim
 | Capability coverage | Gap discovered | → Scout or Type B |
 | Scars | Issue detected | → Record Scar → update Critical checklist |
 
+### Owner Writeback Rule
+
+Every completed run must ask:
+
+1. Did an existing owner prove sufficient?
+2. Did a temporary fallback owner reveal a recurring capability gap?
+3. Should an agent boundary, SOUL, skill loadout, or workflow contract be updated?
+
+If the run used a temporary owner more than once for the same capability family, Evolution should default to **Type B or owner-boundary adjustment**, not repeated temporary fallback.
+
 ### Scars Structured Recording
 
 ```yaml
@@ -585,6 +736,21 @@ scar:
   root_cause: "why (not surface reason)"
   impact: none | degraded | recovered | critical
   prevention_rule: "specific rule for next time"
+```
+
+### Evolution Writeback Packet
+
+```json
+{
+  "ownerAssessment": "keep-existing | adjust-boundary | create-owner | retire-temporary-fallback",
+  "writebacks": [
+    { "target": ".claude/agents/<agent>.md", "reason": "boundary drift" },
+    { "target": ".claude/skills/<skill>/SKILL.md", "reason": "reusable execution pattern" },
+    { "target": "contracts/workflow-contract.json", "reason": "protocol or gate refinement" }
+  ],
+  "scarIds": ["2026-04-02-overstep-example"],
+  "syncRequired": true
+}
 ```
 
 ### Evolution Artifacts Storage
