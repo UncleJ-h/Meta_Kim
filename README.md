@@ -33,7 +33,7 @@ The result: fewer broken multi-file changes, clearer agent responsibilities, and
     GitHub <a href="https://github.com/KimYx0207">KimYx0207</a> |
     𝕏 <a href="https://x.com/KimYx0207">@KimYx0207</a> |
     Website <a href="https://www.aiking.dev/">aiking.dev</a> |
-    WeChat Official Account: <strong>Lao Jin Takes You Through AI</strong>
+    WeChat Official Account: <strong>老金带你玩AI</strong>
   </p>
   <p>
     Feishu knowledge base:
