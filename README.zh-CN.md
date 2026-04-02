@@ -335,12 +335,12 @@ flowchart TD
     C --> S["简单执行任务<br>owner 驱动压缩路径"]
     C --> X["复杂开发任务<br>Type C 8 阶段脊柱"]
     C --> M["元分析任务<br>metaWorkflow 3 phases"]
-    C --> D["已有方案要审<br>Type D 审查流"]
+    C --> D["已有方案要审<br>Type D 审查流<br>(分派 meta-prism + meta-scout + meta-warden)"]
     X --> T["复杂度再升高时<br>升级到 10 步治理层"]
     S --> S2["Execution<br>Review<br>Verification<br>Evolution"]
     X --> X2["Critical<br>Fetch<br>Thinking<br>Execution<br>Review<br>Meta-Review<br>Verification<br>Evolution"]
     M --> M2["analyze<br>propose<br>report"]
-    D --> D2["读提案<br>checklist<br>输出审查报告"]
+    D --> D2["读提案<br>分派 agent<br>输出审查报告"]
 ```
 
 这里最容易误解的 4 件事：

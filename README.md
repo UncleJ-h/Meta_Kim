@@ -334,12 +334,12 @@ flowchart TD
     C --> S["Simple execution task<br>owner-driven shortcut"]
     C --> X["Complex development task<br>Type C 8-stage spine"]
     C --> M["Meta-analysis task<br>metaWorkflow 3 phases"]
-    C --> D["Existing proposal to review<br>Type D review flow"]
+    C --> D["Existing proposal to review<br>Type D review flow<br>(dispatches meta-prism + meta-scout + meta-warden)"]
     X --> T["If complexity rises further<br>upgrade to the 10-step governance layer"]
     S --> S2["Execution<br>Review<br>Verification<br>Evolution"]
     X --> X2["Critical<br>Fetch<br>Thinking<br>Execution<br>Review<br>Meta-Review<br>Verification<br>Evolution"]
     M --> M2["analyze<br>propose<br>report"]
-    D --> D2["read proposal<br>checklist<br>review report"]
+    D --> D2["read proposal<br>dispatch agents<br>review report"]
 ```
 
 The 4 easiest misunderstandings here are:

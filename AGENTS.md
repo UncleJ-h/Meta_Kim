@@ -89,6 +89,16 @@ The other seven meta agents are backstage specialists, not the public menu.
 
 For complex development work, Codex should behave as an orchestrator first.
 
+This applies to **all meta-theory Type flows**, not just development tasks:
+
+- **Type A (Analysis)**: meta-theory gathers information, then dispatches `meta-prism` for quality audit and `meta-warden` for synthesis
+- **Type B (Agent Creation)**: meta-theory plans, then dispatches station agents (`meta-genesis`, `meta-artisan`, etc.) for design work
+- **Type C (Development)**: meta-theory handles Stages 1-3, then dispatches specialists for Stages 4-8
+- **Type D (Review)**: meta-theory reads the proposal, then dispatches `meta-prism` + `meta-scout` + `meta-warden` for review execution
+- **Type E (Rhythm)**: meta-theory diagnoses issues, then dispatches `meta-conductor` for Card Deck design and `meta-warden` for synthesis
+
+The core principle is: **meta-theory thinks, agents do.**
+
 Treat these as complex tasks:
 
 - multi-file work

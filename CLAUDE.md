@@ -70,6 +70,16 @@ Hardcoded named dispatch without a search step is not the canonical design.
 
 For complex development work, Claude Code should behave as the dispatcher first, not the all-in-one executor.
 
+This applies to **all meta-theory Type flows**, not just development tasks:
+
+- **Type A (Analysis)**: meta-theory gathers information (Steps 1-2), then dispatches `meta-prism` for quality audit and `meta-warden` for synthesis
+- **Type B (Agent Creation)**: meta-theory plans (Phases 1-2), then dispatches station agents (`meta-genesis`, `meta-artisan`, etc.) via `Task()` for design work
+- **Type C (Development)**: meta-theory handles Stages 1-3 (Critical/Fetch/Thinking), then dispatches specialists via `Task()` for Stages 4-8
+- **Type D (Review)**: meta-theory reads the proposal, then dispatches `meta-prism` + `meta-scout` + `meta-warden` for review execution
+- **Type E (Rhythm)**: meta-theory diagnoses issues (Steps 1-3), then dispatches `meta-conductor` for Card Deck design and `meta-warden` for synthesis
+
+The core principle is: **meta-theory thinks, agents do.**
+
 Treat these as complex tasks:
 
 - multi-file work

@@ -83,7 +83,22 @@ Glob: .claude/agents/*.md
 ```
 Read each agent definition file to understand the current state.
 
-**Step 3: Five Criteria item-by-item verification**
+**Step 2.5: Agent Dispatch (MANDATORY)**
+
+Type A analysis involves quality audit and pattern detection — this is execution work, not thinking. Spawn agents via `Task()`:
+
+| Analysis Need | Agent to Spawn | Responsibility |
+|---------------|---------------|----------------|
+| Five Criteria verification + Four Questions + Death Patterns | **meta-prism** | Execute Steps 3, 3.5, and 4 — quality audit with evidence tables |
+| Final synthesis report | **meta-warden** | Execute Step 5 — aggregate prism findings into actionable report |
+
+**Dispatch rules:**
+- meta-prism receives: agent definition files (from Step 2) + references/meta-theory.md
+- meta-warden receives: meta-prism's output + original user request
+- Track `agentInvocationState`: idle → discovered → matched → dispatched → returned/escalated
+- Collect all agent outputs before outputting the final report
+
+**Step 3: Five Criteria item-by-item verification (executed by meta-prism)**
 
 For each agent, fill in the table:
 
@@ -108,7 +123,7 @@ For each agent, fill in the table:
 
 **Omnipotent Executor Meta Anti-Pattern**: If you find a meta that "understands, finds files, designs plans, writes code, verifies, and explains" all at once → this is Omnipotent Executor Meta compression disease. Symptoms: execution before thorough understanding, decisions before complete information gathering, modifying shared logic before exposing risks. Encountering these symptoms → trigger Type B splitting pipeline.
 
-**Step 4: Four Death Patterns Detection**
+**Step 4: Four Death Patterns Detection (executed by meta-prism)**
 
 | Death Pattern | Symptoms | Diagnostic Questions |
 |---------------|----------|---------------------|
@@ -117,7 +132,7 @@ For each agent, fill in the table:
 | Governance-Free Execution | Only direction → planning → execution | Who reviews? Who reviews the reviewers? How is experience codified? |
 | Result-Chasing Without Structure | One successful run is treated as gospel | Will it still work tomorrow? Can someone else take over and run it? |
 
-**Step 5: Output analysis report**, including each agent's verification table + death pattern detection results + improvement suggestions.
+**Step 5: Output analysis report (executed by meta-warden)**, including each agent's verification table + death pattern detection results + improvement suggestions.
 
 ---
 
@@ -274,9 +289,9 @@ The mandatory station deliverables are:
 
 Rule: a station only counts as complete when its deliverables are explicit enough that another operator could pick them up and continue without guessing.
 
-**Step 3: Genesis — Soul Design (Mandatory)**
+**Step 3: Genesis — Soul Design (Mandatory, dispatched to meta-genesis)**
 
-Read `.claude/agents/meta-genesis.md` and design the SOUL.md according to its methodology.
+Spawn **meta-genesis** agent via `Task()` with the ABSTRACTION PRINCIPLE and 8-module requirements below. meta-genesis reads its own methodology at `.claude/agents/meta-genesis.md` and produces the SOUL.md draft.
 
 **⚠️ ABSTRACTION PRINCIPLE (Non-Negotiable):** SOUL.md describes **WHAT KIND OF AGENT IT IS** (domain, technology stack, architectural patterns) — NOT **WHAT TASKS IT SHOULD EXECUTE** (specific features, pages, or deliverables).
 
@@ -306,9 +321,9 @@ The output must include **8 mandatory modules** (same labels and thresholds as `
 - Reasoning Rules
 - Stress-Test Record
 
-**Step 4: Artisan — Skill Matching (Mandatory)**
+**Step 4: Artisan — Skill Matching (Mandatory, dispatched to meta-artisan)**
 
-Read `.claude/agents/meta-artisan.md`.
+Spawn **meta-artisan** agent via `Task()`. meta-artisan reads `.claude/agents/meta-artisan.md`.
 
 1. Scan available Skills: `ls .claude/skills/*/SKILL.md` + system built-in Skills
 2. ROI scoring: `ROI = (task coverage × usage frequency) / (context cost + learning curve)`
@@ -321,9 +336,9 @@ Read `.claude/agents/meta-artisan.md`.
 - Capability Gap List
 - Adoption Notes
 
-**Step 5: Sentinel — Security Design (On Demand)**
+**Step 5: Sentinel — Security Design (On Demand, dispatched to meta-sentinel)**
 
-Read `.claude/agents/meta-sentinel.md`.
+Spawn **meta-sentinel** agent via `Task()` when triggered. meta-sentinel reads `.claude/agents/meta-sentinel.md`.
 - Threat modeling: Top 5 threats in this Agent's domain
 - Permission design: 3 levels (CAN / CANNOT / NEVER)
 - Hook design: PreToolUse / PostToolUse / Stop hooks
@@ -335,9 +350,9 @@ Read `.claude/agents/meta-sentinel.md`.
 - Hook Configuration
 - Rollback Rules
 
-**Step 6: Librarian — Memory Design (On Demand)**
+**Step 6: Librarian — Memory Design (On Demand, dispatched to meta-librarian)**
 
-Read `.claude/agents/meta-librarian.md`.
+Spawn **meta-librarian** agent via `Task()` when triggered. meta-librarian reads `.claude/agents/meta-librarian.md`.
 - Memory architecture: 3 layers (index layer / topic layer / archive layer)
 - Expiration policy: set expiration rules by type
 - Output: MEMORY.md template + persistence strategy
@@ -348,9 +363,9 @@ Read `.claude/agents/meta-librarian.md`.
 - Retention Policy
 - Recovery Evidence
 
-**Step 7: Conductor — Orchestration Design (On Demand)**
+**Step 7: Conductor — Orchestration Design (On Demand, dispatched to meta-conductor)**
 
-Read `.claude/agents/meta-conductor.md`.
+Spawn **meta-conductor** agent via `Task()` when triggered. meta-conductor reads `.claude/agents/meta-conductor.md`.
 - Collaboration flow: invocation order between Agents, parallel/sequential
 - Trigger conditions: under what circumstances to spawn this Agent
 - Output: Workflow configuration + trigger rules
@@ -363,9 +378,9 @@ Read `.claude/agents/meta-conductor.md`.
 
 ### Phase 4: Review and Revision
 
-**Step 8: Critical Review**
+**Step 8: Critical Review (dispatched to meta-prism)**
 
-For each Agent's complete design, answer 4 questions:
+Spawn **meta-prism** agent via `Task()` to review each Agent's complete design. meta-prism answers 4 questions:
 1. What assumptions did I make? Is there data to support them?
 2. If I replace the Agent name with something else, does the design still hold? (If yes = no Domain Depth, redo)
 3. Are there traces of Scope Creep? (Responsibility overflow into other Agents' domains)
@@ -388,7 +403,9 @@ AI-Slop Quantitative Detection:
 
 ### Phase 5: Integration and Verification
 
-**Step 10: Integration and Write**
+**Step 10: Integration and Write (dispatched to meta-warden)**
+
+Spawn **meta-warden** agent via `Task()` to synthesize all station outputs into the final agent definition.
 
 Generate `.claude/agents/{name}.md`, with structure including: identity, responsibility boundaries, Core Truths, Decision Rules, Thinking Framework, Anti-AI-Slop, Output Quality, Deliverable Flow, Meta-Skills, skill equipment, security rules (if any), memory strategy (if any), workflow (if any), Five Criteria verification table.
 
@@ -473,14 +490,31 @@ Evolution outputs must persist to defined locations — not left floating in con
 ## Type D: Review and Verification Flow
 
 ### Scenario
-The user has an existing proposal / agent definition and wants it reviewed for soundness.
+The user has an existing proposal / agent definition / article / documentation and wants it reviewed for soundness, accuracy, or quality.
 
 ### Execution Steps
 
 **Step 1: Read the proposal to review**
-Read the user-specified agent definition file or proposal document.
+Read the user-specified agent definition file, proposal document, article, or documentation.
 
-**Step 2: Review Checklist**
+**Step 1.5: Agent Dispatch (MANDATORY)**
+
+Type D is a governance flow — you are the DISPATCHER, not the executor. Spawn the following agents via `Task()` based on review needs:
+
+| Review Need | Agent to Spawn | Responsibility |
+|-------------|---------------|----------------|
+| Quality review (Five Criteria, Death Patterns, AI-Slop) | **meta-prism** | Quality audit, slop density calculation, replaceability detection |
+| External source verification (GitHub repos, URLs, claims) | **meta-scout** | Fetch external data, cross-reference facts, verify technical accuracy |
+| Final synthesis and rating | **meta-warden** | Aggregate findings from prism + scout, produce final rating and recommendations |
+
+**Dispatch rules:**
+- Agent definition review → spawn meta-prism (mandatory) + meta-warden (mandatory)
+- Article/documentation review → spawn meta-prism (mandatory) + meta-scout (if external sources cited) + meta-warden (mandatory)
+- If review involves security claims → also spawn meta-sentinel
+- Track `agentInvocationState`: idle → discovered → matched → dispatched → returned/escalated
+- Collect all agent outputs before proceeding to Step 3
+
+**Step 2: Review Checklist (executed by dispatched agents, NOT by meta-theory directly)**
 
 Execute each item:
 - [ ] Five Criteria verification (fill in evidence + Pass/Fail for each)
@@ -530,14 +564,28 @@ Glob: .claude/agents/meta-conductor.md
 Grep: "card|orchestration|rhythm" --path .claude/agents/*.md
 ```
 
-**Step 4: Design Event Card Deck Configuration**
+**Step 3.5: Agent Dispatch (MANDATORY)**
+
+Type E design work (Card Deck configuration, Delivery Shell selection) is execution — dispatch to specialists:
+
+| Design Need | Agent to Spawn | Responsibility |
+|-------------|---------------|----------------|
+| Card Deck configuration + card dealing rules | **meta-conductor** | Execute Steps 4-5 — design Event Card Deck and select Delivery Shells |
+| Final orchestration plan synthesis | **meta-warden** | Execute Step 6 — aggregate conductor output into actionable plan |
+
+**Dispatch rules:**
+- meta-conductor receives: rhythm diagnosis (from Steps 1-2) + existing orchestration (from Step 3) + user scenario
+- meta-warden receives: meta-conductor's Card Deck output + original user request
+- Track `agentInvocationState`: idle → discovered → matched → dispatched → returned/escalated
+
+**Step 4: Design Event Card Deck Configuration (executed by meta-conductor)**
 
 Build a complete Card Deck for this scenario:
 - For each card, fill in: id, type, priority(1-10), cost(low/mid/high), precondition, skip_condition, interrupt_trigger, delivery_shell
 - Apply 5 card dealing rules (default by priority → check skip → Intentional Silence to prevent overload → Interrupt priority → iteration cap)
 - Configure Sentinel → Conductor and Prism → Conductor Interrupt signal channels
 
-**Step 5: Select Delivery Shell**
+**Step 5: Select Delivery Shell (executed by meta-conductor)**
 
 Select a Delivery Shell for each card:
 - Determine audience (CEO / developer / user / reviewer)
@@ -545,7 +593,7 @@ Select a Delivery Shell for each card:
 - Determine context density (first-time / re-review / emergency)
 - Determine attention budget (high / medium / low)
 
-**Step 6: Output Orchestration Plan**
+**Step 6: Output Orchestration Plan (executed by meta-warden)**
 
 Format: scenario description → problem diagnosis → Card Deck configuration (with complete properties for each card) → card dealing rules → Delivery Shell selection → expected outcomes.
 
