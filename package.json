@@ -1,6 +1,6 @@
 {
   "name": "meta-kim",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Cross-runtime Meta_Kim prompt pack for Claude Code, OpenClaw, and Codex.",
   "private": true,
   "type": "module",
@@ -18,6 +18,7 @@
     "prepare:openclaw-local": "node scripts/prepare-openclaw-local.mjs",
     "eval:agents": "node scripts/eval-meta-agents.mjs",
     "eval:agents:live": "node scripts/eval-meta-agents.mjs --live",
+    "validate:run": "node scripts/validate-run-artifact.mjs",
     "probe:clis": "node scripts/eval-meta-agents.mjs --probe-clis-only",
     "test:meta-theory": "node --test tests/meta-theory/*.test.mjs",
     "validate": "node scripts/validate-project.mjs",

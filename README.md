@@ -85,7 +85,7 @@ In one line:
 
 The safest way to read this repository is not as “some prompts plus config files”, but as one governed system with layered responsibilities:
 
-- **theory sources**: `docs/meta.md` and `.claude/skills/meta-theory/` define the method itself
+- **theory sources**: `.claude/skills/meta-theory/` and its `references/` define the method itself
 - **organization sources**: `.claude/agents/*.md` define the 8 meta roles and their boundaries
 - **contract sources**: `contracts/workflow-contract.json` and related contracts define run discipline, gates, and deliverable closure
 - **runtime projections**: `.codex/`, `.agents/`, `openclaw/`, and `shared-skills/` are projections of the same system into different runtimes
@@ -534,11 +534,14 @@ Each run must now also emit an explicit `writebackDecision`:
 2. **Searches before assuming**: checks whether an existing agent / skill already covers the job
 3. **Establishes an owner before execution**: except for pure queries, every executable task needs an explicit owner
 4. **Classifies before it routes**: `taskClass + requestClass + governanceFlow + trigger/upgrade/bypass reasons` are expected before execution starts
-5. **Defines the protocol before work starts**: task classification, task packets, handoff chain, review packet, and verification packet come first
-6. **Closes review findings explicitly**: review findings, revision responses, verification results, and `closeFindings` must line up
-7. **Parallelizes when safe**: independent tasks should not be serialized by default
-8. **Reviews every output**: code quality, safety, architecture compliance, protocol compliance, and boundary violations
-9. **Writes learning back into the system**: reusable patterns, scars, and owner / skill / contract adjustments are persisted
+5. **Deals cards instead of only routing**: `meta-conductor` is the primary dealer, `meta-warden` is the escalation owner, and `cardPlanPacket` records what to deal, suppress, defer, skip, or interrupt
+6. **Separates intent core from delivery shell**: the same intent can surface through different `deliveryShell` objects without changing the underlying fact or action
+7. **Defines the protocol before work starts**: task classification, card plan, task packets, summary packet, handoff chain, review packet, and verification packet come first
+8. **Closes review findings explicitly**: review findings, revision responses, verification results, and `closeFindings` must line up
+9. **Parallelizes when safe**: independent tasks should not be serialized by default
+10. **Reviews every output**: code quality, safety, architecture compliance, protocol compliance, and boundary violations
+11. **Validates real runs, not just the contract**: `validate:run` checks whether a recorded run artifact actually satisfies the full packet chain
+12. **Writes learning back into the system**: reusable patterns, scars, and owner / skill / contract adjustments are persisted
 
 ## The Eight Yuan / Meta Agents
 
@@ -600,6 +603,14 @@ If Fetch discovers that no clean owner exists, the normal path is not “just do
 - durable / recurring gap -> create or compose the owner first (Type B), then execute
 - one-off low-risk gap -> allow a temporary `generalPurpose` owner, then review that choice during Evolution
 
+When you record a real governed run as JSON, validate it directly:
+
+```bash
+npm run validate:run -- tests/fixtures/run-artifacts/valid-run.json
+```
+
+That validator checks more than field presence. It verifies finding lineage, close-state flow, delivery-shell references, deliverable-chain closure, and whether `publicReady` was set truthfully.
+
 ### Manual Mode (when you know what you want)
 
 If you specifically want to design, review, or audit agents:
@@ -626,7 +637,7 @@ Meta_Kim/
 ├─ codex/          Codex global config example
 ├─ openclaw/       OpenClaw workspaces, skills, config templates
 ├─ contracts/      Runtime governance contracts
-├─ docs/           Method docs, repo map, capability matrix
+├─ docs/           Internal/private notes plus selected tracked runtime docs
 ├─ scripts/        Sync, validation, discovery, MCP, health scripts
 ├─ shared-skills/  Shared skill mirrors across runtimes
 ├─ README.md
@@ -642,8 +653,8 @@ If you are maintaining Meta_Kim, start with these:
 
 - `.claude/agents/*.md`
 - `.claude/skills/meta-theory/SKILL.md`
+- `.claude/skills/meta-theory/references/*.md`
 - `contracts/workflow-contract.json`
-- `docs/meta.md`
 - `README.md`
 - `README.zh-CN.md`
 - `CLAUDE.md`
@@ -839,6 +850,12 @@ And the full live stack with:
 npm run verify:all:live
 ```
 
+If you have a recorded run artifact and want to validate the actual packet chain:
+
+```bash
+npm run validate:run -- tests/fixtures/run-artifacts/valid-run.json
+```
+
 #### 7. Prepare OpenClaw locally only if you plan to use it
 
 ```bash
@@ -888,6 +905,7 @@ The system routes each request through the matching governance stage.
 | `npm run probe:clis`                   | when CLI availability is unclear                 | probes Claude / Codex / OpenClaw CLIs                                 |
 | `npm run test:mcp`                     | after changing MCP-related code                  | self-tests `meta-runtime-server`                                    |
 | `npm run validate`                     | before committing                                | runs static integrity validation                                      |
+| `npm run validate:run -- <run.json>`   | when you want to verify a recorded real run      | validates packet lineage, summary/public-ready truthfulness, and finding closure |
 | `npm run check`                        | when you want a quick static pass                | runs `check:runtimes + validate`                                    |
 | `npm run eval:agents`                  | for fast runtime smoke                           | runs CLI/config/hook/runtime-registry smoke without LLM prompt checks |
 | `npm run eval:agents:live`             | when you want live runtime acceptance            | runs the slower Claude / Codex / OpenClaw prompt-backed evaluation    |
@@ -947,13 +965,13 @@ Because Meta_Kim is designed to receive one user request through one public entr
 
 Only for pure `Q / Query` work: explanation or Q&A with no code change, no external side effect, and no deliverable / handoff chain. Once the task executes, produces artifacts, or enters review / verification, it needs an owner.
 
-### 8. Is `docs/meta.md` required reading?
+### 8. Is `.claude/skills/meta-theory/references/meta-theory.md` required reading?
 
-No. It is the long-form theory manuscript. Start with this README instead.
+No. It is the long-form theory manuscript mirrored from the canonical skill references. Start with this README instead.
 
 ### 9. I only want the directory map. What should I read?
 
-Read `docs/repo-map.md`.
+Use the repository tree section in this README.
 
 ### 9. I want the runtime differences. What should I read?
 
@@ -967,8 +985,8 @@ If this is your first time here, the lowest-friction order is:
 
 1. start with `README.md`
 2. then read [CLAUDE.md](CLAUDE.md) or [AGENTS.md](AGENTS.md)
-3. then read `docs/repo-map.md`
-4. only read `docs/meta.md` when you want the deeper theory
+3. then review the repository tree section above
+4. only read `.claude/skills/meta-theory/references/meta-theory.md` when you want the deeper theory
 
 ## Author and Resources
 

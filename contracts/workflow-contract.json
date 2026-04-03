@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "owner": "Meta_Kim",
   "businessWorkflow": {
     "id": "business",
@@ -117,6 +117,16 @@
       "owner": "meta-warden",
       "requiresVerifiedRun": true
     },
+    "dealer": {
+      "primaryOwner": "meta-conductor",
+      "escalationOwner": "meta-warden",
+      "interruptSources": [
+        "meta-sentinel",
+        "meta-prism",
+        "user",
+        "system"
+      ]
+    },
     "publicDisplay": {
       "owner": "meta-warden",
       "hardReleaseGate": true,
@@ -197,6 +207,163 @@
       "ownerRequiredByDefault": true,
       "onlyQueryMayBypassOwner": true
     },
+    "cardGovernance": {
+      "enabled": true,
+      "dealerRoleModel": "conductor-primary-warden-escalation",
+      "cardTypeEnum": [
+        "info",
+        "action",
+        "risk",
+        "silence",
+        "default",
+        "upgrade"
+      ],
+      "cardIntentEnum": [
+        "clarify",
+        "scope_contract",
+        "plan",
+        "execute",
+        "review",
+        "verify",
+        "repair",
+        "rollback",
+        "risk_surface",
+        "suggest",
+        "silence",
+        "default_path",
+        "escalate"
+      ],
+      "cardDecisionEnum": [
+        "deal",
+        "suppress",
+        "defer",
+        "skip",
+        "interrupt_insert",
+        "escalate"
+      ],
+      "cardAudienceEnum": [
+        "user",
+        "owner",
+        "reviewer",
+        "governance",
+        "runtime"
+      ],
+      "cardTimingEnum": [
+        "immediate",
+        "next_stage",
+        "after_dependency",
+        "after_verify",
+        "on_risk",
+        "on_timeout",
+        "on_user_request"
+      ],
+      "cardShellEnum": [
+        "conversation",
+        "file",
+        "packet",
+        "agent_dispatch",
+        "summary",
+        "silent_hold"
+      ],
+      "cardSourceEnum": [
+        "meta-conductor",
+        "meta-warden",
+        "meta-sentinel",
+        "meta-prism",
+        "system",
+        "user"
+      ],
+      "suppressionReasonEnum": [
+        "attention_budget_low",
+        "already_known",
+        "already_in_context",
+        "verification_pending",
+        "public_display_blocked",
+        "no_clear_intervention_gain"
+      ],
+      "defaultNoCardPolicy": "prefer_silence_without_clear_intervention_gain"
+    },
+    "silencePolicy": {
+      "noInterventionPreferred": true,
+      "silenceDecisionEnum": [
+        "none",
+        "no_card",
+        "defer",
+        "intentional_silence"
+      ],
+      "defaultWhen": [
+        "no_clear_intervention_gain",
+        "user_already_has_context",
+        "attention_budget_exceeded",
+        "public_display_blocked_pending_verification"
+      ],
+      "requiresInterruptionJustification": true,
+      "deferRequiresDeadline": true
+    },
+    "controlIntervention": {
+      "decisionTypeEnum": [
+        "skip",
+        "interrupt",
+        "override",
+        "escalation_insert"
+      ],
+      "skipReasonEnum": [
+        "already_known",
+        "already_in_context",
+        "attention_budget_low",
+        "not_applicable",
+        "artifact_not_needed"
+      ],
+      "interruptReasonEnum": [
+        "security_risk",
+        "quality_drift",
+        "user_urgent",
+        "system_failure",
+        "global_impact"
+      ],
+      "overrideReasonEnum": [
+        "security_override",
+        "verification_block",
+        "public_display_block",
+        "governance_owner_insert"
+      ],
+      "insertedGovernanceOwners": [
+        "meta-sentinel",
+        "meta-prism",
+        "meta-warden",
+        "meta-conductor"
+      ],
+      "requiresReturnToMainChain": true
+    },
+    "deliveryShell": {
+      "shellTypeEnum": [
+        "one_line",
+        "structured_status",
+        "technical_detail",
+        "review_delta",
+        "executive_summary",
+        "artifact_link"
+      ],
+      "presentationModeEnum": [
+        "direct",
+        "digest",
+        "deferred",
+        "quiet"
+      ],
+      "exposureLevelEnum": [
+        "internal",
+        "review",
+        "public"
+      ],
+      "interventionFormEnum": [
+        "conversation",
+        "file_write",
+        "task_packet",
+        "agent_dispatch",
+        "notification",
+        "none"
+      ]
+    },
     "executionOwnership": {
       "executionRequiresAgentOwner": true,
       "anonymousExecutionForbidden": true,
@@ -227,11 +394,13 @@
       "requiredPackets": [
         "runHeader",
         "taskClassification",
+        "cardPlanPacket",
         "dispatchBoard",
         "workerTaskPacket",
         "workerResultPacket",
         "reviewPacket",
         "verificationPacket",
+        "summaryPacket",
         "evolutionWritebackPacket"
       ]
     },
@@ -246,6 +415,11 @@
         "fixed_pending_verify",
         "verified_closed",
         "accepted_risk"
+      ],
+      "legalTransitions": [
+        "open->fixed_pending_verify",
+        "fixed_pending_verify->verified_closed",
+        "fixed_pending_verify->accepted_risk"
       ]
     },
     "reviewMustConsolidate": true,
@@ -312,6 +486,14 @@
       "blockDisplayBeforeVerification": true,
       "blockDisplayBeforeSummaryClosure": true,
       "blockCompletionBeforeDeliverableClosure": true
+    },
+    "runArtifactValidation": {
+      "script": "scripts/validate-run-artifact.mjs",
+      "findingLineageRequired": true,
+      "deliverableLinkMustReferencePrimaryDeliverable": true,
+      "publicReadyField": "summaryPacket.publicReady",
+      "summaryPacketRequired": true,
+      "cardPlanPacketRequired": true
     }
   },
   "protocols": {
@@ -337,6 +519,67 @@
         "decisionSource",
         "classifierVersion",
         "complexity"
+      ]
+    },
+    "cardPlanPacket": {
+      "requiredFields": [
+        "dealerOwner",
+        "dealerMode",
+        "cards",
+        "deliveryShells",
+        "silenceDecision",
+        "controlDecisions",
+        "defaultShellId"
+      ]
+    },
+    "cardDecision": {
+      "requiredFields": [
+        "cardId",
+        "cardType",
+        "cardIntent",
+        "cardDecision",
+        "cardAudience",
+        "cardTiming",
+        "cardShell",
+        "cardPriority",
+        "cardReason",
+        "cardSource",
+        "cardSuppressed",
+        "suppressionReason",
+        "deliveryShellId"
+      ]
+    },
+    "deliveryShell": {
+      "requiredFields": [
+        "deliveryShellId",
+        "shellType",
+        "presentationMode",
+        "exposureLevel",
+        "interventionForm",
+        "audience",
+        "contentBoundary"
+      ]
+    },
+    "silenceDecision": {
+      "requiredFields": [
+        "silenceDecision",
+        "noInterventionPreferred",
+        "interruptionJustified",
+        "deferUntil",
+        "reasonForSilence"
+      ]
+    },
+    "controlDecision": {
+      "requiredFields": [
+        "decisionId",
+        "decisionType",
+        "skipReason",
+        "interruptReason",
+        "overrideReason",
+        "insertedGovernanceOwner",
+        "emergencyGovernanceTriggered",
+        "returnsToStage",
+        "rejoinCondition"
       ]
     },
     "dispatchBoard": {
@@ -427,6 +670,18 @@
         "result",
         "evidence",
         "closeState"
+      ]
+    },
+    "summaryPacket": {
+      "requiredFields": [
+        "verifyPassed",
+        "summaryClosed",
+        "singleDeliverableMaintained",
+        "deliverableChainClosed",
+        "consolidatedDeliverablePresent",
+        "publicReady",
+        "deliveryShellsUsed",
+        "blockedBy"
       ]
     },
     "evolutionWritebackPacket": {

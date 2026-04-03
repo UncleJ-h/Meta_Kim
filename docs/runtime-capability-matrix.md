@@ -106,11 +106,16 @@ npm run discover:global -- --json
 | parity item | Claude Code | Codex | OpenClaw | 必须保持一致的判定 |
 | --- | --- | --- | --- | --- |
 | trigger parity | 通过 canonical skill + hook / prompt discipline 触发 | 通过 project instructions + custom agents / runtime adapter 触发 | 通过 workspace boot + hooks 触发 | 都必须先产出 `taskClassification`，再决定 `query / simple_exec / complex_dev / meta_analysis / proposal_review / rhythm` |
+| card parity | Thinking + protocol packets 决定发牌 | project skill / agents / adapters 决定发牌 | workspace / agent flow 决定发牌 | 都必须能产出等价 `cardPlanPacket`，把发牌员、牌、交付壳、抑制理由显式化 |
+| silence parity | Warden/Conductor 通过 gate + prompt discipline 留白 | adapter / validator 控制 no-card 与 defer | workspace / runtime gate 控制留白 | 都必须支持 `noInterventionPreferred`、`silenceDecision`、`reasonForSilence`，不能把“不打断”当成漏掉 |
+| control-decision parity | skip / interrupt / override 由 hook + governance owner 驱动 | validator / adapter / agent decision 驱动 | runtime hooks + governance owner 驱动 | 都必须把 `skipReason`、`interruptReason`、`overrideReason`、`insertedGovernanceOwner` 结构化记录，并声明如何回主链 |
+| shell parity | Claude 输出按受众壳适配 | Codex 输出按受众壳适配 | OpenClaw 输出按受众壳适配 | 都必须区分意图核与 `deliveryShell`，同一核可换壳，不可把内容和壳绑死 |
 | hook parity | `.claude/settings.json` 原生 hooks | 无仓库级原生 hooks，靠 validator + runtime adapter 补齐 | `openclaw.template.json` internal hooks | 危险命令阻断、上下文注入、结束前审计必须等价，不要求文件形态相同 |
 | review parity | specialist + warden/prism 审核 | custom agent / subagent 审核 | agent-to-agent / local workspace 审核 | Review 都必须产出 `reviewPacket.findings[]`，不能只给 PASS/FAIL |
 | verification parity | 验证 hook + agent 复核 | script / subagent 复核 | workspace verification flow | Verify 都必须消费 `revisionResponses` 和 `verificationResults`，并显式 `closeFindings` |
 | stop condition parity | hook / gate 阻断公开完成态 | validator / adapter 阻断公开完成态 | hook / runtime gate 阻断公开完成态 | 未 `verifyPassed`、未 `summaryClosed`、交付链未闭合时，三端都不得标记 final public-ready |
 | writeback parity | 直接写 canonical 资产 | 写 canonical 后 sync mirror | 写 canonical 后 sync workspace mirror | Evolution 都必须给出 `writebackDecision = writeback|none`，禁止静默跳过 |
+| run artifact parity | 可产出真实 run packet 并校验 | 可产出真实 run packet 并校验 | 可产出真实 run packet 并校验 | 三端都必须接受同一套 `validate-run-artifact` 链路校验，而不是只过静态字段检查 |
 
 ## 六、漂移检测
 

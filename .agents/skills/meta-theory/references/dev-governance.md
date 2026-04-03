@@ -54,11 +54,13 @@ When Fetch does not find a clean owner, resolve the gap in this order:
 Before Stage 4 starts, Thinking must produce explicit protocol artifacts for the run:
 - `runHeader`
 - `taskClassification`
+- `cardPlanPacket`
 - `dispatchBoard`
 - `workerTaskPackets`
 - `resultMergePlan`
 - `reviewPacketPlan`
 - `verificationPacketPlan`
+- `summaryPacketPlan`
 - `evolutionWritebackPlan`
 
 If these protocol artifacts do not exist, the run is not ready for Execution.
@@ -92,6 +94,87 @@ The 8-stage spine is the **human-readable orchestration surface**. Underneath it
 | `agentInvocationState` | `idle / discovered / matched / dispatched / returned / escalated` | meta-theory skill | Track whether the skill delegates to agents or attempts work directly — enforce the dispatcher role |
 
 **Rule**: this is an **invisible skeleton only**. The user-facing workflow still speaks in stage language and concrete deliverables. State labels exist to support gates, skips, interrupts, and evolution logging — not to become a second product interface.
+
+### Card Governance Model
+
+Meta_Kim no longer treats “发牌” as just a metaphor. In engineering terms:
+
+- **dealer primary owner**: `meta-conductor`
+- **dealer escalation owner**: `meta-warden`
+- **interrupt signal sources**: `meta-sentinel`, `meta-prism`, `user`, `system`
+
+This is intentionally **not** a new agent. It is a protocol role layered on top of Conductor/Warden so the system gains one explicit decision chain:
+
+1. **发不发**: `cardDecision`
+2. **发给谁**: `cardAudience`
+3. **什么时候发**: `cardTiming`
+4. **用什么壳发**: `deliveryShell`
+
+### Card Decision Objects
+
+Every real run may emit card decisions through a `cardPlanPacket`. Each card records:
+
+- `cardId`
+- `cardType`
+- `cardIntent`
+- `cardDecision`
+- `cardAudience`
+- `cardTiming`
+- `cardShell`
+- `cardPriority`
+- `cardReason`
+- `cardSource`
+- `cardSuppressed`
+- `suppressionReason`
+- `deliveryShellId`
+
+Card families:
+
+| Card family | Meaning |
+|------------|---------|
+| `info` | information / clarification / status |
+| `action` | route to execution, review, repair, rollback |
+| `risk` | governance or safety intervention |
+| `silence` | intentional no-card / defer / quiet-hold |
+| `default` | preferred next move or default path |
+| `upgrade` | escalation, handoff, or governance raise |
+
+### Silence / No-Card Rule
+
+Silence is a first-class decision, not a missing action.
+
+Default principle:
+
+```text
+If there is no clear evidence that interruption is better,
+prefer no-card / defer / intentional silence.
+```
+
+Run artifacts must therefore model:
+- `noInterventionPreferred`
+- `silenceDecision`
+- `interruptionJustified`
+- `deferUntil`
+- `reasonForSilence`
+
+### Skip / Interrupt / Override Rule
+
+Meta_Kim distinguishes:
+
+- **skip**: current step is intentionally not dealt because it is already known / already in context / not applicable
+- **interrupt**: a risk or urgent governance signal temporarily inserts a card ahead of the default queue
+- **override**: governance rules change the default path (for example, public display blocked until verification closes)
+- **escalation_insert**: Warden / Sentinel / Prism inserts a governance owner into the chain
+
+Every such move must emit a `controlDecision` with:
+- `decisionType`
+- `skipReason`
+- `interruptReason`
+- `overrideReason`
+- `insertedGovernanceOwner`
+- `emergencyGovernanceTriggered`
+- `returnsToStage`
+- `rejoinCondition`
 
 ---
 
@@ -439,6 +522,59 @@ Thinking must lock down the execution protocol before any `Agent` tool invocatio
     "visualPolicy": "visual strategy",
     "handoffPlan": "how the chain closes"
   },
+  "cardPlanPacket": {
+    "dealerOwner": "meta-conductor",
+    "dealerMode": "conductor-primary-warden-escalation",
+    "cards": [
+      {
+        "cardId": "card-001",
+        "cardType": "action",
+        "cardIntent": "execute",
+        "cardDecision": "deal",
+        "cardAudience": "owner",
+        "cardTiming": "next_stage",
+        "cardShell": "agent_dispatch",
+        "cardPriority": 8,
+        "cardReason": "work is ready for owner execution",
+        "cardSource": "meta-conductor",
+        "cardSuppressed": false,
+        "suppressionReason": "",
+        "deliveryShellId": "shell-tech-detail"
+      }
+    ],
+    "deliveryShells": [
+      {
+        "deliveryShellId": "shell-tech-detail",
+        "shellType": "technical_detail",
+        "presentationMode": "direct",
+        "exposureLevel": "internal",
+        "interventionForm": "agent_dispatch",
+        "audience": "developer-owner",
+        "contentBoundary": "implementation packet only"
+      }
+    ],
+    "silenceDecision": {
+      "silenceDecision": "defer",
+      "noInterventionPreferred": true,
+      "interruptionJustified": false,
+      "deferUntil": "verification-complete",
+      "reasonForSilence": "no additional push is better while verification is pending"
+    },
+    "controlDecisions": [
+      {
+        "decisionId": "ctl-001",
+        "decisionType": "interrupt",
+        "skipReason": "",
+        "interruptReason": "security_risk",
+        "overrideReason": "",
+        "insertedGovernanceOwner": "meta-sentinel",
+        "emergencyGovernanceTriggered": true,
+        "returnsToStage": "verification",
+        "rejoinCondition": "critical risk reviewed"
+      }
+    ],
+    "defaultShellId": "shell-tech-detail"
+  },
   "dispatchBoard": {
     "boardId": "dispatch-001",
     "goal": "one sentence goal",
@@ -511,6 +647,7 @@ Thinking must translate the plan into a **`cardDeck`** — the canonical Stage 3
   "subTasks": [],
   "taskClassification": {},
   "runHeader": {},
+  "cardPlanPacket": {},
   "dispatchBoard": {},
   "workerTaskPackets": [],
   "resultMergePlan": {},
@@ -522,6 +659,7 @@ Thinking must translate the plan into a **`cardDeck`** — the canonical Stage 3
   "metaReviewGate": "complexity=complex OR abnormal review confidence",
   "verificationGate": "all failed assertions must be re-run with fresh evidence",
   "verificationPacketPlan": ["fixEvidence", "revisionResponses", "verificationResults", "closeFindings", "regressionGuard"],
+  "summaryPacketPlan": ["verifyPassed", "summaryClosed", "deliverableChainClosed", "publicReady"],
   "evolutionWritebackPlan": ["writebackDecision", "agent-boundary", "skill", "contract", "scar"],
   "evolutionFocus": ["pattern reuse", "boundary drift", "process bottlenecks"]
 }
@@ -779,6 +917,28 @@ Verification FAIL
 ```
 
 **Iron Rule**: Rollback is not failure. Rollback is the system demonstrating it knows when to stop making things worse. A system without rollback capability is a system that can only move forward into disaster.
+
+### Summary / Public Display Packet
+
+The 8-stage spine has no separate “summary stage”, but business runs still need a structured closure object before anything becomes display-ready.
+
+```json
+{
+  "verifyPassed": true,
+  "summaryClosed": true,
+  "singleDeliverableMaintained": true,
+  "deliverableChainClosed": true,
+  "consolidatedDeliverablePresent": true,
+  "publicReady": true,
+  "deliveryShellsUsed": ["shell-tech-detail"],
+  "blockedBy": []
+}
+```
+
+Rules:
+- `publicReady = true` only when all public-display conditions are true
+- if any gate is false, `blockedBy` must explain why
+- summary closure is the public shell of the verified run, not a replacement for verification
 
 ---
 

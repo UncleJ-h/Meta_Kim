@@ -144,7 +144,9 @@ This skeleton is not a second front-end. It exists so the system can manage skip
 Claude-side synthesis should also respect public-display discipline. A run is not truly display-ready just because it has content. The workflow contract now hardens this with:
 
 - explicit `taskClassification` before execution
+- explicit `cardPlanPacket` so dealing / silence / skip / interrupt decisions are auditable
 - finding-level closure across `reviewPacket -> revisionResponses -> verificationResults -> closeFindings`
+- explicit `summaryPacket` before any public-ready claim
 - explicit `writebackDecision = writeback | none`
 - hard public-display blocking until verification, summary, and deliverable closure all pass
 
@@ -208,8 +210,8 @@ Preferred long-term edit targets:
 
 - `.claude/agents/*.md`
 - `.claude/skills/meta-theory/SKILL.md`
+- `.claude/skills/meta-theory/references/*.md`
 - `contracts/workflow-contract.json`
-- `docs/meta.md`
 
 Files that should usually remain derived or runtime-specific:
 
@@ -226,11 +228,12 @@ After changing canonical prompts, skills, hooks, or runtime-facing contracts:
 1. run `npm run sync:runtimes`
 2. run `npm run discover:global`
 3. run `npm run validate`
-4. run `npm run eval:agents` when smoke-level runtime acceptance matters
-5. run `npm run eval:agents:live` only when you explicitly need slower prompt-backed runtime acceptance
-6. run `npm run verify:all` before release or after larger changes
-7. run `npm run verify:all:live` only before runtime-sensitive releases that need the live acceptance layer
-8. check `docs/runtime-capability-matrix.md` when changing behavior that must stay parity-aligned across Claude / Codex / OpenClaw
+4. run `npm run validate:run -- <artifact.json>` when you want to verify a recorded governed run
+5. run `npm run eval:agents` when smoke-level runtime acceptance matters
+6. run `npm run eval:agents:live` only when you explicitly need slower prompt-backed runtime acceptance
+7. run `npm run verify:all` before release or after larger changes
+8. run `npm run verify:all:live` only before runtime-sensitive releases that need the live acceptance layer
+9. check `docs/runtime-capability-matrix.md` when changing behavior that must stay parity-aligned across Claude / Codex / OpenClaw
 
 Useful supporting commands:
 
@@ -248,8 +251,8 @@ For human readers:
 - start with `README.md` or `README.zh-CN.md`
 - read this file to understand Claude Code’s role
 - read `AGENTS.md` if you also care about Codex
-- read `docs/repo-map.md` for the directory map
-- read `docs/meta.md` only when you want the long-form theory
+- use the repository tree section in `README.md` for the directory map
+- read `.claude/skills/meta-theory/references/` only when you want the long-form theory
 
 ## One-Line Summary
 

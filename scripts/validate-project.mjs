@@ -254,7 +254,10 @@ async function validateRequiredFiles() {
     "memory/capability-gaps.md",
     "scripts/mcp/meta-runtime-server.mjs",
     "scripts/eval-meta-agents.mjs",
-    "scripts/prepare-openclaw-local.mjs"
+    "scripts/prepare-openclaw-local.mjs",
+    "scripts/validate-run-artifact.mjs",
+    "tests/fixtures/run-artifacts/valid-run.json",
+    "tests/fixtures/run-artifacts/invalid-run-public-ready.json"
   ];
 
   for (const relativePath of requiredFiles) {
@@ -270,8 +273,8 @@ async function validateWorkflowContract() {
   const contract = JSON.parse(await fs.readFile(contractPath, "utf8"));
 
   assert(
-    (contract.schemaVersion ?? 0) >= 2,
-    "workflow-contract.json schemaVersion must be >= 2 after governance hardening."
+    (contract.schemaVersion ?? 0) >= 3,
+    "workflow-contract.json schemaVersion must be >= 3 after card-governance hardening."
   );
   assert(
     contract.runDiscipline?.singleDepartmentPerRun === true,
@@ -328,6 +331,18 @@ async function validateWorkflowContract() {
     "workflow-contract.json publicDisplayRequires must exactly match the canonical public-display gate set."
   );
   assert(
+    contract.gates?.dealer?.primaryOwner === "meta-conductor" &&
+      contract.gates?.dealer?.escalationOwner === "meta-warden",
+    "workflow-contract.json dealer gate must model meta-conductor primary + meta-warden escalation ownership."
+  );
+  for (const source of ["meta-sentinel", "meta-prism", "user", "system"]) {
+    assert(
+      contract.gates?.dealer?.interruptSources?.includes(source),
+      `workflow-contract.json dealer gate must include interrupt source ${source}.`
+    );
+  }
+
+  assert(
     contract.gates?.publicDisplay?.owner === "meta-warden",
     "workflow-contract.json publicDisplay gate owner must be meta-warden."
   );
@@ -374,15 +389,93 @@ async function validateWorkflowContract() {
     "workflow-contract.json taskClassification must keep owner-required-by-default discipline."
   );
 
+  const cardGovernance = contract.runDiscipline?.cardGovernance;
+  assert(cardGovernance?.enabled === true, "workflow-contract.json cardGovernance must be enabled.");
+  assert(
+    cardGovernance?.dealerRoleModel === "conductor-primary-warden-escalation",
+    "workflow-contract.json cardGovernance dealerRoleModel must be conductor-primary-warden-escalation."
+  );
+  for (const [field, expected] of [
+    ["cardTypeEnum", ["info", "action", "risk", "silence", "default", "upgrade"]],
+    ["cardDecisionEnum", ["deal", "suppress", "defer", "skip", "interrupt_insert", "escalate"]],
+    ["cardAudienceEnum", ["user", "owner", "reviewer", "governance", "runtime"]],
+    ["cardTimingEnum", ["immediate", "next_stage", "after_dependency", "after_verify", "on_risk", "on_timeout", "on_user_request"]],
+    ["cardShellEnum", ["conversation", "file", "packet", "agent_dispatch", "summary", "silent_hold"]],
+    ["cardSourceEnum", ["meta-conductor", "meta-warden", "meta-sentinel", "meta-prism", "system", "user"]],
+    ["suppressionReasonEnum", ["attention_budget_low", "already_known", "already_in_context", "verification_pending", "public_display_blocked", "no_clear_intervention_gain"]]
+  ]) {
+    for (const item of expected) {
+      assert(
+        cardGovernance?.[field]?.includes(item),
+        `workflow-contract.json cardGovernance.${field} must include ${item}.`
+      );
+    }
+  }
+  assert(
+    cardGovernance?.defaultNoCardPolicy === "prefer_silence_without_clear_intervention_gain",
+    "workflow-contract.json cardGovernance must define the default no-card policy."
+  );
+
+  const silencePolicy = contract.runDiscipline?.silencePolicy;
+  assert(
+    silencePolicy?.noInterventionPreferred === true &&
+      silencePolicy?.requiresInterruptionJustification === true &&
+      silencePolicy?.deferRequiresDeadline === true,
+    "workflow-contract.json silencePolicy must prefer no-intervention and require interruption/defer discipline."
+  );
+  for (const item of ["none", "no_card", "defer", "intentional_silence"]) {
+    assert(
+      silencePolicy?.silenceDecisionEnum?.includes(item),
+      `workflow-contract.json silencePolicy.silenceDecisionEnum must include ${item}.`
+    );
+  }
+
+  const controlIntervention = contract.runDiscipline?.controlIntervention;
+  assert(
+    controlIntervention?.requiresReturnToMainChain === true,
+    "workflow-contract.json controlIntervention must require return-to-main-chain discipline."
+  );
+  for (const [field, expected] of [
+    ["decisionTypeEnum", ["skip", "interrupt", "override", "escalation_insert"]],
+    ["skipReasonEnum", ["already_known", "already_in_context", "attention_budget_low", "not_applicable", "artifact_not_needed"]],
+    ["interruptReasonEnum", ["security_risk", "quality_drift", "user_urgent", "system_failure", "global_impact"]],
+    ["overrideReasonEnum", ["security_override", "verification_block", "public_display_block", "governance_owner_insert"]],
+    ["insertedGovernanceOwners", ["meta-sentinel", "meta-prism", "meta-warden", "meta-conductor"]]
+  ]) {
+    for (const item of expected) {
+      assert(
+        controlIntervention?.[field]?.includes(item),
+        `workflow-contract.json controlIntervention.${field} must include ${item}.`
+      );
+    }
+  }
+
+  const deliveryShell = contract.runDiscipline?.deliveryShell;
+  for (const [field, expected] of [
+    ["shellTypeEnum", ["one_line", "structured_status", "technical_detail", "review_delta", "executive_summary", "artifact_link"]],
+    ["presentationModeEnum", ["direct", "digest", "deferred", "quiet"]],
+    ["exposureLevelEnum", ["internal", "review", "public"]],
+    ["interventionFormEnum", ["conversation", "file_write", "task_packet", "agent_dispatch", "notification", "none"]]
+  ]) {
+    for (const item of expected) {
+      assert(
+        deliveryShell?.[field]?.includes(item),
+        `workflow-contract.json deliveryShell.${field} must include ${item}.`
+      );
+    }
+  }
+
   const requiredPackets = contract.runDiscipline?.protocolFirst?.requiredPackets ?? [];
   for (const packet of [
     "runHeader",
     "taskClassification",
+    "cardPlanPacket",
     "dispatchBoard",
     "workerTaskPacket",
     "workerResultPacket",
     "reviewPacket",
     "verificationPacket",
+    "summaryPacket",
     "evolutionWritebackPacket"
   ]) {
     assert(
@@ -415,6 +508,16 @@ async function validateWorkflowContract() {
       `workflow-contract.json findingClosure.closeStateEnum must include ${closeState}.`
     );
   }
+  for (const transition of [
+    "open->fixed_pending_verify",
+    "fixed_pending_verify->verified_closed",
+    "fixed_pending_verify->accepted_risk"
+  ]) {
+    assert(
+      findingClosure?.legalTransitions?.includes(transition),
+      `workflow-contract.json findingClosure.legalTransitions must include ${transition}.`
+    );
+  }
 
   const reviewPacketFields = contract.protocols?.reviewPacket?.requiredFields ?? [];
   assert(
@@ -423,9 +526,15 @@ async function validateWorkflowContract() {
   );
   for (const [protocolName, expectedFields] of [
     ["taskClassification", ["taskClass", "requestClass", "governanceFlow", "triggerReasons", "upgradeReasons", "bypassReasons", "ownerRequired", "decisionSource", "classifierVersion", "complexity"]],
+    ["cardPlanPacket", ["dealerOwner", "dealerMode", "cards", "deliveryShells", "silenceDecision", "controlDecisions", "defaultShellId"]],
+    ["cardDecision", ["cardId", "cardType", "cardIntent", "cardDecision", "cardAudience", "cardTiming", "cardShell", "cardPriority", "cardReason", "cardSource", "cardSuppressed", "suppressionReason", "deliveryShellId"]],
+    ["deliveryShell", ["deliveryShellId", "shellType", "presentationMode", "exposureLevel", "interventionForm", "audience", "contentBoundary"]],
+    ["silenceDecision", ["silenceDecision", "noInterventionPreferred", "interruptionJustified", "deferUntil", "reasonForSilence"]],
+    ["controlDecision", ["decisionId", "decisionType", "skipReason", "interruptReason", "overrideReason", "insertedGovernanceOwner", "emergencyGovernanceTriggered", "returnsToStage", "rejoinCondition"]],
     ["reviewFinding", ["findingId", "severity", "owner", "summary", "requiredAction", "fixArtifact", "verifiedBy", "closeState"]],
     ["revisionResponse", ["findingId", "actionId", "owner", "responseType", "status", "fixArtifact", "responseSummary"]],
-    ["verificationResult", ["findingId", "verifiedBy", "result", "evidence", "closeState"]]
+    ["verificationResult", ["findingId", "verifiedBy", "result", "evidence", "closeState"]],
+    ["summaryPacket", ["verifyPassed", "summaryClosed", "singleDeliverableMaintained", "deliverableChainClosed", "consolidatedDeliverablePresent", "publicReady", "deliveryShellsUsed", "blockedBy"]]
   ]) {
     const fields = contract.protocols?.[protocolName]?.requiredFields ?? [];
     for (const field of expectedFields) {
@@ -494,6 +603,27 @@ async function validateWorkflowContract() {
     );
   }
 
+  const runArtifactValidation = contract.runDiscipline?.runArtifactValidation;
+  assert(
+    runArtifactValidation?.script === "scripts/validate-run-artifact.mjs",
+    "workflow-contract.json must point runArtifactValidation to scripts/validate-run-artifact.mjs."
+  );
+  for (const field of [
+    "findingLineageRequired",
+    "deliverableLinkMustReferencePrimaryDeliverable",
+    "summaryPacketRequired",
+    "cardPlanPacketRequired"
+  ]) {
+    assert(
+      runArtifactValidation?.[field] === true,
+      `workflow-contract.json runArtifactValidation must set ${field} to true.`
+    );
+  }
+  assert(
+    runArtifactValidation?.publicReadyField === "summaryPacket.publicReady",
+    "workflow-contract.json runArtifactValidation must point publicReadyField to summaryPacket.publicReady."
+  );
+
   assert(
     contract.departmentVisualPolicies?.game?.defaultMode === "generate_or_self_create",
     "workflow-contract.json game visual policy must default to generate_or_self_create."
@@ -511,16 +641,47 @@ async function validateRuntimeParityMatrix() {
   for (const marker of [
     "行为一致性对照表",
     "trigger parity",
+    "card parity",
+    "silence parity",
+    "control-decision parity",
+    "shell parity",
     "hook parity",
     "review parity",
     "verification parity",
     "stop condition parity",
     "writeback parity",
+    "run artifact parity",
     "`npm run eval:agents`",
     "`npm run eval:agents:live`"
   ]) {
     assert(raw.includes(marker), `docs/runtime-capability-matrix.md must include ${marker}.`);
   }
+}
+
+async function validateRunArtifactFixtures() {
+  const validFixture = path.join(repoRoot, "tests", "fixtures", "run-artifacts", "valid-run.json");
+  const invalidFixture = path.join(repoRoot, "tests", "fixtures", "run-artifacts", "invalid-run-public-ready.json");
+
+  await execFileAsync("node", ["scripts/validate-run-artifact.mjs", validFixture], {
+    cwd: repoRoot,
+    timeout: 30_000,
+  });
+
+  let invalidPassed = false;
+  try {
+    await execFileAsync("node", ["scripts/validate-run-artifact.mjs", invalidFixture], {
+      cwd: repoRoot,
+      timeout: 30_000,
+    });
+    invalidPassed = true;
+  } catch {
+    invalidPassed = false;
+  }
+
+  assert(
+    invalidPassed === false,
+    "scripts/validate-run-artifact.mjs must reject the invalid public-ready fixture."
+  );
 }
 
 async function validateClaudeAgents() {
@@ -780,6 +941,7 @@ async function validatePackageJson() {
   const pkg = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
   assert(pkg.scripts?.["sync:runtimes"], "package.json is missing sync:runtimes.");
   assert(pkg.scripts?.validate, "package.json is missing validate.");
+  assert(pkg.scripts?.["validate:run"], "package.json is missing validate:run.");
   assert(pkg.scripts?.["eval:agents"], "package.json is missing eval:agents.");
   assert(pkg.scripts?.["verify:all"], "package.json is missing verify:all.");
   assert(
@@ -1095,7 +1257,7 @@ function fail(msg) {
 }
 
 async function main() {
-  const TOTAL = 13;
+  const TOTAL = 14;
   let current = 1;
 
   console.log("\n========================================");
@@ -1103,9 +1265,9 @@ async function main() {
   console.log("========================================");
 
   // 1. Required files
-  step(current++, TOTAL, "Checking required files", "README.md, CLAUDE.md, package.json, runtime matrix, memory assets, etc. (28 files)");
+  step(current++, TOTAL, "Checking required files", "README.md, CLAUDE.md, package.json, runtime matrix, run-artifact fixtures, memory assets, etc. (31 files)");
   await validateRequiredFiles();
-  pass("All 28 required files present");
+  pass("All 31 required files present");
 
   // 2. Workflow contract
   step(current++, TOTAL, "Validating workflow contract", "single-department run discipline, primary deliverable, closed deliverable chain");
@@ -1137,32 +1299,37 @@ async function main() {
   await validateRuntimeParityMatrix();
   pass("Runtime parity matrix contains the required governance parity markers");
 
-  // 8. npm scripts
+  // 8. Run artifact fixtures
+  step(current++, TOTAL, "Checking run artifact fixtures", "valid fixture must pass; invalid public-ready fixture must fail");
+  await validateRunArtifactFixtures();
+  pass("Run artifact validator accepts the valid fixture and rejects the invalid fixture");
+
+  // 9. npm scripts
   step(current++, TOTAL, "Checking package.json scripts", "sync:runtimes / validate / eval:agents / verify:all, etc.");
   await validatePackageJson();
   pass("All required scripts registered");
 
-  // 9. .gitignore
+  // 10. .gitignore
   step(current++, TOTAL, "Checking .gitignore rules", "node_modules/ / docs/ / openclaw local config, etc.");
   await validateGitignore();
   pass(".gitignore contains all necessary rules");
 
-  // 10. Claude Code settings
+  // 11. Claude Code settings
   step(current++, TOTAL, "Checking Claude Code project settings", "permission deny rules / PreToolUse / SubagentStart hooks");
   await validateClaudeSettings();
   pass("Claude Code hooks and permissions configured correctly");
 
-  // 11. MCP config
+  // 12. MCP config
   step(current++, TOTAL, "Checking MCP server config", "meta-kim-runtime service definition and startup command");
   await validateMcpConfig();
   pass("MCP config is valid");
 
-  // 12. MCP self-test
+  // 13. MCP self-test
   step(current++, TOTAL, "Running MCP self-test", "start meta-runtime-server and verify agent count");
   await validateMcpSelfTest();
   pass("MCP self-test passed");
 
-  // 13. Factory release artifacts (skipped if factory/ not in public repo)
+  // 14. Factory release artifacts (skipped if factory/ not in public repo)
   step(current++, TOTAL, "Checking factory release artifacts", "100 departments / 1000 specialists / 20 flagship / 1100 runtime packs");
   await validateFactoryRelease();
   pass("Factory artifacts validated (or skipped — not in public repo)");

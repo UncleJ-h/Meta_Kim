@@ -622,13 +622,14 @@ The 8-stage execution spine:
 - **Skip-Level Gate**: meta-theory does NOT write code directly — always dispatch to the Execution Layer via the `Agent` tool. Track `agentInvocationState` through the cycle: idle → discovered (Fetch) → matched → dispatched → returned/escalated.
 - **Fetch-first**: Search → Match (score 0-3) → Invoke; fallback chain is local → capability index → external search → specialist ecosystem → owner-resolution branch
 - **Option Exploration (MANDATORY)**: Stage 3 MUST analyze **≥2 solution paths** with Pros/Cons before selecting one. Present as a comparison table. Record the chosen path AND rejected alternatives with reasons in a Decision Record. Skipping this step is a Stage 3 violation.
-- **Protocol-first Dispatch**: Stage 4 may not start until Stage 3 has produced task classification, run header, dispatch board, worker task packets, merge plan, review packet plan, verification packet plan, and evolution writeback plan.
+- **Protocol-first Dispatch**: Stage 4 may not start until Stage 3 has produced task classification, card plan, run header, dispatch board, worker task packets, merge plan, review packet plan, verification packet plan, summary packet plan, and evolution writeback plan.
 - **Parallelism Discipline**: If sub-tasks are independent, they must be parallelized. Every parallel group needs declared dependencies and a merge owner.
 
 **Required Stage 3 artifacts before Stage 4 may start** (full JSON shape: `references/dev-governance.md` § Thinking Stage Output Contract):
 - `optionExploration` — ≥2 solution paths with Pros/Cons table + Decision Record (selected path, rejected options with reasons)
 - `subTasks` — each task has owner, file scope, and parallel/sequential marker
 - `taskClassification` — `taskClass + requestClass + governanceFlow + trigger/upgrade/bypass reasons`
+- `cardPlanPacket` — dealer owner, cards, silence decision, control decisions, delivery shells
 - `runHeader` — the 6-field contract for the current run
 - `dispatchBoard` — one-board summary tying all work to the sole primary deliverable
 - `workerTaskPackets` — one protocol packet per owner, including `dependsOn`, `parallelGroup`, and `mergeOwner`
@@ -640,11 +641,15 @@ The 8-stage execution spine:
 - `metaReviewGate` — when Stage 6 is mandatory
 - `verificationGate` — what evidence must confirm fixes
 - `verificationPacketPlan` — `fixEvidence`, `revisionResponses`, `verificationResults`, `closeFindings`, regression guard expectations
+- `summaryPacketPlan` — `verifyPassed`, `summaryClosed`, deliverable-chain closure, and public-ready blocking rules
 - `evolutionWritebackPlan` — explicit `writebackDecision`, plus which assets must be updated if the run discovers durable lessons
 - `evolutionFocus` — which structural lessons should be extracted
 
 **Stage 7 Rollback Protocol** (full spec: `references/dev-governance.md` § Rollback Protocol):
 When verification fails and fixes cause more damage than they solve, invoke the 4-level rollback protocol (file-level → sub-task level → partial → full). Iron Rule: rollback is not failure — it is the system demonstrating it knows when to stop making things worse.
+
+**Card / Silence / Interrupt model** (full spec: `references/dev-governance.md` § Card Governance Model):
+Conductor is the primary dealer, Warden is the escalation owner, Sentinel/Prism/user/system are interrupt signal sources. Every real run may emit `cardPlanPacket`, `silenceDecision`, and `controlDecision` objects so “deal / suppress / defer / skip / interrupt / override” become auditable decisions rather than implied behavior.
 
 **Stage 8 Evolution Artifacts Storage** (full spec: `references/dev-governance.md` § Evolution Artifacts Storage):
 Evolution outputs must persist to defined locations — not left floating in conversation context. Reusable Patterns → `memory/patterns/`, Scars → `memory/scars/`, New Skills → `.claude/skills/`, Agent Boundary Adjustments → `.claude/agents/` (triggers `npm run sync:runtimes`), Capability Gap Records → `memory/capability-gaps.md`. Every run must also emit an explicit `writebackDecision`: either concrete writeback targets, or `none` with a reason.

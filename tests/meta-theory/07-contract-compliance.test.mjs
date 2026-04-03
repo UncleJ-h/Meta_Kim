@@ -13,7 +13,7 @@ describe("workflow-contract.json — schema compliance", async () => {
 
   test("schemaVersion exists", () => {
     assert.notEqual(contract.schemaVersion, undefined);
-    assert.ok(contract.schemaVersion >= 2, "schemaVersion should be >= 2 after governance hardening");
+    assert.ok(contract.schemaVersion >= 3, "schemaVersion should be >= 3 after card-governance hardening");
   });
 
   test('owner is "Meta_Kim"', () => {
@@ -127,22 +127,24 @@ describe("workflow-contract.json — schema compliance", async () => {
     );
   });
 
-  test("protocols has all 8 packet types", () => {
+  test("protocols has all 10 packet types", () => {
     const expected = [
       "runHeader",
       "taskClassification",
+      "cardPlanPacket",
       "dispatchBoard",
       "workerTaskPacket",
       "workerResultPacket",
       "reviewPacket",
       "verificationPacket",
+      "summaryPacket",
       "evolutionWritebackPacket",
     ];
     const keys = Object.keys(contract.protocols ?? {});
     for (const packet of expected) {
       assert.ok(keys.includes(packet), `missing protocol packet: ${packet}`);
     }
-    assert.equal(expected.length, 8);
+    assert.equal(expected.length, 10);
   });
 
   test("publicDisplayRequires has all 5 conditions", () => {
@@ -189,9 +191,54 @@ describe("workflow-contract.json — schema compliance", async () => {
     assert.equal(classification.onlyQueryMayBypassOwner, true);
   });
 
+  test("card governance model is explicit", () => {
+    const cardGovernance = contract.runDiscipline?.cardGovernance ?? {};
+    assert.equal(cardGovernance.enabled, true);
+    assert.equal(cardGovernance.dealerRoleModel, "conductor-primary-warden-escalation");
+    for (const type of ["info", "action", "risk", "silence", "default", "upgrade"]) {
+      assert.ok(cardGovernance.cardTypeEnum?.includes(type), `missing cardType: ${type}`);
+    }
+    for (const decision of ["deal", "suppress", "defer", "skip", "interrupt_insert", "escalate"]) {
+      assert.ok(cardGovernance.cardDecisionEnum?.includes(decision), `missing cardDecision: ${decision}`);
+    }
+    assert.equal(
+      cardGovernance.defaultNoCardPolicy,
+      "prefer_silence_without_clear_intervention_gain"
+    );
+  });
+
+  test("silence / skip / interrupt / shell policies are explicit", () => {
+    const silencePolicy = contract.runDiscipline?.silencePolicy ?? {};
+    assert.equal(silencePolicy.noInterventionPreferred, true);
+    assert.equal(silencePolicy.requiresInterruptionJustification, true);
+    assert.equal(silencePolicy.deferRequiresDeadline, true);
+    for (const item of ["none", "no_card", "defer", "intentional_silence"]) {
+      assert.ok(silencePolicy.silenceDecisionEnum?.includes(item), `missing silence decision: ${item}`);
+    }
+
+    const control = contract.runDiscipline?.controlIntervention ?? {};
+    assert.equal(control.requiresReturnToMainChain, true);
+    for (const item of ["skip", "interrupt", "override", "escalation_insert"]) {
+      assert.ok(control.decisionTypeEnum?.includes(item), `missing control decision type: ${item}`);
+    }
+    for (const owner of ["meta-sentinel", "meta-prism", "meta-warden", "meta-conductor"]) {
+      assert.ok(control.insertedGovernanceOwners?.includes(owner), `missing inserted governance owner: ${owner}`);
+    }
+
+    const shell = contract.runDiscipline?.deliveryShell ?? {};
+    for (const item of ["one_line", "structured_status", "technical_detail", "review_delta", "executive_summary", "artifact_link"]) {
+      assert.ok(shell.shellTypeEnum?.includes(item), `missing shell type: ${item}`);
+    }
+    for (const item of ["direct", "digest", "deferred", "quiet"]) {
+      assert.ok(shell.presentationModeEnum?.includes(item), `missing presentation mode: ${item}`);
+    }
+  });
+
   test("protocolFirst requires taskClassification packet", () => {
     const requiredPackets = contract.runDiscipline?.protocolFirst?.requiredPackets ?? [];
     assert.ok(requiredPackets.includes("taskClassification"));
+    assert.ok(requiredPackets.includes("cardPlanPacket"));
+    assert.ok(requiredPackets.includes("summaryPacket"));
   });
 
   test("finding closure rules are explicit", () => {
@@ -204,9 +251,41 @@ describe("workflow-contract.json — schema compliance", async () => {
     for (const state of ["open", "fixed_pending_verify", "verified_closed", "accepted_risk"]) {
       assert.ok(closure.closeStateEnum?.includes(state), `missing close state: ${state}`);
     }
+    for (const transition of [
+      "open->fixed_pending_verify",
+      "fixed_pending_verify->verified_closed",
+      "fixed_pending_verify->accepted_risk",
+    ]) {
+      assert.ok(closure.legalTransitions?.includes(transition), `missing close state transition: ${transition}`);
+    }
   });
 
-  test("review / revision / verification protocols have finding-level fields", () => {
+  test("card / review / revision / verification / summary protocols are explicit", () => {
+    const cardPlanFields = contract.protocols?.cardPlanPacket?.requiredFields ?? [];
+    for (const field of ["dealerOwner", "dealerMode", "cards", "deliveryShells", "silenceDecision", "controlDecisions", "defaultShellId"]) {
+      assert.ok(cardPlanFields.includes(field), `cardPlanPacket missing ${field}`);
+    }
+
+    const cardDecisionFields = contract.protocols?.cardDecision?.requiredFields ?? [];
+    for (const field of ["cardId", "cardType", "cardIntent", "cardDecision", "cardAudience", "cardTiming", "cardShell", "cardPriority", "cardReason", "cardSource", "cardSuppressed", "suppressionReason", "deliveryShellId"]) {
+      assert.ok(cardDecisionFields.includes(field), `cardDecision missing ${field}`);
+    }
+
+    const deliveryShellFields = contract.protocols?.deliveryShell?.requiredFields ?? [];
+    for (const field of ["deliveryShellId", "shellType", "presentationMode", "exposureLevel", "interventionForm", "audience", "contentBoundary"]) {
+      assert.ok(deliveryShellFields.includes(field), `deliveryShell missing ${field}`);
+    }
+
+    const silenceDecisionFields = contract.protocols?.silenceDecision?.requiredFields ?? [];
+    for (const field of ["silenceDecision", "noInterventionPreferred", "interruptionJustified", "deferUntil", "reasonForSilence"]) {
+      assert.ok(silenceDecisionFields.includes(field), `silenceDecision missing ${field}`);
+    }
+
+    const controlDecisionFields = contract.protocols?.controlDecision?.requiredFields ?? [];
+    for (const field of ["decisionId", "decisionType", "skipReason", "interruptReason", "overrideReason", "insertedGovernanceOwner", "emergencyGovernanceTriggered", "returnsToStage", "rejoinCondition"]) {
+      assert.ok(controlDecisionFields.includes(field), `controlDecision missing ${field}`);
+    }
+
     const reviewPacketFields = contract.protocols?.reviewPacket?.requiredFields ?? [];
     assert.ok(reviewPacketFields.includes("findings"));
 
@@ -229,6 +308,11 @@ describe("workflow-contract.json — schema compliance", async () => {
     for (const field of ["findingId", "verifiedBy", "result", "evidence", "closeState"]) {
       assert.ok(verificationResultFields.includes(field), `verificationResult missing ${field}`);
     }
+
+    const summaryPacketFields = contract.protocols?.summaryPacket?.requiredFields ?? [];
+    for (const field of ["verifyPassed", "summaryClosed", "singleDeliverableMaintained", "deliverableChainClosed", "consolidatedDeliverablePresent", "publicReady", "deliveryShellsUsed", "blockedBy"]) {
+      assert.ok(summaryPacketFields.includes(field), `summaryPacket missing ${field}`);
+    }
   });
 
   test("evolution requires explicit writeback decision", () => {
@@ -242,6 +326,25 @@ describe("workflow-contract.json — schema compliance", async () => {
     const evolutionFields = contract.protocols?.evolutionWritebackPacket?.requiredFields ?? [];
     for (const field of ["ownerAssessment", "writebackDecision", "decisionReason", "writebacks", "scarIds", "syncRequired"]) {
       assert.ok(evolutionFields.includes(field), `evolutionWritebackPacket missing ${field}`);
+    }
+  });
+
+  test("run artifact validation is contract-backed", () => {
+    const runArtifactValidation = contract.runDiscipline?.runArtifactValidation ?? {};
+    assert.equal(runArtifactValidation.script, "scripts/validate-run-artifact.mjs");
+    assert.equal(runArtifactValidation.findingLineageRequired, true);
+    assert.equal(runArtifactValidation.deliverableLinkMustReferencePrimaryDeliverable, true);
+    assert.equal(runArtifactValidation.summaryPacketRequired, true);
+    assert.equal(runArtifactValidation.cardPlanPacketRequired, true);
+    assert.equal(runArtifactValidation.publicReadyField, "summaryPacket.publicReady");
+  });
+
+  test("dealer role is explicit without adding a new agent", () => {
+    const dealer = contract.gates?.dealer ?? {};
+    assert.equal(dealer.primaryOwner, "meta-conductor");
+    assert.equal(dealer.escalationOwner, "meta-warden");
+    for (const source of ["meta-sentinel", "meta-prism", "user", "system"]) {
+      assert.ok(dealer.interruptSources?.includes(source), `missing interrupt source: ${source}`);
     }
   });
 });
