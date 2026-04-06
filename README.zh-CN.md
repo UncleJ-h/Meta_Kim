@@ -103,6 +103,138 @@ Meta_Kim 的核心思路是：先做 **意图放大**，再做执行。
 
 **优先改 `.claude/` 和 `contracts/`，然后再同步并校验各 runtime 镜像。**
 
+<a id="meta-kim-visual-maps-zh"></a>
+
+## 流程图：各部分如何衔接
+
+以下图示与 [README.md#meta-kim-visual-maps-en](README.md#meta-kim-visual-maps-en) 结构一一对应（英文版节点为英文）。读正文觉得抽象时，可以先看图。
+
+### 1. 主源 → 运行时镜像 → 校验闭环
+
+```mermaid
+flowchart TB
+  subgraph Canon["主源层, 优先在这里改"]
+    MT["meta-theory skill + references"]
+    AG["agents 8 roles"]
+    WC["workflow-contract.json"]
+    HK["settings.json hooks"]
+  end
+  subgraph Tooling["工具链"]
+    SYNC["npm run sync:runtimes"]
+    VAL["npm run validate"]
+    DISC["npm run discover:global"]
+  end
+  subgraph Mirror["运行时镜像, 多为同步生成"]
+    CODEX[".codex + .agents"]
+    OW["openclaw workspaces skills"]
+    SK["shared-skills"]
+  end
+  MT --> SYNC
+  AG --> SYNC
+  WC --> SYNC
+  HK --> SYNC
+  SYNC --> CODEX
+  SYNC --> OW
+  SYNC --> SK
+  DISC --> VAL
+  HK --> VAL
+  SK --> VAL
+```
+
+### 2. 默认路径：用户意图 → 入口 → 八阶段脊柱
+
+`meta-theory`（**skill**）是触发时加载的**方法说明书**；`meta-warden`（**agent**）是**默认公开入口角色**，负责闸门与综合收口。
+
+```mermaid
+flowchart LR
+  U["用户意图"] --> W["meta-warden 入口"]
+  W --> SK["meta-theory skill 纪律派发"]
+  SK --> P["八阶段脊柱"]
+  P --> OUT["交付物 验证 进化"]
+```
+
+### 3. 八阶段脊柱 — 每一步在干什么
+
+```mermaid
+flowchart TD
+  S1["1 Critical: 澄清范围目标约束, 元架构 vs 技术架构"]
+  S2["2 Fetch: 搜索 agent skill 能力索引"]
+  S3["3 Thinking: dispatchBoard, mergeOwner, 并行组"]
+  S4["4 Execution: Agent 派给 owner, 元不自执行"]
+  S5["5 Review: 质量边界协议"]
+  S6["6 Meta-Review: 审查标准是否成立"]
+  S7["7 Verification: 落地与闸门闭环"]
+  S8["8 Evolution: 模式伤疤写回"]
+  S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+```
+
+与四条铁律的对齐（对应 1–3 阶段与审查）：
+
+```mermaid
+flowchart LR
+  I1["追问强于猜测"] --> I2["搜索强于假设"]
+  I2 --> I3["计划强于冲动"]
+  I3 --> I4["验证强于信任"]
+```
+
+<a id="meta-kim-diagram-two-layers-zh"></a>
+
+### 4. 两层工作流：执行脊柱 vs 部门运行合同
+
+**不要在心里把两层揉成一个。** 脊柱管开发治理怎么跑；10 阶段管部门 run 的打包、展示与交付纪律。
+
+```mermaid
+flowchart LR
+  subgraph Spine["八阶段脊柱"]
+    A1[critical] --> A2[fetch] --> A3[thinking] --> A4[execution]
+    A4 --> A5[review] --> A6[meta_review] --> A7[verification] --> A8[evolution]
+  end
+```
+
+```mermaid
+flowchart LR
+  subgraph Biz["十阶段业务合同"]
+    B1[direction] --> B2[planning] --> B3[execution] --> B4[review]
+    B4 --> B5[meta_review] --> B6[revision] --> B7[verify]
+    B7 --> B8[summary] --> B9[feedback] --> B10[evolve]
+  end
+```
+
+上下两行是**两套并行词汇**：业务阶段不会改名或替换脊柱阶段；它们负责 run 合同、展示口径与交付封装。
+
+### 5. 任务分流（你走哪条路）
+
+```mermaid
+flowchart TD
+  T["任务到达"] --> Q{"纯 Query? 无写文件无副作用无交接物"}
+  Q -->|是| D1["直接作答"]
+  Q -->|否| K{"哪类工作"}
+  K -->|简单单 owner| P1["压缩脊柱片段"]
+  K -->|复杂多文件跨模块| P2["八阶段 Type C"]
+  K -->|元部门分析| P3["metaWorkflow analyze propose report"]
+  K -->|审方案文档| P4["Type D: prism scout warden"]
+  P1 --> E1["Exec Review Verify Evolution"]
+  P2 --> E2["Critical..Evolution 全链"]
+  P3 --> E3["analyze propose report"]
+  P4 --> E4["读提案 清单 审查报告"]
+  P2 --> UP{"复杂度继续升高?"}
+  UP -->|是| G["叠加十步治理纪律"]
+  UP -->|否| E2
+```
+
+### 6. 核心方法链（元 → 组织镜像 → 节奏编排 → 意图放大）展开
+
+```mermaid
+flowchart TB
+  Y["元 Yuan 最小可治理单元"] --> OM["组织镜像 分工升级审查兜底"]
+  OM --> RO["节奏编排 conductor stageState 并行"]
+  RO --> IA["意图放大 交付物闭环显式化"]
+  Y -.-> R1["怎么拆"]
+  OM -.-> R2["怎么像真组织"]
+  RO -.-> R3["谁先谁后"]
+  IA -.-> R4["怎么算做完"]
+```
+
 ## 作者与支持
 
 <div align="center">
@@ -251,6 +383,8 @@ flowchart LR
 
 缺任何一段，这套方法都不完整。
 
+**更多图：**见上文 [流程图：各部分如何衔接](#meta-kim-visual-maps-zh) — 主源闭环、入口与 skill 区别、八阶段逐条说明、两层工作流对照、任务分流、元链条展开。
+
 ## 复杂任务治理主轴（核心必读）
 
 **复杂任务**（多文件 / 跨模块 / 需要多种能力协作）走八阶段脊柱。前半段对应四条铁律：**先追问再猜、先搜索再假设、先计划再冲动、先验证再信任**，中间由 **Thinking** 产出牌组与交付外壳计划。
@@ -313,6 +447,8 @@ graph TD
 
 ## 8 阶段脊柱和 business workflow 不是一回事
 
+**对照图：**上文 [流程图 §4](#meta-kim-diagram-two-layers-zh) 把脊柱与十阶段合同并排画出。
+
 这块很重要，因为它是 Meta_Kim 最容易被误读的地方。
 
 Meta_Kim 里同时存在两层流程语言：
@@ -351,18 +487,18 @@ direction -> planning -> execution -> review -> meta_review -> revision -> verif
 
 ```mermaid
 flowchart TD
-    A["收到任务"] --> B{"是不是纯 Q / Query"}
-    B -->|"是"| Q["直接回答"]
-    B -->|"否"| C{"任务属于哪一类"}
-    C --> S["简单执行任务<br>owner 驱动压缩路径"]
-    C --> X["复杂开发任务<br>Type C 8 阶段脊柱"]
-    C --> M["元分析任务<br>metaWorkflow 3 phases"]
-    C --> D["已有方案要审<br>Type D 审查流<br>(分派 meta-prism + meta-scout + meta-warden)"]
-    X --> T["复杂度再升高时<br>升级到 10 步治理层"]
-    S --> S2["Execution<br>Review<br>Verification<br>Evolution"]
-    X --> X2["Critical<br>Fetch<br>Thinking<br>Execution<br>Review<br>Meta-Review<br>Verification<br>Evolution"]
-    M --> M2["analyze<br>propose<br>report"]
-    D --> D2["读提案<br>分派 agent<br>输出审查报告"]
+    A[收到任务] --> B{纯 Query?}
+    B -->|是| Q[直接回答]
+    B -->|否| C{任务类型}
+    C --> S[简单任务压缩路径]
+    C --> X[复杂 Type C 八阶段]
+    C --> M[元分析 metaWorkflow]
+    C --> D[Type D 审方案]
+    S --> S2[Exec Review Verify Evolution]
+    X --> X2[Critical 到 Evolution 全链]
+    X --> T[可再叠十步治理]
+    M --> M2[analyze propose report]
+    D --> D2[读提案分派出报告]
 ```
 
 这里最容易误解的 4 件事：

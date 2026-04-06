@@ -103,6 +103,138 @@ The maintenance rule follows directly from that design:
 
 **edit `.claude/` and `contracts/` first, then sync and validate the runtime mirrors.**
 
+<a id="meta-kim-visual-maps-en"></a>
+
+## Visual maps (how the pieces connect)
+
+These diagrams mirror [README.zh-CN.md#meta-kim-visual-maps-zh](README.zh-CN.md#meta-kim-visual-maps-zh) (简体中文节点文案). Use them when the prose feels abstract.
+
+### 1. Canonical sources → runtime mirrors → validation loop
+
+```mermaid
+flowchart TB
+  subgraph Canon["Canonical sources, edit first"]
+    MT["meta-theory skill + references"]
+    AG["agents 8 roles"]
+    WC["workflow-contract.json"]
+    HK["settings.json hooks"]
+  end
+  subgraph Tooling["Tooling"]
+    SYNC["npm run sync:runtimes"]
+    VAL["npm run validate"]
+    DISC["npm run discover:global"]
+  end
+  subgraph Mirror["Runtime mirrors, mostly generated"]
+    CODEX[".codex + .agents"]
+    OW["openclaw workspaces skills"]
+    SK["shared-skills"]
+  end
+  MT --> SYNC
+  AG --> SYNC
+  WC --> SYNC
+  HK --> SYNC
+  SYNC --> CODEX
+  SYNC --> OW
+  SYNC --> SK
+  DISC --> VAL
+  HK --> VAL
+  SK --> VAL
+```
+
+### 2. Default path: user intent → entry → eight-stage spine
+
+`meta-theory` (skill) is the **method playbook** loaded on triggers; `meta-warden` (agent) is the **default public entry role** that coordinates gates and synthesis.
+
+```mermaid
+flowchart LR
+  U["User intent"] --> W["meta-warden entry"]
+  W --> SK["meta-theory skill rules"]
+  SK --> P["8-stage spine"]
+  P --> OUT["deliverable verify evolve"]
+```
+
+### 3. Eight-stage spine — what each stage does
+
+```mermaid
+flowchart TD
+  S1["1 Critical: scope goals constraints meta vs tech"]
+  S2["2 Fetch: agents skills index"]
+  S3["3 Thinking: dispatchBoard mergeOwner parallel"]
+  S4["4 Execution: Agent to owners"]
+  S5["5 Review: quality boundaries protocol"]
+  S6["6 Meta-Review: review standard"]
+  S7["7 Verification: landed gates"]
+  S8["8 Evolution: patterns writeback"]
+  S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+```
+
+Iron rules alignment (same order as stages 1–3 and 5):
+
+```mermaid
+flowchart LR
+  I1["Critical beats Guessing"] --> I2["Fetch beats Assuming"]
+  I2 --> I3["Thinking beats Rushing"]
+  I3 --> I4["Review beats Trusting"]
+```
+
+<a id="meta-kim-diagram-two-layers-en"></a>
+
+### 4. Two workflow layers: spine vs department contract
+
+**Do not merge these mentally.** The spine runs development governance; the 10 phases package department runs and closure language.
+
+```mermaid
+flowchart LR
+  subgraph Spine["8-stage spine"]
+    A1[critical] --> A2[fetch] --> A3[thinking] --> A4[execution]
+    A4 --> A5[review] --> A6[meta_review] --> A7[verification] --> A8[evolution]
+  end
+```
+
+```mermaid
+flowchart LR
+  subgraph Biz["10-phase business contract"]
+    B1[direction] --> B2[planning] --> B3[execution] --> B4[review]
+    B4 --> B5[meta_review] --> B6[revision] --> B7[verify]
+    B7 --> B8[summary] --> B9[feedback] --> B10[evolve]
+  end
+```
+
+The two rows are **parallel vocabularies**: business phases do not rename spine stages; they add run-contract, display, and deliverable packaging.
+
+### 5. Task routing (which path applies)
+
+```mermaid
+flowchart TD
+  T["Task arrives"] --> Q{"Pure Query? no writes no side effects"}
+  Q -->|Yes| D1["Answer directly"]
+  Q -->|No| K["What kind of work"]
+  K -->|Simple| P1["Shortcut spine"]
+  K -->|Complex| P2["8-stage Type C"]
+  K -->|Meta analysis| P3["metaWorkflow analyze propose report"]
+  K -->|Proposal review| P4["Type D prism scout warden"]
+  P1 --> E1["Exec Review Verify Evolution"]
+  P2 --> E2["Critical through Evolution"]
+  P3 --> E3["analyze propose report"]
+  P4 --> E4["proposal checklist report"]
+  P2 --> UP["Complexity rising?"]
+  UP -->|Yes| G["10-step governance"]
+  UP -->|No| E2
+```
+
+### 6. Core method chain (Yuan → mirror → rhythm → amplification) expanded
+
+```mermaid
+flowchart TB
+  Y["Yuan smallest governable unit"] --> OM["Org mirror division escalation"]
+  OM --> RO["Rhythm conductor stageState parallel"]
+  RO --> IA["Intent amplification closure"]
+  Y -.-> R1["split"]
+  OM -.-> R2["org shape"]
+  RO -.-> R3["when who"]
+  IA -.-> R4["done"]
+```
+
 ## Author and Support
 
 <div align="center">
@@ -250,6 +382,8 @@ flowchart LR
 
 Remove any one of these and the method is incomplete.
 
+**More diagrams:** see [Visual maps (how the pieces connect)](#meta-kim-visual-maps-en) earlier in this file — maintenance loop, entry vs skill, per-stage spine, two-layer workflows, task routing, and the expanded Yuan chain.
+
 ## Development Governance Spine (The Core - Read This First)
 
 For **complex work** (multi-file, cross-module, or requiring multiple capabilities), Meta_Kim follows an eight-stage spine. The early chain lines up with the **four iron rules**: clarify before guessing, search before assuming, plan before rushing, verify before trusting, with **Thinking** in the middle to shape the deck and delivery shell.
@@ -312,6 +446,8 @@ There are 4 additional rules now enforced in the canonical sources:
 
 ## The 8-Stage Spine And The Business Workflow Are Not The Same Thing
 
+**Diagram:** [Visual maps → §4](#meta-kim-diagram-two-layers-en) shows the spine and the 10-phase contract side by side.
+
 This distinction matters because it is one of the easiest ways to misunderstand Meta_Kim.
 
 There are two layers of workflow language in the project:
@@ -350,18 +486,18 @@ According to the actual project design, Meta_Kim does not have just one workflow
 
 ```mermaid
 flowchart TD
-    A["Task arrives"] --> B{"Is it a pure Q / Query"}
-    B -->|"Yes"| Q["Answer directly"]
-    B -->|"No"| C{"What kind of task is it"}
-    C --> S["Simple execution task<br>owner-driven shortcut"]
-    C --> X["Complex development task<br>Type C 8-stage spine"]
-    C --> M["Meta-analysis task<br>metaWorkflow 3 phases"]
-    C --> D["Existing proposal to review<br>Type D review flow<br>(dispatches meta-prism + meta-scout + meta-warden)"]
-    X --> T["If complexity rises further<br>upgrade to the 10-step governance layer"]
-    S --> S2["Execution<br>Review<br>Verification<br>Evolution"]
-    X --> X2["Critical<br>Fetch<br>Thinking<br>Execution<br>Review<br>Meta-Review<br>Verification<br>Evolution"]
-    M --> M2["analyze<br>propose<br>report"]
-    D --> D2["read proposal<br>dispatch agents<br>review report"]
+    A[Task arrives] --> B{Pure Query?}
+    B -->|Yes| Q[Answer directly]
+    B -->|No| C{Task type}
+    C --> S[Simple shortcut]
+    C --> X[Type C 8-stage]
+    C --> M[Meta metaWorkflow]
+    C --> D[Type D review]
+    S --> S2[Exec Review Verify Evolution]
+    X --> X2[Critical through Evolution]
+    X --> T[Add 10-step if needed]
+    M --> M2[analyze propose report]
+    D --> D2[read dispatch report]
 ```
 
 The 4 easiest misunderstandings here are:
