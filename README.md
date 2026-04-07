@@ -901,6 +901,8 @@ node setup.mjs
 
 `node setup.mjs` runs environment checks, `npm install`, installs the 9 global meta-skills, runs `validate`, and performs the MCP self-test. It does not rewrite repo-local runtime mirrors or rebuild the global capability index; those maintainer steps are covered below.
 
+> **Third-party meta-skills (e.g. findskill):** treat **Meta_Kim as canonical**. `setup.mjs` installs **`KimYx0207/findskill`** — a maintained, Meta_Kim-oriented build on top of public-ecosystem baselines — into `~/.claude/skills/findskill/`. Avoid parallel duplicate installs from other channels. Labels like `find-skills` often refer to the same capability family; trust this repo’s install outcome.
+
 > Pure Node.js script — works on Windows / macOS / Linux without bash.
 
 ---
