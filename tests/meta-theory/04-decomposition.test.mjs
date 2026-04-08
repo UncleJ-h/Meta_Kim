@@ -1,11 +1,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  SKILL_PATH,
   FIVE_CRITERIA,
   FOUR_DEATH_PATTERNS,
-  ALL_AGENTS,
-  readFile,
+  loadMetaTheoryCorpus,
 } from "./_helpers.mjs";
 import { readFile as readJsonFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -18,12 +16,14 @@ const SCENARIOS_PATH = path.join(
   "decomposition-scenarios.json"
 );
 
-let skillContent;
+/** SKILL + meta-theory reference + create-agent (decomposition rules span files). */
+let decompositionText;
 let decompositionScenarios;
 
 async function ensureLoaded() {
-  if (!skillContent) {
-    skillContent = await readFile(".claude/skills/meta-theory/SKILL.md");
+  if (!decompositionText) {
+    const c = await loadMetaTheoryCorpus();
+    decompositionText = `${c.skill}\n${c.metaTheory}\n${c.createAgent}`;
   }
   if (!decompositionScenarios) {
     const raw = await readJsonFile(SCENARIOS_PATH, "utf-8");
@@ -38,12 +38,12 @@ async function ensureLoaded() {
 describe("Decomposition — Part A: Rule Verification", async () => {
   await ensureLoaded();
 
-  test("Five Criteria: all 5 items present in SKILL.md", async () => {
+  test("Five Criteria: all 5 items present in corpus (SKILL + references)", async () => {
     await ensureLoaded();
     for (const criterion of FIVE_CRITERIA) {
       assert.ok(
-        skillContent.includes(criterion),
-        `Five Criteria item "${criterion}" must be present in SKILL.md`
+        decompositionText.includes(criterion),
+        `Five Criteria item "${criterion}" must be present in meta-theory corpus`
       );
     }
   });
@@ -51,19 +51,19 @@ describe("Decomposition — Part A: Rule Verification", async () => {
   test("Five Criteria: evidence table format present", async () => {
     await ensureLoaded();
     const hasEvidenceTable =
-      /\|\s*Criterion\s*\|.*Evidence\s*\|.*Pass/i.test(skillContent);
+      /\|\s*Criterion\s*\|.*Evidence\s*\|.*Pass/i.test(decompositionText);
     assert.ok(
       hasEvidenceTable,
-      "SKILL.md must contain a Five Criteria evidence table with Criterion, Evidence, and Pass columns"
+      "Corpus must contain a Five Criteria evidence table with Criterion, Evidence, and Pass columns"
     );
   });
 
-  test("Four Death Patterns: all 4 present in SKILL.md", async () => {
+  test("Four Death Patterns: all 4 present in corpus", async () => {
     await ensureLoaded();
     for (const pattern of FOUR_DEATH_PATTERNS) {
       assert.ok(
-        skillContent.includes(pattern),
-        `Death Pattern "${pattern}" must be present in SKILL.md`
+        decompositionText.includes(pattern),
+        `Death Pattern "${pattern}" must be present in meta-theory corpus`
       );
     }
   });
@@ -72,11 +72,11 @@ describe("Decomposition — Part A: Rule Verification", async () => {
     await ensureLoaded();
     const hasSymptomsTable =
       /\|\s*Death Pattern\s*\|.*Symptoms\s*\|.*Diagnostic Questions/i.test(
-        skillContent
+        decompositionText
       );
     assert.ok(
       hasSymptomsTable,
-      "SKILL.md must contain a Death Pattern table with Symptoms and Diagnostic Questions columns"
+      "Corpus must contain a Death Pattern table with Symptoms and Diagnostic Questions columns"
     );
   });
 
@@ -90,7 +90,7 @@ describe("Decomposition — Part A: Rule Verification", async () => {
     ];
     for (const question of fourQuestions) {
       assert.ok(
-        skillContent.includes(question),
+        decompositionText.includes(question),
         `Four Questions must include "${question}"`
       );
     }
@@ -99,57 +99,57 @@ describe("Decomposition — Part A: Rule Verification", async () => {
   test("Omnipotent Executor Meta Anti-Pattern defined", async () => {
     await ensureLoaded();
     assert.ok(
-      skillContent.includes("Omnipotent Executor Meta"),
-      'SKILL.md must define the "Omnipotent Executor Meta" Anti-Pattern'
+      decompositionText.includes("Omnipotent Executor Meta"),
+      'Corpus must define the "Omnipotent Executor Meta" Anti-Pattern'
     );
     assert.ok(
-      /compression disease/i.test(skillContent),
+      /compression disease/i.test(decompositionText),
       "Omnipotent Executor Meta must mention compression disease"
     );
     assert.ok(
-      /trigger Type B splitting/i.test(skillContent),
+      /trigger Type B splitting/i.test(decompositionText),
       "Omnipotent Executor Meta must recommend triggering Type B splitting pipeline"
     );
   });
 
   test("Git commands for coupling analysis present", async () => {
     await ensureLoaded();
-    const hasGitLog = skillContent.includes("git log --since");
-    const hasNameOnly = skillContent.includes("--name-only");
-    const hasCoChange = /co-change/i.test(skillContent);
+    const hasGitLog = decompositionText.includes("git log --since");
+    const hasNameOnly = decompositionText.includes("--name-only");
+    const hasCoChange = /co-change/i.test(decompositionText);
     assert.ok(
       hasGitLog,
-      'SKILL.md must include "git log --since" command for data collection'
+      'Corpus must include "git log --since" command for data collection'
     );
     assert.ok(
       hasNameOnly,
-      'SKILL.md must include "--name-only" flag for file change tracking'
+      'Corpus must include "--name-only" flag for file change tracking'
     );
     assert.ok(
       hasCoChange,
-      "SKILL.md must reference co-change analysis for coupling detection"
+      "Corpus must reference co-change analysis for coupling detection"
     );
   });
 
   test('Coupling criterion documented ("if A changes, does B frequently need to change?")', async () => {
     await ensureLoaded();
     const hasCouplingCriterion =
-      /if A changes.*does B frequently need to change/i.test(skillContent);
+      /if A changes.*does B frequently need to change/i.test(decompositionText);
     assert.ok(
       hasCouplingCriterion,
-      "SKILL.md must document the coupling criterion: if A changes, does B frequently need to change?"
+      "Corpus must document the coupling criterion: if A changes, does B frequently need to change?"
     );
   });
 
   test("Iron Rule: user override on splitting decisions", async () => {
     await ensureLoaded();
     assert.ok(
-      /Iron Rule/i.test(skillContent),
-      "SKILL.md must document the Iron Rule"
+      /Iron Rule/i.test(decompositionText),
+      "Corpus must document the Iron Rule"
     );
     const hasUserOverride =
-      /user says.*different.*split apart/i.test(skillContent) ||
-      /user says.*these two.*different/i.test(skillContent);
+      /user says.*different.*split apart/i.test(decompositionText) ||
+      /user says.*these two.*different/i.test(decompositionText);
     assert.ok(
       hasUserOverride,
       "Iron Rule must state that user can override data-driven coupling decisions to force a split"
@@ -159,38 +159,38 @@ describe("Decomposition — Part A: Rule Verification", async () => {
   test(">5% change frequency threshold for candidate domains", async () => {
     await ensureLoaded();
     assert.ok(
-      skillContent.includes(">5%"),
-      "SKILL.md must document the >5% change frequency threshold for candidate independent domains"
+      decompositionText.includes(">5%"),
+      "Corpus must document the >5% change frequency threshold for candidate independent domains"
     );
   });
 
   test("Co-change frequency for merge decisions", async () => {
     await ensureLoaded();
     const hasHighCoChange =
-      /high co-change frequency.*merge/i.test(skillContent) ||
-      /co-change frequency.*should be merged/i.test(skillContent);
+      /high co-change frequency.*merge/i.test(decompositionText) ||
+      /co-change frequency.*should be merged/i.test(decompositionText);
     const hasLowCoChange =
-      /low co-change frequency.*separate/i.test(skillContent) ||
-      /co-change frequency.*can be separated/i.test(skillContent);
+      /low co-change frequency.*separate/i.test(decompositionText) ||
+      /co-change frequency.*can be separated/i.test(decompositionText);
     assert.ok(
       hasHighCoChange,
-      "SKILL.md must document that high co-change frequency leads to merge"
+      "Corpus must document that high co-change frequency leads to merge"
     );
     assert.ok(
       hasLowCoChange,
-      "SKILL.md must document that low co-change frequency leads to separation"
+      "Corpus must document that low co-change frequency leads to separation"
     );
   });
 
   test("Type B splitting pipeline referenced from Omnipotent Executor detection", async () => {
     await ensureLoaded();
     const marker = "Omnipotent Executor Meta Anti-Pattern";
-    const omnipotentSection = skillContent.indexOf(marker);
+    const omnipotentSection = decompositionText.indexOf(marker);
     assert.ok(
       omnipotentSection !== -1,
-      "SKILL.md must contain Omnipotent Executor Meta Anti-Pattern definition"
+      "Corpus must contain Omnipotent Executor Meta Anti-Pattern definition"
     );
-    const afterOmnipotent = skillContent.slice(
+    const afterOmnipotent = decompositionText.slice(
       omnipotentSection,
       omnipotentSection + 800
     );
@@ -209,7 +209,7 @@ describe("Decomposition — Part A: Rule Verification", async () => {
     ];
     for (const symptom of symptoms) {
       assert.ok(
-        skillContent.includes(symptom),
+        decompositionText.includes(symptom),
         `Omnipotent Executor must document symptom: "${symptom}"`
       );
     }
@@ -218,11 +218,11 @@ describe("Decomposition — Part A: Rule Verification", async () => {
   test("Stew-All diagnostic thresholds documented (>2 domains, >300 lines)", async () => {
     await ensureLoaded();
     assert.ok(
-      skillContent.includes(">2 unrelated domains"),
+      decompositionText.includes(">2 unrelated domains"),
       "Stew-All diagnostic must include >2 unrelated domains threshold"
     );
     assert.ok(
-      skillContent.includes(">300 lines"),
+      decompositionText.includes(">300 lines"),
       "Stew-All diagnostic must include SOUL.md >300 lines threshold"
     );
   });
