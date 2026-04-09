@@ -47,6 +47,29 @@ Use the sections **Type A:** through **Type E:** below:
 
 **Gate 2: Dispatch-Not-Execute** — substantive analysis, review, and code changes belong to execution agents invoked via the `Agent` tool, not to this skill thread.
 
+**Gate 3: Warden Dispatch Validation** (MANDATORY for ALL Types) — after completing task classification and agent dispatch plan, you MUST validate with `meta-warden` before spawning any execution agents:
+
+```
+Agent(subagent_type: "meta-warden", description: "Validate dispatch decision",
+  prompt: "Validate this meta-theory dispatch decision:
+  - Type: [A/B/C/D/E]
+  - Task: [what the user asked]
+  - Planned agents to dispatch: [list agents]
+  - Complexity: [simple/medium/complex]
+  - Files affected: [count and scope]
+
+  Check:
+  1. Is every executable sub-task assigned to an agent? (no self-execution)
+  2. Are there any skip-level violations (meta-theory doing work that should go to agents)?
+  3. Are the correct agent types selected?
+  4. Are there any capability gaps where no agent owns the work?
+  5. Is the complexity assessment correct?
+
+  Output: PASS / FAIL with specific corrections needed. If FAIL, meta-theory must fix before proceeding.")
+```
+
+**Gate 3 is non-skippable.** If warden says FAIL, fix the dispatch plan and re-validate. Only proceed to agent spawning after warden PASS.
+
 ## Fetch-first pattern (Search → Match → Invoke)
 
 Search who declares ownership of the capability, score the best match, then invoke — do not skip the search step with a hardcoded agent name.
@@ -58,6 +81,27 @@ When sub-tasks are independent, issue **parallel** `Agent` calls in the same tur
 ## DISPATCH SELF-CHECK
 
 If you are about to produce **>3 sentences** of execution-layer analysis, review, or code yourself, **STOP** — that is a dispatcher violation; spawn the right agent instead.
+
+## ⛔ HARD DISPATCH RULE (Non-Negotiable — No Exceptions)
+
+**ANY** of the following triggers an **IMMEDIATE** `Agent` dispatch — you may NOT execute directly:
+
+1. The task involves **any** file modification, code writing, or config changes
+2. You are about to produce more than **3 sentences** of implementation detail
+3. The task can be decomposed into sub-tasks with different owners
+4. The task touches **multiple** files or modules
+5. The task is described as "difficult", "complex", or "I don't know where to start" by the user
+6. You are about to invoke Read on more than 3 files for a single sub-task
+
+**If you are unsure whether to dispatch — DISPATCH.** The cost of unnecessary dispatch is lower than the cost of bypassing the dispatcher pattern.
+
+**🚫 FORBIDDEN PATHS (No "simple task" exception)**:
+- ❌ "This is simple, I'll do it myself"
+- ❌ "Let me just write the code first, then spawn agents for review"
+- ❌ "I'll handle this one file directly"
+- ❌ "This task doesn't need an agent"
+
+Every executable sub-task must have an explicit agent owner. Zero exceptions.
 
 ## ⛔ YOUR ONLY JOB
 

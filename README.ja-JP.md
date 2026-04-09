@@ -104,14 +104,15 @@ flowchart TB
 
 #### 図: 既定パス（入口・meta-theory スキル・八段階スパインの略図）
 
-`meta-theory` は**スキル**（トリガーで読み込まれる手順書）。`meta-warden` は**エージェント**（既定の公開入口）。**全段の展開**は下文「開発ガバナンスの背骨」と英語版を参照。
+`meta-theory` は**スキル**（トリガーで読み込まれる手順書）。`meta-warden` は**エージェント**（既定の公開入口かつ分派決定の検証役）。フロー：ユーザー意図 → `meta-warden` 入口 → `meta-theory` 分類＋分派計画 → **`meta-warden` が分派決定を検証（Gate 3）** → agent 実行 → review → verify → evolve。**全段の展開**は下文「開発ガバナンスの背骨」と英語版を参照。
 
 ```mermaid
 flowchart LR
   U["User intent"] --> W["meta-warden entry"]
-  W --> SK["meta-theory skill rules"]
-  SK --> P["8-stage spine"]
-  P --> OUT["deliverable verify evolve"]
+  W --> SK["meta-theory skill\nclassify + dispatch plan"]
+  SK --> V["meta-warden validates\ndispatch decision (Gate 3)"]
+  V --> A["agent execution"]
+  A --> OUT["review verify evolve"]
 ```
 
 ## 著者・サポート

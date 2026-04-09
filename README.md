@@ -143,14 +143,15 @@ flowchart TB
 
 #### Diagram: Default path (entry, meta-theory skill, eight-stage spine overview)
 
-`meta-theory` (skill) is the **method playbook** loaded on triggers; `meta-warden` (agent) is the **default public entry role** that coordinates gates and synthesis. This is **not** the full per-stage chart — that is in [Development Governance Spine](#complex-spine-en).
+`meta-theory` (skill) is the **method playbook** loaded on triggers; `meta-warden` (agent) is the **default public entry role** that validates dispatch decisions and coordinates gates and synthesis. The flow is: user intent → `meta-warden` entry → `meta-theory` classifies + plans dispatch → **`meta-warden` validates the dispatch plan (Gate 3, non-skippable)** → agent execution → review → verify → evolve. This is **not** the full per-stage chart — that is in [Development Governance Spine](#complex-spine-en).
 
 ```mermaid
 flowchart LR
   U["User intent"] --> W["meta-warden entry"]
-  W --> SK["meta-theory skill rules"]
-  SK --> P["8-stage spine"]
-  P --> OUT["deliverable verify evolve"]
+  W --> SK["meta-theory skill\nclassify + dispatch plan"]
+  SK --> V["meta-warden validates\ndispatch decision (Gate 3)"]
+  V --> A["agent execution"]
+  A --> OUT["review verify evolve"]
 ```
 
 ## Contact and support
@@ -250,7 +251,7 @@ Claude Code automatically reads `CLAUDE.md`, `.claude/agents/`, `.claude/skills/
 
 ##### meta-theory skill
 
-The **meta-theory** skill is the portable governance playbook ([`.claude/skills/meta-theory/SKILL.md`](.claude/skills/meta-theory/SKILL.md)). It is **user-invocable**: in Claude Code, type **`/meta-theory`** to load it. The skill separates **meta architecture** (agent boundaries, collaboration, governance) from **project technical architecture** (stack, modules, code layout), classifies the request into flows A–E, and routes work along the eight-stage spine (**Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution**). It is a **dispatcher**, not a substitute for execution agents: substantive work still goes to named agents (for example **`meta-warden`** as the default agent front door).
+The **meta-theory** skill is the portable governance playbook ([`.claude/skills/meta-theory/SKILL.md`](.claude/skills/meta-theory/SKILL.md)). It is **user-invocable**: in Claude Code, type **`/meta-theory`** to load it. The skill separates **meta architecture** (agent boundaries, collaboration, governance) from **project technical architecture** (stack, modules, code layout), classifies the request into flows A–E, and routes work along the eight-stage spine (**Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution**). It is a **dispatcher**, not a substitute for execution agents: substantive work goes to named agents, and **Gate 3 mandates that meta-theory must validate its dispatch decision with `meta-warden` before spawning any execution agents** — `meta-warden` is both the default public entry and the validator that enforces the dispatcher discipline.
 
 #### In Codex
 

@@ -408,7 +408,7 @@ Claude Code 自动读取 `CLAUDE.md`、`.claude/agents/`、`.claude/skills/`、`
 
 ###### `meta-theory` 技能（治理方法论）
 
-**meta-theory** 是可随仓库同步的治理技能（主源 [`.claude/skills/meta-theory/SKILL.md`](.claude/skills/meta-theory/SKILL.md)）。在 Claude Code 中可**由用户主动唤起**：输入 **`/meta-theory`** 即可加载。它会区分 **元架构**（agent 边界、协作、治理）与 **项目技术架构**（栈、模块、代码组织），把请求归入 A–E 类流程，并沿八阶段脊柱推进（**Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution**）。它是**调度层**，不能代替具名 agent 的执行：**`meta-warden`** 仍是默认的 agent 前门；复杂落地工作仍由对应 agent 完成。
+**meta-theory** 是可随仓库同步的治理技能（主源 [`.claude/skills/meta-theory/SKILL.md`](.claude/skills/meta-theory/SKILL.md)）。在 Claude Code 中可**由用户主动唤起**：输入 **`/meta-theory`** 即可加载。它会区分 **元架构**（agent 边界、协作、治理）与 **项目技术架构**（栈、模块、代码组织），把请求归入 A–E 类流程，并沿八阶段脊柱推进（**Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution**）。它是**调度层**，不能代替具名 agent 的执行：**Gate 3 强制要求 meta-theory 在分派任何执行 agent 之前，必须将分派决策交给 `meta-warden` 验证通过** — `meta-warden` 既是默认公开前门，也是验证分派决策、强制调度纪律的角色。
 
 ##### 在 Codex 里
 
@@ -894,14 +894,15 @@ flowchart TB
 
 #### 图示：默认路径（入口、meta-theory skill 与八阶段）
 
-`meta-theory`（**skill**）是触发时加载的**方法说明书**；`meta-warden`（**agent**）是**默认公开入口角色**，负责闸门与综合收口。下图是「意图进来之后先经过谁」的缩略关系（不是把八阶段展开，展开见 [复杂任务治理主轴](#complex-spine-zh)）。
+`meta-theory`（**skill**）是触发时加载的**方法说明书**；`meta-warden`（**agent**）是**默认公开入口角色**，负责闸门与综合收口。流程为：用户意图 → `meta-warden` 入口 → `meta-theory` 分类 + 制定分派计划 → **`meta-warden` 验证分派决策（Gate 3，不可跳过）** → agent 执行 → review → verify → evolve。下图是「意图进来之后先经过谁」的缩略关系（不是把八阶段展开，展开见 [复杂任务治理主轴](#complex-spine-zh)）。
 
 ```mermaid
 flowchart LR
   U["用户意图"] --> W["meta-warden 入口"]
-  W --> SK["meta-theory skill 纪律派发"]
-  SK --> P["八阶段脊柱"]
-  P -->   OUT["交付物 验证 进化"]
+  W --> SK["meta-theory skill\n分类 + 分派计划"]
+  SK --> V["meta-warden 验证\n分派决策 (Gate 3)"]
+  V --> A["agent 执行"]
+  A --> OUT["review verify evolve"]
 ```
 
 ### 元的理念

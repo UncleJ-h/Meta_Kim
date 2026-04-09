@@ -104,14 +104,15 @@ flowchart TB
 
 #### 그림: 기본 경로(진입·meta-theory 스킬·8단계 척추 개요)
 
-`meta-theory`는 **스킬**(트리거 시 로드되는 방법서). `meta-warden`은 **에이전트**(기본 공개 진입). **전 단계 전개**는 아래「개발 거버넌스 척추」와 영어판을 참고하세요.
+`meta-theory`는 **스킬**(트리거 시 로드되는 방법서). `meta-warden`은 **에이전트**(기본 공개 진입이자 분배 결정 검증 역할). 플로우: 사용자 의도 → `meta-warden` 진입 → `meta-theory` 분류＋분배 계획 → **`meta-warden`이 분배 결정을 검증 (Gate 3)** → agent 실행 → review → verify → evolve. **전 단계 전개**는 아래「개발 거버넌스 척추」와 영어판을 참고하세요.
 
 ```mermaid
 flowchart LR
   U["User intent"] --> W["meta-warden entry"]
-  W --> SK["meta-theory skill rules"]
-  SK --> P["8-stage spine"]
-  P --> OUT["deliverable verify evolve"]
+  W --> SK["meta-theory skill\nclassify + dispatch plan"]
+  SK --> V["meta-warden validates\ndispatch decision (Gate 3)"]
+  V --> A["agent execution"]
+  A --> OUT["review verify evolve"]
 ```
 
 ## 저자·지원
