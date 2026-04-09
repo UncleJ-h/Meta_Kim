@@ -1299,8 +1299,8 @@ async function installPythonTools() {
     return;
   }
 
-  // Check if graphify already installed
-  const gfCheck = run("graphify --version");
+  // Check if graphify already installed (use python -m, not bare command)
+  const gfCheck = run(`${pyCmd} -m graphify --version`);
   if (gfCheck) {
     ok(t.graphifyAlreadyInstalled(gfCheck.trim()));
     return;
@@ -1318,9 +1318,10 @@ async function installPythonTools() {
     return;
   }
 
-  // Register Claude skill
+  // Register Claude skill — use python -m graphify, not bare "graphify" command
+  // graphifyy installs a module, not a system PATH command on Windows
   info(t.graphifySkillRegistering);
-  const skillResult = spawnSync("graphify", ["claude", "install"], {
+  const skillResult = spawnSync(pyCmd, ["-m", "graphify", "claude", "install"], {
     stdio: "inherit",
     shell: isWin,
   });
