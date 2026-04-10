@@ -23,13 +23,21 @@ import {
 import { join, resolve } from "node:path";
 import { homedir, platform, tmpdir } from "node:os";
 import { createInterface } from "node:readline";
-import { ensureProfileState, toRepoRelative } from "./scripts/meta-kim-local-state.mjs";
+import {
+  ensureProfileState,
+  toRepoRelative,
+} from "./scripts/meta-kim-local-state.mjs";
+import {
+  loadLocalOverrides,
+  normalizeTargets,
+  resolveTargetContext,
+  writeLocalOverrides,
+} from "./scripts/meta-kim-sync-config.mjs";
 
 // ── Config ──────────────────────────────────────────────
 
-const SKILL_OWNER = process.env.META_KIM_SKILL_OWNER || "KimYx0207";
-const SKILLS_DIR = join(homedir(), ".claude", "skills");
 const PROJECT_DIR = resolve(import.meta.dirname || ".");
+const SKILLS_DIR = join(homedir(), ".claude", "skills");
 const PROXY = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "";
 const isWin = platform() === "win32";
 const args = process.argv.slice(2);
@@ -40,31 +48,58 @@ const silentMode = args.includes("--silent") || !process.stdout.isTTY;
 const langIdx = args.indexOf("--lang");
 const langArg = langIdx >= 0 && args[langIdx + 1] ? args[langIdx + 1] : null;
 
-const findskillPackSubdir = platform() === "win32" ? "windows" : "original";
-
-const SKILLS = [
-  { name: "agent-teams-playbook", repo: `${SKILL_OWNER}/agent-teams-playbook` },
-  {
-    name: "findskill",
-    repo: `${SKILL_OWNER}/findskill`,
-    subdir: findskillPackSubdir,
-  },
-  { name: "hookprompt", repo: `${SKILL_OWNER}/HookPrompt` },
-  { name: "superpowers", repo: "obra/superpowers" },
-  { name: "everything-claude-code", repo: "affaan-m/everything-claude-code" },
-  {
-    name: "planning-with-files",
-    repo: "OthmanAdi/planning-with-files",
-    subdir: "skills/planning-with-files",
-  },
-  { name: "cli-anything", repo: "HKUDS/CLI-Anything" },
-  { name: "gstack", repo: "garrytan/gstack" },
-  {
-    name: "skill-creator",
-    repo: "anthropics/skills",
-    subdir: "skills/skill-creator",
-  },
+const RUNTIME_CHOICES = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "openclaw", label: "OpenClaw" },
 ];
+
+/** Load skills manifest from shared config (single source of truth) */
+function loadSkillsManifest() {
+  const manifestPath = join(PROJECT_DIR, "config", "skills.json");
+  try {
+    const raw = readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(raw);
+
+    // Allow env var override
+    const skillOwner =
+      process.env.META_KIM_SKILL_OWNER || manifest.skillOwner || "KimYx0207";
+
+    const findskillPackSubdir = platform() === "win32" ? "windows" : "original";
+
+    // Transform manifest to legacy format for compatibility
+    return {
+      skillOwner,
+      externalUrls: manifest.externalUrls || {},
+      skills: manifest.skills.map((skill) => {
+        const repo = skill.repo.replace("${skillOwner}", skillOwner);
+
+        // Handle subdir with platform mapping
+        let subdir = skill.subdir;
+        if (skill.subdirTemplate === "{platform}" && skill.subdirMapping) {
+          subdir =
+            skill.subdirMapping[platform()] || skill.subdirMapping.default;
+        }
+
+        return {
+          name: skill.id,
+          repo,
+          subdir: subdir || findskillPackSubdir,
+          claudePlugin: skill.claudePlugin,
+          targets: skill.targets || ["claude", "codex", "openclaw"],
+        };
+      }),
+    };
+  } catch (err) {
+    warn(`Failed to load skills manifest: ${err.message}`);
+    return { skillOwner: "KimYx0207", externalUrls: {}, skills: [] };
+  }
+}
+
+const skillsManifest = loadSkillsManifest();
+const SKILL_OWNER = skillsManifest.skillOwner;
+const SKILLS = skillsManifest.skills;
+const EXTERNAL_URLS = skillsManifest.externalUrls;
 
 const packageJsonPath = join(PROJECT_DIR, "package.json");
 const packageVersion = existsSync(packageJsonPath)
@@ -97,19 +132,18 @@ const I18N = {
     pkgNotFound: "package.json not found — run from Meta_Kim root",
     envFailed: "Environment check failed. Fix the issues above.",
     envOk: "Environment OK!",
-    stepRuntime: "Runtime detection",
+    stepRuntime: "AI coding tool detection",
     claudeDetected: (v) => `Claude Code ${v}`,
     claudeNotDetected: "Claude Code CLI not detected",
     codexDetected: (v) => `Codex ${v}`,
     codexNotDetected: "Codex CLI not detected (optional)",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "OpenClaw CLI not detected (optional)",
-    noRuntime: "No supported runtime detected.",
+    noRuntime: "No AI coding tool detected.",
     noRuntimeHint1: "Meta_Kim works with Claude Code, Codex, or OpenClaw.",
-    noRuntimeHint2:
-      "Install at least one: https://docs.anthropic.com/en/docs/claude-code",
+    noRuntimeHint2: "Install at least one: {claudeCodeDocs}",
     continueAnyway: "Continue setup anyway?",
-    setupCancelled: "Setup cancelled. Install a runtime and re-run.",
+    setupCancelled: "Setup cancelled. Install an AI coding tool and re-run.",
     stepConfig: "Project configuration",
     mcpExists: ".mcp.json already configured",
     mcpCreated: ".mcp.json created — MCP runtime server registered",
@@ -151,7 +185,7 @@ const I18N = {
     codexNote: "Codex prompts are synced to .codex/",
     openclawNote: "OpenClaw workspace is synced to openclaw/",
     noRuntimeGetStarted:
-      "No runtime detected. Install Claude Code to get started:",
+      "No AI coding tool detected. Install Claude Code to get started:",
     usefulCommands: "Useful commands:",
     cmdUpdate: "Update all skills",
     cmdCheck: "Check environment",
@@ -164,10 +198,36 @@ const I18N = {
       "Meta_Kim skills install to ~/.claude/skills/ (global). Install globally?",
     globalDirReady: (p) => `Global skills dir ready: ${p}`,
     globalDirCreated: (p) => `Created global skills dir: ${p}`,
+    globalDirTitle: "Global Skills Directory",
+    globalDirPrompt: `Meta_Kim skills will be installed to ~/.claude/skills/
+• Global install — Shared across all projects
+• Skip — For this project only
+• Re-run setup.mjs anytime to install`,
+    globalSkipped: "Global install skipped — using project-local only",
+    // Install scope selection
+    installScopeHeading: "Installation Scope",
+    installScopePrompt: "Where would you like to install Meta_Kim?",
+    installScopeProject:
+      "Project only — Files in .claude/.codex/openclaw/ (current project only)",
+    installScopeGlobal:
+      "Global only — ~/.claude/skills/ (shared across all projects)",
+    installScopeBoth: "Both (recommended) — Project files + global skills",
+    installScopeProjectLabel: "Project only",
+    installScopeGlobalLabel: "Global only",
+    installScopeBothLabel: "Both (recommended)",
+    installScopeProjectDesc:
+      "Install to project directory only (.claude/, .codex/, openclaw/)",
+    installScopeGlobalDesc:
+      "Install to global directory only (~/.claude/skills/)",
+    installScopeBothDesc:
+      "Install both project and global (recommended for full experience)",
     depCheckHeading: "Dependency Check",
     depOk: (n) => `${n} — OK`,
     depMissing: (n) => `${n} — MISSING`,
     depNoFiles: (n) => `${n} — directory exists but no .md files`,
+    selectRuntimeTargets: "Which AI coding tools do you use on this machine?",
+    inputTargetsHint: (d) =>
+      `Enter numbers, comma for multiple; Enter to use default ${d}`,
     depSummaryAll: "All 9 dependencies verified",
     depSummarySome: (ok, total) =>
       `Only ${ok}/${total} dependencies verified — re-run with --update`,
@@ -183,7 +243,7 @@ const I18N = {
       `OpenClaw workspaces: ${n}/8 agents — each folder has the 9 required .md files (BOOT, SOUL, …)`,
     syncOpenclawSkill: "OpenClaw shared meta-theory",
     syncSharedSkills: "shared-skills/meta-theory.md",
-    syncOk: "All runtime sync targets verified",
+    syncOk: "All sync targets verified",
     syncMissing: (p) => `Missing: ${p}`,
     syncPartial: (label, got, need) => `${label}: got ${got}, need ${need}`,
     stepPythonTools: "Optional Python Tools",
@@ -210,10 +270,39 @@ const I18N = {
     updateSyncDone: "Copy step finished",
     updateSyncSkip: "Copy step skipped or failed",
     updateReGlobal: "Re-select global skills directory?",
+    askReselectRuntimes: "Re-select AI coding tools for this machine?",
     updateComplete: "Update complete!",
+    // Installation overview strings
+    installOverviewTitle: "Meta_Kim Installation Overview",
+    installOverviewWill: "This process will:",
+    installOverviewSyncConfig:
+      "Sync configurations (canonical → .claude/.codex/openclaw/)",
+    installOverviewInstallSkills: "Install 9 global skill repositories",
+    installOverviewSyncMeta: "Sync meta-theory to global directory",
+    installOverviewOptionalPython: "Optional: Install Python graphify tool",
+    installOverviewTargets: "Target tools:",
+    installOverviewEstimated: "Estimated time:",
+    installOverviewTime: "2-5 minutes (depends on network speed)",
+    // Progress step strings
+    progressPrepareDir: "Prepare global skills directory",
+    progressSyncConfig: "Sync tool configurations",
+    progressInstallSkills: "Install global skills (may take several minutes)",
+    progressSyncMeta: "Sync meta-theory",
+    progressValidate: "Validate installation",
+    // Confirm strings
+    confirmStartInstall: "Start installation?",
+    installCancelled: "Installation cancelled",
+    installComplete: "Installation complete!",
+    // Warning messages
+    warnConfigSyncFailed: "Config sync failed, continuing...",
+    warnSkillsInstallFailed:
+      "Global skills install failed, check error messages",
+    warnMetaTheorySyncFailed: "meta-theory sync failed, check error messages",
+    warnSkillsUpdateFailed: "Global skills update failed, check error messages",
+    warnMetaTheoryUpdateFailed: "meta-theory sync failed, check error messages",
     actionPrompt: "What would you like to do?",
     actionInstall: "Install — Full first-time setup",
-    actionUpdate: "Update — Refresh skills & sync runtimes",
+    actionUpdate: "Update — Refresh skills & sync tools",
     actionCheck: "Check — Verify dependencies & sync status",
     actionExit: "Exit",
     aboutAuthor: "About the Author",
@@ -237,19 +326,18 @@ const I18N = {
     pkgNotFound: "package.json 未找到 — 请在 Meta_Kim 根目录运行",
     envFailed: "环境检查未通过，请先解决上述问题。",
     envOk: "环境检查通过！",
-    stepRuntime: "运行时检测",
+    stepRuntime: "检测 AI 编程工具",
     claudeDetected: (v) => `Claude Code ${v}`,
     claudeNotDetected: "未检测到 Claude Code CLI",
     codexDetected: (v) => `Codex ${v}`,
     codexNotDetected: "未检测到 Codex CLI（可选）",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "未检测到 OpenClaw CLI（可选）",
-    noRuntime: "未检测到支持的运行时。",
+    noRuntime: "未检测到 AI 编程工具。",
     noRuntimeHint1: "Meta_Kim 支持 Claude Code、Codex 或 OpenClaw。",
-    noRuntimeHint2:
-      "至少安装一个：https://docs.anthropic.com/en/docs/claude-code",
+    noRuntimeHint2: "至少安装一个：{claudeCodeDocs}",
     continueAnyway: "仍然继续安装？",
-    setupCancelled: "安装已取消。请先安装运行时。",
+    setupCancelled: "安装已取消。请先安装 AI 编程工具。",
     stepConfig: "项目配置",
     mcpExists: ".mcp.json 已配置",
     mcpCreated: ".mcp.json 已创建 — MCP 运行时服务器已注册",
@@ -289,7 +377,7 @@ const I18N = {
     step3Hint: "（Meta_Kim 会自动协调各专家）",
     codexNote: "Codex 提示词同步到 .codex/",
     openclawNote: "OpenClaw 工作区同步到 openclaw/",
-    noRuntimeGetStarted: "未检测到运行时。安装 Claude Code 开始使用：",
+    noRuntimeGetStarted: "未检测到 AI 编程工具。安装 Claude Code 开始使用：",
     usefulCommands: "常用命令：",
     cmdUpdate: "更新所有技能",
     cmdCheck: "检查环境",
@@ -302,14 +390,35 @@ const I18N = {
       "Meta_Kim 技能安装到 ~/.claude/skills/（全局）。是否全局安装？",
     globalDirReady: (p) => `全局技能目录就绪：${p}`,
     globalDirCreated: (p) => `已创建全局技能目录：${p}`,
+    globalDirTitle: "全局技能目录",
+    globalDirPrompt: `Meta_Kim 技能将安装到 ~/.claude/skills/
+• 全局安装 — 所有项目共享
+• 跳过 — 仅在当前项目使用
+• 随时可重新运行 setup.mjs 安装`,
+    globalSkipped: "全局安装已跳过 — 将仅在当前项目使用",
+    // 安装范围选择
+    installScopeHeading: "安装范围",
+    installScopePrompt: "Meta_Kim 安装到哪里？",
+    installScopeProject:
+      "仅项目 — 文件在 .claude/.codex/openclaw/（仅当前项目）",
+    installScopeGlobal: "仅全局 — ~/.claude/skills/（所有项目共享）",
+    installScopeBoth: "全部（推荐）— 项目文件 + 全局技能",
+    installScopeProjectLabel: "仅项目",
+    installScopeGlobalLabel: "仅全局",
+    installScopeBothLabel: "全部（推荐）",
+    installScopeProjectDesc: "仅安装到项目目录（.claude/, .codex/, openclaw/）",
+    installScopeGlobalDesc: "仅安装到全局目录（~/.claude/skills/）",
+    installScopeBothDesc: "同时安装项目和全局（推荐，完整体验）",
     depCheckHeading: "依赖检查",
     depOk: (n) => `${n} — 正常`,
     depMissing: (n) => `${n} — 缺失`,
     depNoFiles: (n) => `${n} — 目录存在但无 .md 文件`,
+    selectRuntimeTargets: "这台电脑上用哪些 AI 编程工具？",
+    inputTargetsHint: (d) => `输入编号，逗号多选；回车使用默认 ${d}`,
     depSummaryAll: "全部 9 个依赖验证通过",
     depSummarySome: (ok, total) =>
       `仅 ${ok}/${total} 个依赖验证通过 — 请使用 --update 重新安装`,
-    syncHeading: "跨运行时同步检查",
+    syncHeading: "同步状态检查",
     syncClaudeAgents: (n) => `Claude Code 智能体: ${n}/8 .md 文件`,
     syncClaudeSkills: "Claude Code 技能/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code 钩子: ${n} 个脚本`,
@@ -321,7 +430,7 @@ const I18N = {
       `OpenClaw 工作区：${n}/8 个智能体，各目录 9 个必备 Markdown 已齐（含 BOOT、SOUL 等；不含子文件夹里的额外文件）`,
     syncOpenclawSkill: "OpenClaw 共享 meta-theory",
     syncSharedSkills: "共享技能/meta-theory.md",
-    syncOk: "所有运行时同步目标验证通过",
+    syncOk: "所有同步目标验证通过",
     syncMissing: (p) => `缺失：${p}`,
     syncPartial: (label, got, need) => `${label}：实际 ${got}，需要 ${need}`,
     stepPythonTools: "可选 Python 工具",
@@ -346,10 +455,38 @@ const I18N = {
     updateSyncDone: "同步完成",
     updateSyncSkip: "未同步或同步失败",
     updateReGlobal: "是否重新选择全局技能目录？",
+    askReselectRuntimes: "重新选择这台电脑的 AI 编程工具？",
     updateComplete: "更新完成！",
+    // 安装概览字符串
+    installOverviewTitle: "Meta_Kim 安装概览",
+    installOverviewWill: "此过程将：",
+    installOverviewSyncConfig:
+      "同步配置文件 (canonical → .claude/.codex/openclaw/)",
+    installOverviewInstallSkills: "安装 9 个全局技能仓库",
+    installOverviewSyncMeta: "同步 meta-theory 到全局目录",
+    installOverviewOptionalPython: "可选：安装 Python graphify 工具",
+    installOverviewTargets: "目标工具：",
+    installOverviewEstimated: "预计用时：",
+    installOverviewTime: "2-5 分钟（取决于网络速度）",
+    // 进度步骤字符串
+    progressPrepareDir: "准备全局技能目录",
+    progressSyncConfig: "同步配置文件",
+    progressInstallSkills: "安装全局技能（可能需要几分钟）",
+    progressSyncMeta: "同步 meta-theory",
+    progressValidate: "验证安装",
+    // 确认字符串
+    confirmStartInstall: "开始安装？",
+    installCancelled: "安装已取消",
+    installComplete: "安装完成！",
+    // Warning messages
+    warnConfigSyncFailed: "配置同步失败，继续安装...",
+    warnSkillsInstallFailed: "全局技能安装失败，请检查错误信息",
+    warnMetaTheorySyncFailed: "meta-theory 同步失败，请检查错误信息",
+    warnSkillsUpdateFailed: "全局技能更新失败，请检查错误信息",
+    warnMetaTheoryUpdateFailed: "meta-theory 同步失败，请检查错误信息",
     actionPrompt: "你想做什么？",
     actionInstall: "安装 — 首次完整安装",
-    actionUpdate: "更新 — 刷新技能并同步运行时",
+    actionUpdate: "更新 — 刷新技能并同步配置",
     actionCheck: "检查 — 验证依赖和同步状态",
     actionExit: "退出",
     aboutAuthor: "关于作者",
@@ -374,21 +511,20 @@ const I18N = {
       "package.json が見つかりません — Meta_Kim ルートで実行してください",
     envFailed: "環境チェックに失敗しました。上記の問題を解決してください。",
     envOk: "環境チェックOK！",
-    stepRuntime: "ランタイム検出",
+    stepRuntime: "AIコーディングツール検出",
     claudeDetected: (v) => `Claude Code ${v}`,
     claudeNotDetected: "Claude Code CLI が検出されませんでした",
     codexDetected: (v) => `Codex ${v}`,
     codexNotDetected: "Codex CLI が検出されませんでした（オプション）",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "OpenClaw CLI が検出されませんでした（オプション）",
-    noRuntime: "サポートされているランタイムが検出されませんでした。",
+    noRuntime: "AIコーディングツールが検出されませんでした。",
     noRuntimeHint1:
       "Meta_Kim は Claude Code、Codex、または OpenClaw で動作します。",
-    noRuntimeHint2:
-      "少なくとも1つインストールしてください：https://docs.anthropic.com/en/docs/claude-code",
+    noRuntimeHint2: "少なくとも1つインストールしてください：{claudeCodeDocs}",
     continueAnyway: "セットアップを続行しますか？",
     setupCancelled:
-      "セットアップがキャンセルされました。ランタイムをインストールして再実行してください。",
+      "セットアップがキャンセルされました。AIコーディングツールをインストールして再実行してください。",
     stepConfig: "プロジェクト設定",
     mcpExists: ".mcp.json は既に設定されています",
     mcpCreated: ".mcp.json 作成済み — MCP ランタイムサーバー登録完了",
@@ -431,7 +567,7 @@ const I18N = {
     codexNote: "Codex プロンプトは .codex/ に同期されます",
     openclawNote: "OpenClaw ワークスペースは openclaw/ に同期されます",
     noRuntimeGetStarted:
-      "ランタイムが検出されませんでした。Claude Code をインストールしてください：",
+      "AIコーディングツールが検出されませんでした。Claude Code をインストールしてください：",
     usefulCommands: "便利なコマンド：",
     cmdUpdate: "すべてのスキルを更新",
     cmdCheck: "環境をチェック",
@@ -444,14 +580,41 @@ const I18N = {
       "Meta_Kim スキルは ~/.claude/skills/（グローバル）にインストールされます。グローバルインストールしますか？",
     globalDirReady: (p) => `グローバルスキルディレクトリ準備完了：${p}`,
     globalDirCreated: (p) => `グローバルスキルディレクトリ作成：${p}`,
+    globalDirTitle: "グローバルスキルディレクトリ",
+    globalDirPrompt: `Meta_Kim スキルは ~/.claude/skills/ にインストールされます
+• グローバルインストール — すべてのプロジェクトで共有
+• スキップ — このプロジェクトのみ
+• いつでも setup.mjs を再実行してインストール`,
+    globalSkipped:
+      "グローバルインストールスキップ — プロジェクトローカルのみ使用",
+    // インストール範囲選択
+    installScopeHeading: "インストール範囲",
+    installScopePrompt: "Meta_Kim をどこにインストールしますか？",
+    installScopeProject:
+      "プロジェクトのみ — .claude/.codex/openclaw/ のファイル（現在のプロジェクトのみ）",
+    installScopeGlobal:
+      "グローバルのみ — ~/.claude/skills/（すべてのプロジェクトで共有）",
+    installScopeBoth: "両方（推奨）— プロジェクトファイル + グローバルスキル",
+    installScopeProjectLabel: "プロジェクトのみ",
+    installScopeGlobalLabel: "グローバルのみ",
+    installScopeBothLabel: "両方（推奨）",
+    installScopeProjectDesc:
+      "プロジェクトディレクトリのみにインストール（.claude/, .codex/, openclaw/）",
+    installScopeGlobalDesc:
+      "グローバルディレクトリのみにインストール（~/.claude/skills/）",
+    installScopeBothDesc:
+      "プロジェクトとグローバル両方にインストール（推奨、完全な体験）",
     depCheckHeading: "依存関係チェック",
     depOk: (n) => `${n} — OK`,
     depMissing: (n) => `${n} — 見つかりません`,
     depNoFiles: (n) => `${n} — ディレクトリはありますが.mdファイルがありません`,
+    selectRuntimeTargets: "このパソコンで使うAIコーディングツールを選択",
+    inputTargetsHint: (d) =>
+      `番号を入力、カンマで複数選択；Enterでデフォルト ${d}`,
     depSummaryAll: "9つの依存関係すべて検証済み",
     depSummarySome: (ok, total) =>
       `${ok}/${total} の依存関係のみ検証 — --update で再インストールしてください`,
-    syncHeading: "ランタイム間同期チェック",
+    syncHeading: "同期状態チェック",
     syncClaudeAgents: (n) => `Claude Code エージェント: ${n}/8 .md ファイル`,
     syncClaudeSkills: "Claude Code スキル/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code フック: ${n} スクリプト`,
@@ -463,7 +626,7 @@ const I18N = {
       `OpenClaw ワークスペース: ${n}/8 エージェント — 各フォルダに必須の .md 9 件（BOOT、SOUL など）`,
     syncOpenclawSkill: "OpenClaw 共有 meta-theory",
     syncSharedSkills: "共有スキル/meta-theory.md",
-    syncOk: "すべてのランタイム同期ターゲット検証済み",
+    syncOk: "すべての同期ターゲット検証済み",
     syncMissing: (p) => `不足：${p}`,
     syncPartial: (label, got, need) => `${label}：実際 ${got}、必要 ${need}`,
     stepPythonTools: "オプション Python ツール",
@@ -489,10 +652,45 @@ const I18N = {
     updateSyncDone: "同期が完了しました",
     updateSyncSkip: "同期をスキップしたか失敗しました",
     updateReGlobal: "グローバルスキルディレクトリを再選択しますか？",
+    askReselectRuntimes:
+      "このパソコンで使うAIコーディングツールを再選択しますか？",
     updateComplete: "アップデート完了！",
+    // インストール概要文字列
+    installOverviewTitle: "Meta_Kim インストール概要",
+    installOverviewWill: "このプロセスでは：",
+    installOverviewSyncConfig:
+      "設定を同期 (canonical → .claude/.codex/openclaw/)",
+    installOverviewInstallSkills:
+      "9つのグローバルスキルリポジトリをインストール",
+    installOverviewSyncMeta: "meta-theory をグローバルディレクトリに同期",
+    installOverviewOptionalPython:
+      "オプション：Python graphify ツールをインストール",
+    installOverviewTargets: "対象ツール：",
+    installOverviewEstimated: "予想時間：",
+    installOverviewTime: "2-5分（ネットワーク速度によります）",
+    // 進捗ステップ文字列
+    progressPrepareDir: "グローバルスキルディレクトリを準備",
+    progressSyncConfig: "設定を同期",
+    progressInstallSkills:
+      "グローバルスキルをインストール（数分かかる場合があります）",
+    progressSyncMeta: "meta-theory を同期",
+    progressValidate: "インストールを検証",
+    // 確認文字列
+    confirmStartInstall: "インストールを開始しますか？",
+    installCancelled: "インストールがキャンセルされました",
+    installComplete: "インストール完了！",
+    // 警告メッセージ
+    warnConfigSyncFailed: "設定同期失敗、続行します...",
+    warnSkillsInstallFailed:
+      "グローバルスキルインストール失敗、エラーを確認してください",
+    warnMetaTheorySyncFailed: "meta-theory 同期失敗、エラーを確認してください",
+    warnSkillsUpdateFailed:
+      "グローバルスキル更新失敗、エラーを確認してください",
+    warnMetaTheoryUpdateFailed:
+      "meta-theory 同期失敗、エラーを確認してください",
     actionPrompt: "何をしますか？",
     actionInstall: "インストール — 初回セットアップ",
-    actionUpdate: "アップデート — スキル更新＆ランタイム同期",
+    actionUpdate: "アップデート — スキル更新＆設定同期",
     actionCheck: "チェック — 依存関係と同期状態を確認",
     actionExit: "終了",
     aboutAuthor: "作者について",
@@ -517,20 +715,20 @@ const I18N = {
       "package.json을 찾을 수 없습니다 — Meta_Kim 루트에서 실행하세요",
     envFailed: "환경 확인 실패. 위 문제를 먼저 해결하세요.",
     envOk: "환경 확인 통과!",
-    stepRuntime: "런타임 감지",
+    stepRuntime: "AI 코딩 도구 감지",
     claudeDetected: (v) => `Claude Code ${v}`,
     claudeNotDetected: "Claude Code CLI 감지되지 않음",
     codexDetected: (v) => `Codex ${v}`,
     codexNotDetected: "Codex CLI 감지되지 않음 (선택)",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "OpenClaw CLI 감지되지 않음 (선택)",
-    noRuntime: "지원되는 런타임이 감지되지 않았습니다.",
+    noRuntime: "AI 코딩 도구가 감지되지 않았습니다.",
     noRuntimeHint1:
       "Meta_Kim은 Claude Code, Codex 또는 OpenClaw에서 작동합니다.",
-    noRuntimeHint2:
-      "최소 하나를 설치하세요: https://docs.anthropic.com/en/docs/claude-code",
+    noRuntimeHint2: "최소 하나를 설치하세요: {claudeCodeDocs}",
     continueAnyway: "설정을 계속 진행할까요?",
-    setupCancelled: "설정이 취소되었습니다. 런타임을 설치하고 다시 실행하세요.",
+    setupCancelled:
+      "설정이 취소되었습니다. AI 코딩 도구를 설치하고 다시 실행하세요.",
     stepConfig: "프로젝트 설정",
     mcpExists: ".mcp.json이 이미 구성되어 있습니다",
     mcpCreated: ".mcp.json 생성됨 — MCP 런타임 서버 등록 완료",
@@ -571,7 +769,7 @@ const I18N = {
     codexNote: "Codex 프롬프트는 .codex/에 동기화됩니다",
     openclawNote: "OpenClaw 워크스페이스는 openclaw/에 동기화됩니다",
     noRuntimeGetStarted:
-      "런타임이 감지되지 않았습니다. Claude Code를 설치하세요:",
+      "AI 코딩 도구가 감지되지 않았습니다. Claude Code를 설치하세요:",
     usefulCommands: "유용한 명령:",
     cmdUpdate: "모든 스킬 업데이트",
     cmdCheck: "환경 확인",
@@ -584,14 +782,36 @@ const I18N = {
       "Meta_Kim 스킬을 ~/.claude/skills/ (전역)에 설치합니다. 전역 설치할까요?",
     globalDirReady: (p) => `전역 스킬 디렉토리 준비됨: ${p}`,
     globalDirCreated: (p) => `전역 스킬 디렉토리 생성됨: ${p}`,
+    globalDirTitle: "전역 스킬 디렉토리",
+    globalDirPrompt: `Meta_Kim 스킬은 ~/.claude/skills/ 에 설치됩니다
+• 전역 설치 — 모든 프로젝트에서 공유
+• 건너뛰기 — 이 프로젝트에서만 사용
+• 언제든 setup.mjs 를 다시 실행하여 설치`,
+    globalSkipped: "전역 설치 건너뜀 — 프로젝트 로컬만 사용",
+    // 설치 범위 선택
+    installScopeHeading: "설치 범위",
+    installScopePrompt: "Meta_Kim을 어디에 설치하시겠습니까?",
+    installScopeProject:
+      "프로젝트만 — .claude/.codex/openclaw/ 파일 (현재 프로젝트만)",
+    installScopeGlobal: "전역만 — ~/.claude/skills/ (모든 프로젝트 공유)",
+    installScopeBoth: "둘 다 (권장) — 프로젝트 파일 + 전역 스킬",
+    installScopeProjectLabel: "프로젝트만",
+    installScopeGlobalLabel: "전역만",
+    installScopeBothLabel: "둘 다 (권장)",
+    installScopeProjectDesc:
+      "프로젝트 디렉토리에만 설치 (.claude/, .codex/, openclaw/)",
+    installScopeGlobalDesc: "전역 디렉토리에만 설치 (~/.claude/skills/)",
+    installScopeBothDesc: "프로젝트와 전역 모두 설치 (권장, 완전한 경험)",
     depCheckHeading: "의존성 확인",
     depOk: (n) => `${n} — 정상`,
     depMissing: (n) => `${n} — 누락`,
     depNoFiles: (n) => `${n} — 디렉토리는 있으나 .md 파일 없음`,
+    selectRuntimeTargets: "이 컴퓨터에서 사용할 AI 코딩 도구 선택",
+    inputTargetsHint: (d) => `번호 입력, 쉼표로 다중 선택；Enter로 기본값 ${d}`,
     depSummaryAll: "9개 의존성 모두 확인 완료",
     depSummarySome: (ok, total) =>
       `${ok}/${total}개 의존성만 확인 — --update로 재설치하세요`,
-    syncHeading: "런타임 간 동기화 확인",
+    syncHeading: "동기화 상태 확인",
     syncClaudeAgents: (n) => `Claude Code 에이전트: ${n}/8 .md 파일`,
     syncClaudeSkills: "Claude Code 스킬/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code 훅: ${n} 스크립트`,
@@ -603,7 +823,7 @@ const I18N = {
       `OpenClaw 워크스페이스: ${n}/8 에이전트 — 각 폴더에 필수 .md 9개(BOOT, SOUL 등)`,
     syncOpenclawSkill: "OpenClaw 공유 meta-theory",
     syncSharedSkills: "공유 스킬/meta-theory.md",
-    syncOk: "모든 런타임 동기화 대상 확인 완료",
+    syncOk: "모든 동기화 대상 확인 완료",
     syncMissing: (p) => `누락: ${p}`,
     syncPartial: (label, got, need) => `${label}: 실제 ${got}, 필요 ${need}`,
     stepPythonTools: "선택적 Python 도구",
@@ -628,10 +848,40 @@ const I18N = {
     updateSyncDone: "동기화 완료",
     updateSyncSkip: "동기화를 건너뛰었거나 실패했습니다",
     updateReGlobal: "전역 스킬 디렉토리를 다시 선택할까요?",
+    askReselectRuntimes: "이 컴퓨터에서 사용할 AI 코딩 도구를 다시 선택할까요?",
     updateComplete: "업데이트 완료!",
+    // 설치 개요 문자열
+    installOverviewTitle: "Meta_Kim 설치 개요",
+    installOverviewWill: "이 과정에서:",
+    installOverviewSyncConfig:
+      "설정 동기화 (canonical → .claude/.codex/openclaw/)",
+    installOverviewInstallSkills: "9개 전역 스킬 리포지토리 설치",
+    installOverviewSyncMeta: "meta-theory를 전역 디렉토리에 동기화",
+    installOverviewOptionalPython: "선택사항: Python graphify 도구 설치",
+    installOverviewTargets: "대상 도구:",
+    installOverviewEstimated: "예상 시간:",
+    installOverviewTime: "2-5분(네트워크 속도에 따라 다름)",
+    // 진행 단계 문자열
+    progressPrepareDir: "전역 스킬 디렉토리 준비",
+    progressSyncConfig: "설정 동기화",
+    progressInstallSkills: "전역 스킬 설치(몇 분 소요될 수 있음)",
+    progressSyncMeta: "meta-theory 동기화",
+    progressValidate: "설치 검증",
+    // 확인 문자열
+    confirmStartInstall: "설치를 시작할까요?",
+    installCancelled: "설치가 취소되었습니다",
+    installComplete: "설치 완료!",
+    // 경고 메시지
+    warnConfigSyncFailed: "구성 동기화 실패, 계속 진행...",
+    warnSkillsInstallFailed: "전역 스킬 설치 실패, 오류 메시지를 확인하세요",
+    warnMetaTheorySyncFailed:
+      "meta-theory 동기화 실패, 오류 메시지를 확인하세요",
+    warnSkillsUpdateFailed: "전역 스킬 업데이트 실패, 오류 메시지를 확인하세요",
+    warnMetaTheoryUpdateFailed:
+      "meta-theory 동기화 실패, 오류 메시지를 확인하세요",
     actionPrompt: "무엇을 하시겠습니까?",
     actionInstall: "설치 — 최초 전체 설정",
-    actionUpdate: "업데이트 — 스킬 갱신 및 런타임 동기화",
+    actionUpdate: "업데이트 — 스킬 갱신 및 설정 동기화",
     actionCheck: "확인 — 의존성 및 동기화 상태 검증",
     actionExit: "종료",
     aboutAuthor: "작성자 소개",
@@ -643,6 +893,15 @@ const I18N = {
 };
 
 let t = I18N.en; // default, overwritten by selectLanguage()
+
+/** Format i18n string with placeholder replacement */
+function fmt(template, values = {}) {
+  let result = template;
+  for (const [key, value] of Object.entries(values)) {
+    result = result.replace(new RegExp(`\\{${key}\\}`, "g"), value);
+  }
+  return result;
+}
 
 // ── ANSI colors ─────────────────────────────────────────
 
@@ -747,6 +1006,41 @@ async function askSelect(question, options) {
   return idx >= 0 && idx < options.length ? idx : 0;
 }
 
+async function askMultiSelectTargets(question, choices, defaultIds) {
+  if (silentMode) {
+    return defaultIds;
+  }
+
+  const defaultSet = new Set(defaultIds);
+  console.log(`\n  ${C.bold}${C.cyan}?${C.reset} ${question}`);
+  choices.forEach((choice, index) => {
+    const marker = defaultSet.has(choice.id) ? `${C.green}x${C.reset}` : " ";
+    console.log(
+      `    ${C.dim}${index + 1}.${C.reset} [${marker}] ${choice.label} ${C.dim}(${choice.id})${C.reset}`,
+    );
+  });
+  const answer = await ask(
+    `${t.inputTargetsHint(`${C.dim}${defaultIds.join(", ")}${C.reset}`)}`,
+  );
+  if (!answer) {
+    return defaultIds;
+  }
+
+  const parts = answer
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const mapped = parts.map((part) => {
+    if (/^\d+$/.test(part)) {
+      const index = Number.parseInt(part, 10) - 1;
+      return choices[index]?.id ?? part;
+    }
+    return part.toLowerCase();
+  });
+
+  return normalizeTargets(mapped);
+}
+
 // ── Step 0: Language selection ───────────────────────────
 
 async function selectLanguage() {
@@ -766,6 +1060,104 @@ async function selectLanguage() {
   return LANGUAGES[idx];
 }
 
+// ── Utility functions ─────────────────────────────────────
+
+/** Detect if this is first-time setup */
+function isFirstRun() {
+  const stateDir = join(PROJECT_DIR, ".meta-kim", "state");
+  return !existsSync(stateDir);
+}
+
+/** Show installation overview before starting */
+function showInstallOverview(activeTargets) {
+  console.log(`
+${C.bold}  ${t.installOverviewTitle}${C.reset}
+
+  ${C.dim}${t.installOverviewWill}${C.reset}
+  ${C.dim}•${C.reset} ${t.installOverviewSyncConfig}
+  ${C.dim}•${C.reset} ${t.installOverviewInstallSkills}
+  ${C.dim}•${C.reset} ${t.installOverviewSyncMeta}
+  ${C.dim}•${C.reset} ${t.installOverviewOptionalPython}
+
+  ${C.dim}${t.installOverviewTargets}${C.reset}${C.cyan}${activeTargets.join(", ")}${C.reset}
+  ${C.dim}${t.installOverviewEstimated}${C.reset}${t.installOverviewTime}
+`);
+}
+
+/** Execute with progress indicator */
+async function withProgress(label, fn) {
+  process.stdout.write(`  ${C.dim}→${C.reset} ${label}...`);
+  const startTime = Date.now();
+
+  try {
+    const result = await fn();
+    const elapsed = Date.now() - startTime;
+    const timeStr =
+      elapsed > 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${elapsed}ms`;
+    console.log(` ${C.green}✓${C.reset} ${C.dim}(${timeStr})${C.reset}`);
+    return result;
+  } catch (err) {
+    console.log(` ${C.red}✗${C.reset}`);
+    throw err;
+  }
+}
+
+// ── Install scope selection ─────────────────────────────
+
+/**
+ * Ask user where to install: project-only, global-only, or both
+ * Returns: 'project' | 'global' | 'both'
+ */
+async function askInstallScope() {
+  if (silentMode) return "both"; // 默认全部安装
+
+  heading(t.installScopeHeading);
+
+  const scopes = [
+    {
+      id: "project",
+      label: t.installScopeProjectLabel,
+      desc: t.installScopeProjectDesc,
+    },
+    {
+      id: "global",
+      label: t.installScopeGlobalLabel,
+      desc: t.installScopeGlobalDesc,
+    },
+    {
+      id: "both",
+      label: t.installScopeBothLabel,
+      desc: t.installScopeBothDesc,
+    },
+  ];
+
+  console.log(`  ${C.bold}${C.cyan}?${C.reset} ${t.installScopePrompt}\n`);
+
+  scopes.forEach((scope, i) => {
+    const defaultMark =
+      scope.id === "both" ? `${C.green}(default)${C.reset} ` : "";
+    console.log(
+      `    ${C.dim}${i + 1}.${C.reset} ${C.bold}${scope.label}${C.reset} ${defaultMark}`,
+    );
+    console.log(`        ${C.dim}${scope.desc}${C.reset}`);
+  });
+
+  const answer = await ask(t.choose(3));
+  const idx = parseInt(answer, 10) - 1;
+
+  // 默认选择 both (idx=2)，无效输入也返回 both
+  const selected = idx >= 0 && idx < 3 ? scopes[idx].id : "both";
+
+  const scopeName = {
+    project: "project-only",
+    global: "global-only",
+    both: "both",
+  }[selected];
+
+  info(`Selected: ${scopeName}`);
+  return selected;
+}
+
 // ── Global install guidance ─────────────────────────────
 
 async function ensureGlobalSkillsDir() {
@@ -774,9 +1166,20 @@ async function ensureGlobalSkillsDir() {
     return true;
   }
 
+  // Improved prompt with better context
+  const promptLines = t.globalDirPrompt.split("\n");
+  console.log(`
+  ${C.bold}${t.globalDirTitle}${C.reset}
+
+  ${promptLines[0].replace("~/.claude/skills/", `${C.cyan}~/.claude/skills/${C.reset}`)}
+  ${C.dim}•${C.reset} ${promptLines[1].split("— ")[1]}
+  ${C.dim}•${C.reset} ${promptLines[2].split("— ")[1]}
+  ${C.dim}•${C.reset} ${promptLines[3].split("— ")[1]}
+`);
+
   const shouldInstall = await askYesNo(t.globalInstallPrompt, true);
   if (!shouldInstall) {
-    skip(t.globalInstallPrompt.split("?")[0] + " — skipped");
+    skip(t.globalSkipped);
     return false;
   }
 
@@ -786,6 +1189,10 @@ async function ensureGlobalSkillsDir() {
 }
 
 // ── Dependency verification ─────────────────────────────
+// NOTE: This function is currently NOT used in the main install/update flow.
+// It checks if global skills are installed in ~/.claude/skills/.
+// Consider using it for pre-flight validation or remove if not needed.
+// Usage: call checkDependencies() before installAllSkills() to verify state.
 
 function checkDependencies() {
   heading(t.depCheckHeading);
@@ -845,64 +1252,66 @@ function openclawWorkspaceMdComplete(wsPath) {
   return OPENCLAW_WORKSPACE_MD.every((name) => existsSync(join(wsPath, name)));
 }
 
-function checkSync(runtimes) {
+function checkSync(runtimes, repoTargets = ["claude", "codex", "openclaw"]) {
   heading(t.syncHeading);
   let allOk = true;
 
   // --- Claude Code ---
-  const claudeAgentsDir = join(PROJECT_DIR, ".claude", "agents");
-  if (existsSync(claudeAgentsDir)) {
-    const agents = readdirSync(claudeAgentsDir).filter((f) =>
-      f.endsWith(".md"),
-    );
-    if (agents.length === META_AGENTS.length)
-      ok(t.syncClaudeAgents(agents.length));
-    else {
-      warn(t.syncPartial("Claude agents", agents.length, META_AGENTS.length));
+  if (repoTargets.includes("claude")) {
+    const claudeAgentsDir = join(PROJECT_DIR, ".claude", "agents");
+    if (existsSync(claudeAgentsDir)) {
+      const agents = readdirSync(claudeAgentsDir).filter((f) =>
+        f.endsWith(".md"),
+      );
+      if (agents.length === META_AGENTS.length)
+        ok(t.syncClaudeAgents(agents.length));
+      else {
+        warn(t.syncPartial("Claude agents", agents.length, META_AGENTS.length));
+        allOk = false;
+      }
+    } else {
+      fail(t.syncMissing(".claude/agents/"));
       allOk = false;
     }
-  } else {
-    fail(t.syncMissing(".claude/agents/"));
-    allOk = false;
-  }
 
-  const claudeSkillPath = join(
-    PROJECT_DIR,
-    ".claude",
-    "skills",
-    "meta-theory",
-    "SKILL.md",
-  );
-  if (existsSync(claudeSkillPath)) ok(t.syncClaudeSkills);
-  else {
-    fail(t.syncMissing(".claude/skills/meta-theory/SKILL.md"));
-    allOk = false;
-  }
+    const claudeSkillPath = join(
+      PROJECT_DIR,
+      ".claude",
+      "skills",
+      "meta-theory",
+      "SKILL.md",
+    );
+    if (existsSync(claudeSkillPath)) ok(t.syncClaudeSkills);
+    else {
+      fail(t.syncMissing(".claude/skills/meta-theory/SKILL.md"));
+      allOk = false;
+    }
 
-  const hooksDir = join(PROJECT_DIR, ".claude", "hooks");
-  if (existsSync(hooksDir)) {
-    const hooks = readdirSync(hooksDir).filter((f) => f.endsWith(".mjs"));
-    ok(t.syncClaudeHooks(hooks.length));
-  } else {
-    fail(t.syncMissing(".claude/hooks/"));
-    allOk = false;
-  }
+    const hooksDir = join(PROJECT_DIR, ".claude", "hooks");
+    if (existsSync(hooksDir)) {
+      const hooks = readdirSync(hooksDir).filter((f) => f.endsWith(".mjs"));
+      ok(t.syncClaudeHooks(hooks.length));
+    } else {
+      fail(t.syncMissing(".claude/hooks/"));
+      allOk = false;
+    }
 
-  if (existsSync(join(PROJECT_DIR, ".claude", "settings.json")))
-    ok(t.syncClaudeSettings);
-  else {
-    warn(t.syncMissing(".claude/settings.json"));
-    allOk = false;
-  }
+    if (existsSync(join(PROJECT_DIR, ".claude", "settings.json")))
+      ok(t.syncClaudeSettings);
+    else {
+      warn(t.syncMissing(".claude/settings.json"));
+      allOk = false;
+    }
 
-  if (existsSync(join(PROJECT_DIR, ".mcp.json"))) ok(t.syncClaudeMcp);
-  else {
-    warn(t.syncMissing(".mcp.json"));
-    allOk = false;
+    if (existsSync(join(PROJECT_DIR, ".mcp.json"))) ok(t.syncClaudeMcp);
+    else {
+      warn(t.syncMissing(".mcp.json"));
+      allOk = false;
+    }
   }
 
   // --- Codex ---
-  if (runtimes.codex || existsSync(join(PROJECT_DIR, ".codex"))) {
+  if (repoTargets.includes("codex")) {
     const codexAgentsDir = join(PROJECT_DIR, ".codex", "agents");
     if (existsSync(codexAgentsDir)) {
       const agents = readdirSync(codexAgentsDir).filter((f) =>
@@ -933,7 +1342,7 @@ function checkSync(runtimes) {
   }
 
   // --- OpenClaw ---
-  if (runtimes.openclaw || existsSync(join(PROJECT_DIR, "openclaw"))) {
+  if (repoTargets.includes("openclaw")) {
     const ocWorkspaces = join(PROJECT_DIR, "openclaw", "workspaces");
     if (existsSync(ocWorkspaces)) {
       const wsDirs = readdirSync(ocWorkspaces, { withFileTypes: true })
@@ -965,11 +1374,13 @@ function checkSync(runtimes) {
   }
 
   // --- Shared ---
-  const sharedSkill = join(PROJECT_DIR, "shared-skills", "meta-theory.md");
-  if (existsSync(sharedSkill)) ok(t.syncSharedSkills);
-  else {
-    warn(t.syncMissing("shared-skills/meta-theory.md"));
-    allOk = false;
+  if (repoTargets.includes("openclaw")) {
+    const sharedSkill = join(PROJECT_DIR, "shared-skills", "meta-theory.md");
+    if (existsSync(sharedSkill)) ok(t.syncSharedSkills);
+    else {
+      warn(t.syncMissing("shared-skills/meta-theory.md"));
+      allOk = false;
+    }
   }
 
   console.log();
@@ -1042,8 +1453,14 @@ async function detectRuntimes() {
   if (!runtimes.claude && !runtimes.codex && !runtimes.openclaw) {
     console.log(`\n  ${C.yellow}⚠ ${t.noRuntime}${C.reset}`);
     console.log(`  ${C.dim}${t.noRuntimeHint1}${C.reset}`);
-    console.log(`  ${C.dim}${t.noRuntimeHint2}${C.reset}\n`);
-    const proceed = await askYesNo(t.continueAnyway, true);
+    console.log(
+      `  ${C.dim}${fmt(t.noRuntimeHint2, {
+        claudeCodeDocs:
+          EXTERNAL_URLS.claudeCodeDocs ||
+          "https://docs.anthropic.com/en/docs/claude-code",
+      })}${C.reset}\n`,
+    );
+    const proceed = await askYesNo(t.continueAnyway, false);
     if (!proceed) {
       console.log(`\n  ${C.dim}${t.setupCancelled}${C.reset}\n`);
       process.exit(0);
@@ -1053,122 +1470,67 @@ async function detectRuntimes() {
   return runtimes;
 }
 
+function detectedTargetIds(runtimes) {
+  return RUNTIME_CHOICES.filter((choice) => runtimes[choice.id]).map(
+    (choice) => choice.id,
+  );
+}
+
+async function selectActiveTargets(runtimes) {
+  const { cliTargets, defaultTargets } = await resolveTargetContext(args);
+  const localOverrides = await loadLocalOverrides();
+
+  if (cliTargets.length > 0) {
+    await writeLocalOverrides({ ...localOverrides, activeTargets: cliTargets });
+    info(`Active runtimes saved from --targets: ${cliTargets.join(", ")}`);
+    return cliTargets;
+  }
+
+  const detected = detectedTargetIds(runtimes);
+  const suggestedTargets =
+    localOverrides.activeTargets?.length > 0
+      ? localOverrides.activeTargets
+      : detected.length > 0
+        ? detected
+        : defaultTargets;
+
+  const chosenTargets = await askMultiSelectTargets(
+    t.selectRuntimeTargets,
+    RUNTIME_CHOICES,
+    suggestedTargets,
+  );
+
+  await writeLocalOverrides({
+    ...localOverrides,
+    activeTargets: chosenTargets,
+  });
+  info(`Saved active runtime targets: ${chosenTargets.join(", ")}`);
+  return chosenTargets;
+}
+
+function runNodeScript(scriptRelative, extraArgs = []) {
+  return spawnSync(
+    process.execPath,
+    [join(PROJECT_DIR, scriptRelative), ...extraArgs],
+    {
+      cwd: PROJECT_DIR,
+      stdio: "inherit",
+      shell: false,
+    },
+  );
+}
+
 // ── Step 3: Auto-configure project files ────────────────
 
-async function autoConfigure(runtimes) {
+async function autoConfigure() {
   heading(t.stepConfig);
-
-  const mcpPath = join(PROJECT_DIR, ".mcp.json");
-  if (existsSync(mcpPath)) {
-    ok(t.mcpExists);
-  } else {
-    const mcpConfig = {
-      mcpServers: {
-        "meta-kim-runtime": {
-          type: "stdio",
-          command: "node",
-          args: ["scripts/mcp/meta-runtime-server.mjs"],
-          env: {},
-        },
-      },
-    };
-    writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n");
-    ok(t.mcpCreated);
+  const syncResult = runNodeScript("scripts/sync-runtimes.mjs");
+  if (syncResult.status === 0) {
+    ok("Repo projections synced from canonical/");
+    return true;
   }
-
-  if (runtimes.claude) {
-    const settingsDir = join(PROJECT_DIR, ".claude");
-    const settingsPath = join(settingsDir, "settings.json");
-    if (existsSync(settingsPath)) {
-      ok(t.settingsExists);
-    } else {
-      const shouldCreate = await askYesNo(t.askCreateSettings, true);
-      if (shouldCreate) {
-        mkdirSync(settingsDir, { recursive: true });
-        const settings = {
-          permissions: {
-            deny: [
-              "Read(./.env)",
-              "Read(./.env.*)",
-              "Read(./secrets/**)",
-              "Read(./**/*.pem)",
-              "Read(./**/*.key)",
-            ],
-          },
-          hooks: {
-            PreToolUse: [
-              {
-                matcher: "Bash",
-                hooks: [
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/block-dangerous-bash.mjs",
-                  },
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/pre-git-push-confirm.mjs",
-                  },
-                ],
-              },
-            ],
-            PostToolUse: [
-              {
-                matcher: "Edit|Write",
-                hooks: [
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/post-format.mjs",
-                  },
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/post-typecheck.mjs",
-                  },
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/post-console-log-warn.mjs",
-                  },
-                ],
-              },
-            ],
-            SubagentStart: [
-              {
-                matcher: "*",
-                hooks: [
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/subagent-context.mjs",
-                  },
-                ],
-              },
-            ],
-            Stop: [
-              {
-                matcher: "*",
-                hooks: [
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/stop-console-log-audit.mjs",
-                  },
-                  {
-                    type: "command",
-                    command: "node .claude/hooks/stop-completion-guard.mjs",
-                  },
-                ],
-              },
-            ],
-          },
-        };
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-        ok(t.settingsCreated);
-      } else {
-        skip(t.settingsSkipped);
-      }
-    }
-  } else {
-    skip(t.settingsSkippedNoClaude);
-  }
-
-  return true;
+  warn("Repo projection sync failed");
+  return false;
 }
 
 // ── Step 4: npm install + skills ────────────────────────
@@ -1257,6 +1619,10 @@ function installSkillFromSubdir(skill, target, proxy) {
   }
 }
 
+// NOTE: This function is currently NOT used in the main install flow.
+// Skills installation is now handled by scripts/install-global-skills-all-runtimes.mjs
+// which is called from runInstall(). This function is kept for reference
+// or potential future use cases where direct skill installation is needed.
 async function installAllSkills() {
   heading(t.stepSkills);
   if (!silentMode) {
@@ -1322,10 +1688,14 @@ async function installPythonTools() {
   // Register Claude skill — use python -m graphify, not bare "graphify" command
   // graphifyy installs a module, not a system PATH command on Windows
   info(t.graphifySkillRegistering);
-  const skillResult = spawnSync(pyCmd, ["-m", "graphify", "claude", "install"], {
-    stdio: "inherit",
-    shell: isWin,
-  });
+  const skillResult = spawnSync(
+    pyCmd,
+    ["-m", "graphify", "claude", "install"],
+    {
+      stdio: "inherit",
+      shell: isWin,
+    },
+  );
   if (skillResult.status === 0) {
     ok(t.graphifySkillRegistered);
   } else {
@@ -1388,7 +1758,10 @@ ${C.bold}  ${t.howToUse}${C.reset}
   if (!runtimes.claude && !runtimes.codex && !runtimes.openclaw) {
     console.log(`  ${C.yellow}${t.noRuntimeGetStarted}${C.reset}`);
     console.log(
-      `  ${C.dim}https://docs.anthropic.com/en/docs/claude-code${C.reset}`,
+      `  ${C.dim}${
+        EXTERNAL_URLS.claudeCodeDocs ||
+        "https://docs.anthropic.com/en/docs/claude-code"
+      }${C.reset}`,
     );
   }
 
@@ -1483,9 +1856,12 @@ function bannerLogo() {
     art.push(line);
   }
   const contacts = [
-    "Website: https://www.aiking.dev/",
-    "GitHub:  https://github.com/KimYx0207",
-    "Feishu:  https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf",
+    `Website: ${EXTERNAL_URLS.author?.website || "https://www.aiking.dev/"}`,
+    `GitHub:  ${EXTERNAL_URLS.author?.github || "https://github.com/KimYx0207"}`,
+    `Feishu:  ${
+      EXTERNAL_URLS.author?.feishu ||
+      "https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf"
+    }`,
     "WeChat:  老金带你玩AI",
   ];
   const dw = (s) =>
@@ -1564,20 +1940,29 @@ async function main() {
   // ── CLI shortcut modes (non-interactive) ──
   if (checkOnly) {
     console.log(`\n${C.green}  ${t.envOk}${C.reset}\n`);
-    checkDependencies();
-    const fakeRuntimes = {
-      claude: true,
-      codex: existsSync(join(PROJECT_DIR, ".codex")),
-      openclaw: existsSync(join(PROJECT_DIR, "openclaw")),
-    };
-    checkSync(fakeRuntimes);
+    const detectedRuntimes = await detectRuntimes();
+    const targetContext = await resolveTargetContext(args);
+    checkSync(detectedRuntimes, targetContext.supportedTargets);
+    console.log(
+      `  ${C.dim}activeTargets=${targetContext.activeTargets.join(", ")} supportedTargets=${targetContext.supportedTargets.join(", ")}${C.reset}`,
+    );
     const localState = await ensureProfileState();
     console.log(`${C.bold}  Local state${C.reset}`);
-    console.log(`    ${C.dim}profile=${localState.profile} key=${localState.metadata.profileKey}${C.reset}`);
-    console.log(`    ${C.dim}run index: ${toRepoRelative(localState.runIndexPath)}${C.reset}`);
-    console.log(`    ${C.dim}compaction: ${toRepoRelative(localState.compactionDir)}${C.reset}`);
-    console.log(`    ${C.dim}dispatch envelope: contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket${C.reset}`);
-    console.log(`    ${C.dim}migration helper: npm run migrate:meta-kim -- <source-dir> --apply${C.reset}\n`);
+    console.log(
+      `    ${C.dim}profile=${localState.profile} key=${localState.metadata.profileKey}${C.reset}`,
+    );
+    console.log(
+      `    ${C.dim}run index: ${toRepoRelative(localState.runIndexPath)}${C.reset}`,
+    );
+    console.log(
+      `    ${C.dim}compaction: ${toRepoRelative(localState.compactionDir)}${C.reset}`,
+    );
+    console.log(
+      `    ${C.dim}dispatch envelope: contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket${C.reset}`,
+    );
+    console.log(
+      `    ${C.dim}migration helper: npm run migrate:meta-kim -- <source-dir> --apply${C.reset}\n`,
+    );
     process.exit(0);
   }
 
@@ -1609,21 +1994,111 @@ async function main() {
 // ── Action runners ──────────────────────────────────────
 
 async function runInstall() {
-  const hasGlobalDir = await ensureGlobalSkillsDir();
   const runtimes = await detectRuntimes();
-  await autoConfigure(runtimes);
-  if (hasGlobalDir) await installAllSkills();
-  await installPythonTools();
-  checkDependencies();
-  checkSync(runtimes);
-  await validate();
+  const activeTargets = await selectActiveTargets(runtimes);
+
+  // 新增：询问安装范围
+  const installScope = await askInstallScope();
+
+  // Show installation overview
+  showInstallOverview(activeTargets);
+
+  const confirm = await askYesNo(t.confirmStartInstall, true);
+  if (!confirm) {
+    console.log(`\n${C.dim}${t.installCancelled}${C.reset}\n`);
+    process.exit(0);
+  }
+
+  console.log();
+
+  const needProject = installScope === "project" || installScope === "both";
+  const needGlobal = installScope === "global" || installScope === "both";
+
+  // 步骤计数
+  let stepNum = 0;
+
+  // 项目本地同步 (project-only 或 both)
+  if (needProject) {
+    stepNum++;
+    await withProgress(
+      `Step ${stepNum}: Sync project runtime files`,
+      async () => {
+        const configResult = await autoConfigure();
+        if (!configResult) {
+          warn(t.warnConfigSyncFailed);
+        }
+        return configResult;
+      },
+    );
+  }
+
+  // 全局安装 (global-only 或 both)
+  if (needGlobal) {
+    // 准备全局目录
+    stepNum++;
+    await withProgress(
+      `Step ${stepNum}: Prepare global skills directory`,
+      async () => {
+        const dirReady = existsSync(SKILLS_DIR);
+        if (!dirReady) {
+          mkdirSync(SKILLS_DIR, { recursive: true });
+        }
+        ok(t.globalDirReady(SKILLS_DIR));
+        return true;
+      },
+    );
+
+    // 安装全局技能
+    stepNum++;
+    await withProgress(`Step ${stepNum}: Install global skills`, () => {
+      const installResult = runNodeScript(
+        "scripts/install-global-skills-all-runtimes.mjs",
+        ["--targets", activeTargets.join(",")],
+      );
+      if (installResult.status !== 0) {
+        warn(t.warnSkillsInstallFailed);
+      }
+      return installResult.status === 0;
+    });
+
+    // 同步全局 meta-theory
+    stepNum++;
+    await withProgress(`Step ${stepNum}: Sync meta-theory to global`, () => {
+      const syncResult = runNodeScript("scripts/sync-global-meta-theory.mjs", [
+        "--targets",
+        activeTargets.join(","),
+      ]);
+      if (syncResult.status !== 0) {
+        warn(t.warnMetaTheorySyncFailed);
+      }
+      return syncResult.status === 0;
+    });
+  }
+
+  // 最终验证
+  stepNum++;
+  await withProgress(`Step ${stepNum}: Final validation`, async () => {
+    await installPythonTools();
+    const { supportedTargets } = await resolveTargetContext(args);
+
+    // 根据安装范围检查不同的同步状态
+    const checkTargets = needProject ? supportedTargets : [];
+    checkSync(runtimes, checkTargets);
+
+    await validate();
+  });
+
+  console.log(`\n${C.green}${C.bold}  ${t.installComplete}${C.reset}\n`);
   showNextSteps(runtimes);
 }
 
 async function runUpdate() {
   heading(t.updateHeading);
-  const reGlobal = await askYesNo(t.updateReGlobal, false);
-  if (reGlobal) await ensureGlobalSkillsDir();
+  const runtimes = await detectRuntimes();
+  const reselectTargets = await askYesNo(t.askReselectRuntimes, false);
+  const activeTargets = reselectTargets
+    ? await selectActiveTargets(runtimes)
+    : (await resolveTargetContext(args)).activeTargets;
 
   info(t.updateNpm);
   const npmResult = spawnSync("npm", ["install"], {
@@ -1634,38 +2109,47 @@ async function runUpdate() {
   if (npmResult.status === 0) ok(t.npmDone);
   else warn(t.npmFailed);
 
-  heading(t.updateSkills);
-  mkdirSync(SKILLS_DIR, { recursive: true });
-  for (const skill of SKILLS) installSkill(skill);
   await installPythonTools();
 
   const doSync = await askYesNo(t.updateSyncRuntimes, true);
   if (doSync) {
     info(t.updateSyncing);
-    const syncResult = spawnSync("npm", ["run", "sync:runtimes"], {
-      cwd: PROJECT_DIR,
-      stdio: "inherit",
-      shell: isWin,
-    });
+    const syncResult = runNodeScript("scripts/sync-runtimes.mjs");
     if (syncResult.status === 0) ok(t.updateSyncDone);
     else warn(t.updateSyncSkip);
   }
 
-  const runtimes = await detectRuntimes();
-  checkDependencies();
-  checkSync(runtimes);
+  // 安装全局技能并检查结果
+  const updateInstallResult = runNodeScript(
+    "scripts/install-global-skills-all-runtimes.mjs",
+    ["--update", "--targets", activeTargets.join(",")],
+  );
+  if (updateInstallResult.status !== 0) {
+    warn(t.warnSkillsUpdateFailed);
+  }
+
+  // 同步全局 meta-theory 并检查结果
+  const updateSyncResult = runNodeScript(
+    "scripts/sync-global-meta-theory.mjs",
+    ["--targets", activeTargets.join(",")],
+  );
+  if (updateSyncResult.status !== 0) {
+    warn(t.warnMetaTheoryUpdateFailed);
+  }
+
+  const { supportedTargets } = await resolveTargetContext(args);
+  checkSync(runtimes, supportedTargets);
   console.log(`\n${C.bold}${C.green}  ${t.updateComplete}${C.reset}\n`);
 }
 
 async function runCheck() {
   console.log(`\n${C.green}  ${t.envOk}${C.reset}\n`);
-  checkDependencies();
-  const fakeRuntimes = {
-    claude: true,
-    codex: existsSync(join(PROJECT_DIR, ".codex")),
-    openclaw: existsSync(join(PROJECT_DIR, "openclaw")),
-  };
-  checkSync(fakeRuntimes);
+  const runtimes = await detectRuntimes();
+  const targetContext = await resolveTargetContext(args);
+  checkSync(runtimes, targetContext.supportedTargets);
+  console.log(
+    `  ${C.dim}activeTargets=${targetContext.activeTargets.join(", ")} supportedTargets=${targetContext.supportedTargets.join(", ")}${C.reset}`,
+  );
 }
 
 main().catch((err) => {

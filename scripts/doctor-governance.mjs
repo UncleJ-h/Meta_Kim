@@ -17,6 +17,7 @@ import {
   ensureProfileState,
   toRepoRelative,
 } from "./meta-kim-local-state.mjs";
+import { resolveTargetContext } from "./meta-kim-sync-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -34,9 +35,20 @@ const EXPECTED_CLAUDE_HOOK_COMMANDS = [
   "node .claude/hooks/stop-completion-guard.mjs",
 ];
 
-const CONTRACT = path.join(repoRoot, "contracts", "workflow-contract.json");
+const CONTRACT = path.join(
+  repoRoot,
+  "config",
+  "contracts",
+  "workflow-contract.json",
+);
 const SETTINGS = path.join(repoRoot, ".claude", "settings.json");
-const FIXTURE = path.join(repoRoot, "tests", "fixtures", "run-artifacts", "valid-run.json");
+const FIXTURE = path.join(
+  repoRoot,
+  "tests",
+  "fixtures",
+  "run-artifacts",
+  "valid-run.json",
+);
 
 function collectClaudeHookCommands(hooksRoot) {
   const commands = [];
@@ -63,7 +75,9 @@ async function checkContract() {
   const json = JSON.parse(raw);
   const v = json.schemaVersion;
   if (typeof v !== "number") {
-    throw new Error("workflow-contract.json: schemaVersion missing or not a number");
+    throw new Error(
+      "workflow-contract.json: schemaVersion missing or not a number",
+    );
   }
   return v;
 }
@@ -72,13 +86,15 @@ async function checkHooks() {
   const settings = JSON.parse(await fs.readFile(SETTINGS, "utf8"));
   const hooks = settings.hooks;
   if (!hooks?.PreToolUse?.length || !hooks?.PostToolUse?.length) {
-    throw new Error(".claude/settings.json: missing PreToolUse or PostToolUse hooks");
+    throw new Error(
+      ".claude/settings.json: missing PreToolUse or PostToolUse hooks",
+    );
   }
   const found = collectClaudeHookCommands(hooks).sort();
   const expected = [...EXPECTED_CLAUDE_HOOK_COMMANDS].sort();
   if (JSON.stringify(found) !== JSON.stringify(expected)) {
     throw new Error(
-      `Hook command set mismatch.\n  expected (${expected.length}): ${expected.join(", ")}\n  found (${found.length}): ${found.join(", ")}`
+      `Hook command set mismatch.\n  expected (${expected.length}): ${expected.join(", ")}\n  found (${found.length}): ${found.join(", ")}`,
     );
   }
 }
@@ -87,7 +103,7 @@ async function checkSync() {
   const { stderr, stdout } = await execFileAsync(
     process.execPath,
     [path.join(repoRoot, "scripts", "sync-runtimes.mjs"), "--check"],
-    { cwd: repoRoot, encoding: "utf8" }
+    { cwd: repoRoot, encoding: "utf8" },
   );
   if (stderr && stderr.trim()) {
     process.stderr.write(stderr);
@@ -102,7 +118,7 @@ async function checkValidateRun() {
   const { stdout, stderr } = await execFileAsync(
     process.execPath,
     [path.join(repoRoot, "scripts", "validate-run-artifact.mjs"), artifactRel],
-    { cwd: repoRoot, encoding: "utf8" }
+    { cwd: repoRoot, encoding: "utf8" },
   );
   if (stderr?.trim()) {
     process.stderr.write(stderr);
@@ -111,7 +127,9 @@ async function checkValidateRun() {
   try {
     parsed = JSON.parse((stdout ?? "").trim() || "{}");
   } catch {
-    throw new Error(`validate:run output was not JSON: ${String(stdout).slice(0, 240)}`);
+    throw new Error(
+      `validate:run output was not JSON: ${String(stdout).slice(0, 240)}`,
+    );
   }
   if (!parsed.ok) {
     throw new Error("validate:run reported ok: false");
@@ -123,13 +141,14 @@ async function checkValidateRun() {
 
 async function checkLocalState() {
   const state = await ensureProfileState();
+  const targetContext = await resolveTargetContext();
   const collision = await detectProfileCollision({
     profile: state.profile,
     runtimeFamily: state.runtimeFamily,
   });
   if (collision.collision) {
     throw new Error(
-      `profile collision detected for ${state.profile}: expected ${collision.expectedProfileKey}, found ${collision.existing?.profileKey}`
+      `profile collision detected for ${state.profile}: expected ${collision.expectedProfileKey}, found ${collision.existing?.profileKey}`,
     );
   }
   let runIndexReady = false;
@@ -144,6 +163,8 @@ async function checkLocalState() {
     profile: state.profile,
     profileKey: state.metadata.profileKey,
     runtimeFamily: state.runtimeFamily,
+    activeTargets: targetContext.activeTargets,
+    supportedTargets: targetContext.supportedTargets,
     runIndexReady,
     runIndexPath: toRepoRelative(state.runIndexPath),
     compactionDir: toRepoRelative(state.compactionDir),
@@ -160,7 +181,9 @@ async function main() {
 
   try {
     const schemaVersion = await checkContract();
-    canonicalLines.push(`  [ok] workflow-contract.json schemaVersion=${schemaVersion}`);
+    canonicalLines.push(
+      `  [ok] workflow-contract.json schemaVersion=${schemaVersion}`,
+    );
   } catch (e) {
     failed = true;
     canonicalLines.push(`  [fail] contract: ${e.message}`);
@@ -168,7 +191,9 @@ async function main() {
 
   try {
     await checkValidateRun();
-    canonicalLines.push(`  [ok] validate:run on ${path.relative(repoRoot, FIXTURE).replace(/\\/g, "/")}`);
+    canonicalLines.push(
+      `  [ok] validate:run on ${path.relative(repoRoot, FIXTURE).replace(/\\/g, "/")}`,
+    );
   } catch (e) {
     failed = true;
     canonicalLines.push(`  [fail] validate:run: ${e.message}`);
@@ -190,7 +215,9 @@ async function main() {
 
   try {
     await checkHooks();
-    runtimeLines.push(`  [ok] .claude/settings.json hook commands (${EXPECTED_CLAUDE_HOOK_COMMANDS.length} commands)`);
+    runtimeLines.push(
+      `  [ok] .claude/settings.json hook commands (${EXPECTED_CLAUDE_HOOK_COMMANDS.length} commands)`,
+    );
   } catch (e) {
     failed = true;
     runtimeLines.push(`  [fail] hooks: ${e.message}`);
@@ -202,10 +229,13 @@ async function main() {
   try {
     const localState = await checkLocalState();
     localLines.push(
-      `  [ok] profile=${localState.profile} runtime=${localState.runtimeFamily} key=${localState.profileKey}`
+      `  [ok] profile=${localState.profile} runtime=${localState.runtimeFamily} key=${localState.profileKey}`,
     );
     localLines.push(
-      `  [ok] run index ${localState.runIndexReady ? "ready" : "not-built-yet"}: ${localState.runIndexPath}`
+      `  [ok] activeTargets=${localState.activeTargets.join(", ")} supportedTargets=${localState.supportedTargets.join(", ")}`,
+    );
+    localLines.push(
+      `  [ok] run index ${localState.runIndexReady ? "ready" : "not-built-yet"}: ${localState.runIndexPath}`,
     );
     localLines.push(`  [ok] compaction dir: ${localState.compactionDir}`);
   } catch (e) {
@@ -223,7 +253,7 @@ async function main() {
   console.log(localLines.join("\n"));
   if (failed) {
     console.error(
-      "\nDoctor finished with failures. Fix the items above, then run: npm run sync:runtimes && npm run validate"
+      "\nDoctor finished with failures. Fix the items above, then run: npm run sync:runtimes && npm run validate",
     );
     process.exitCode = 1;
   } else {

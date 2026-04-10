@@ -1,11 +1,39 @@
+# ========== Dependencies ==========
 node_modules/
 npm-debug.log*
-docs/
-image/
-openclaw/openclaw.local.json
-openclaw/workspaces/*/.openclaw/
-.claude/capability-index/
-.meta-kim/state/
 
-# Memory — auto-generated run records, not source code
-memory/governance-reviews/*.md
+# ========== Runtime Projections (Generated from canonical/) ==========
+# These are DERIVED assets, NOT source. Edit canonical/ instead.
+.claude/agents/
+.claude/hooks/
+.claude/skills/
+.claude/settings.json
+.mcp.json
+.codex/
+.agents/
+openclaw/workspaces/
+openclaw/workspaces/*/.openclaw/
+openclaw/skills/
+openclaw/openclaw.template.json
+shared-skills/meta-theory.md
+shared-skills/references/
+
+# ========== Runtime State (Local only, never commit) ==========
+.meta-kim/state/
+.meta-kim/local.overrides.json
+.claude/capability-index/
+
+# ========== Runtime Directories ==========
+runtimes/
+
+# ========== Auto-generated Records (Not source code) ==========
+memory/governance-reviews/
+
+# ========== Backup / Temporary ==========
+backup/
+.backup/
+
+# ========== Images (moved to docs/images/) ==========
+# Only ignore root-level images/, not docs/images/
+/images/
+

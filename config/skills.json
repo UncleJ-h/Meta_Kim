@@ -1,0 +1,68 @@
+{
+  "$schema": "./contracts/skills-manifest.schema.json",
+  "schemaVersion": 1,
+  "skillOwner": "KimYx0207",
+  "skills": [
+    {
+      "id": "agent-teams-playbook",
+      "repo": "${skillOwner}/agent-teams-playbook",
+      "targets": ["claude", "codex", "openclaw"]
+    },
+    {
+      "id": "findskill",
+      "repo": "${skillOwner}/findskill",
+      "subdirTemplate": "{platform}",
+      "subdirMapping": {
+        "win32": "windows",
+        "default": "original"
+      },
+      "targets": ["claude", "codex", "openclaw"]
+    },
+    {
+      "id": "hookprompt",
+      "repo": "${skillOwner}/HookPrompt",
+      "targets": ["claude"]
+    },
+    {
+      "id": "superpowers",
+      "repo": "obra/superpowers",
+      "claudePlugin": "superpowers@claude-plugins-official",
+      "targets": ["claude"]
+    },
+    {
+      "id": "everything-claude-code",
+      "repo": "affaan-m/everything-claude-code",
+      "targets": ["claude"]
+    },
+    {
+      "id": "planning-with-files",
+      "repo": "OthmanAdi/planning-with-files",
+      "subdir": "skills/planning-with-files",
+      "targets": ["claude", "codex", "openclaw"]
+    },
+    {
+      "id": "cli-anything",
+      "repo": "HKUDS/CLI-Anything",
+      "targets": ["claude", "codex", "openclaw"]
+    },
+    {
+      "id": "gstack",
+      "repo": "garrytan/gstack",
+      "targets": ["claude", "codex", "openclaw"]
+    },
+    {
+      "id": "skill-creator",
+      "repo": "anthropics/skills",
+      "subdir": "skills/skill-creator",
+      "targets": ["claude", "codex", "openclaw"]
+    }
+  ],
+  "externalUrls": {
+    "claudeCodeDocs": "https://docs.anthropic.com/en/docs/claude-code",
+    "author": {
+      "website": "https://www.aiking.dev/",
+      "github": "https://github.com/KimYx0207",
+      "feishu": "https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf"
+    }
+  }
+}

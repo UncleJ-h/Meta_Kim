@@ -15,11 +15,13 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { resolveTargetContext } from "./meta-kim-sync-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -30,44 +32,61 @@ const pluginsOnly = process.argv.includes("--plugins-only");
 const skipPlugins =
   process.argv.includes("--skip-plugins") ||
   process.argv.includes("--no-plugins");
+const cliArgs = process.argv.slice(2);
 
 /**
- * Keep in sync with install-deps.sh / setup.mjs.
- * Use `subdir` when the installable skill lives under a path like skills/<name>/ (repo root has no SKILL.md).
- * Note: Hooks in SKILL frontmatter only apply once the skill is discoverable. User-level commands under
- * a repo’s .claude/commands are not merged by cloning into ~/.claude/skills/<id> — use `claude plugin install`
- * for plugin bundles (e.g. superpowers@claude-plugins-official).
+ * Load skills manifest from shared config (single source of truth)
+ * Same as setup.mjs - ensures consistency across all installation paths
  */
-// findskill 上游分包：win32 → windows/；darwin、linux、aix、freebsd 等 → original/（非 Windows 统一走 original，不是「只支持 Windows」）。
-const FINDSKILL_SUBDIR = os.platform() === "win32" ? "windows" : "original";
+function loadSkillsManifest() {
+  const manifestPath = path.join(repoRoot, "config", "skills.json");
+  try {
+    const raw = readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(raw);
 
-const SKILL_REPOS = [
-  {
-    id: "agent-teams-playbook",
-    repo: "https://github.com/KimYx0207/agent-teams-playbook.git",
-  },
-  {
-    id: "findskill",
-    repo: "https://github.com/KimYx0207/findskill.git",
-    subdir: FINDSKILL_SUBDIR,
-  },
-  { id: "hookprompt", repo: "https://github.com/KimYx0207/HookPrompt.git" },
-  { id: "superpowers", repo: "https://github.com/obra/superpowers.git" },
-  {
-    id: "everything-claude-code",
-    repo: "https://github.com/affaan-m/everything-claude-code.git",
-  },
-  {
-    id: "planning-with-files",
-    repo: "https://github.com/OthmanAdi/planning-with-files.git",
-    subdir: "skills/planning-with-files",
-  },
-  { id: "cli-anything", repo: "https://github.com/HKUDS/CLI-Anything.git" },
-  { id: "gstack", repo: "https://github.com/garrytan/gstack.git" },
-];
+    // Allow env var override
+    const skillOwner =
+      process.env.META_KIM_SKILL_OWNER || manifest.skillOwner || "KimYx0207";
 
-/** Official marketplace plugins (full bundle: commands + skills + hooks when upstream provides). */
-const CLAUDE_PLUGIN_SPECS = ["superpowers@claude-plugins-official"];
+    // findskill platform-specific subdir
+    const findskillSubdir = os.platform() === "win32" ? "windows" : "original";
+
+    // Transform manifest to script’s format
+    const skillRepos = [];
+    const claudePluginSpecs = [];
+
+    for (const skill of manifest.skills) {
+      const repo = skill.repo.replace("${skillOwner}", skillOwner);
+      const fullUrl = `https://github.com/${repo}.git`;
+
+      let subdir = skill.subdir;
+      // Handle subdir with platform mapping
+      if (skill.subdirTemplate === "{platform}" && skill.subdirMapping) {
+        subdir =
+          skill.subdirMapping[os.platform()] || skill.subdirMapping.default;
+      }
+
+      skillRepos.push({
+        id: skill.id,
+        repo: fullUrl,
+        ...(subdir && { subdir }),
+        targets: skill.targets || ["claude", "codex", "openclaw"],
+      });
+
+      if (skill.claudePlugin) {
+        claudePluginSpecs.push(skill.claudePlugin);
+      }
+    }
+
+    return { skillRepos, claudePluginSpecs };
+  } catch (err) {
+    console.warn(`Failed to load skills manifest: ${err.message}`);
+    return { skillRepos: [], claudePluginSpecs: [] };
+  }
+}
+
+const { skillRepos: SKILL_REPOS, claudePluginSpecs: CLAUDE_PLUGIN_SPECS } =
+  loadSkillsManifest();
 
 function runtimeDir(envKeys, fallbackName) {
   for (const key of envKeys) {
@@ -235,7 +254,7 @@ async function installSkillCreator(targetBaseSkills) {
   }
 }
 
-async function installAllSkillsForRuntime(label, skillsRoot) {
+async function installAllSkillsForRuntime(label, skillsRoot, runtimeId) {
   console.log(`\n--- ${label}: ${skillsRoot} ---`);
   assertUnderHome(skillsRoot);
   if (!dryRun) {
@@ -243,6 +262,10 @@ async function installAllSkillsForRuntime(label, skillsRoot) {
   }
 
   for (const spec of SKILL_REPOS) {
+    if (spec.targets && !spec.targets.includes(runtimeId)) {
+      console.log(`[SKIP] ${spec.id} — not applicable to ${runtimeId}`);
+      continue;
+    }
     const targetDir = path.join(skillsRoot, spec.id);
     if (spec.subdir) {
       await installGitSkillFromSubdir(targetDir, spec.repo, spec.subdir);
@@ -283,24 +306,36 @@ function installClaudePlugins() {
 }
 
 async function main() {
+  const { activeTargets } = await resolveTargetContext(cliArgs);
   const homes = resolveHomes();
 
   if (!pluginsOnly) {
-    await installAllSkillsForRuntime(
-      "Claude Code skills",
-      path.join(homes.claude, "skills"),
-    );
-    await installAllSkillsForRuntime(
-      "Codex skills",
-      path.join(homes.codex, "skills"),
-    );
-    await installAllSkillsForRuntime(
-      "OpenClaw skills",
-      path.join(homes.openclaw, "skills"),
-    );
+    if (activeTargets.includes("claude")) {
+      await installAllSkillsForRuntime(
+        "Claude Code skills",
+        path.join(homes.claude, "skills"),
+        "claude",
+      );
+    }
+    if (activeTargets.includes("codex")) {
+      await installAllSkillsForRuntime(
+        "Codex skills",
+        path.join(homes.codex, "skills"),
+        "codex",
+      );
+    }
+    if (activeTargets.includes("openclaw")) {
+      await installAllSkillsForRuntime(
+        "OpenClaw skills",
+        path.join(homes.openclaw, "skills"),
+        "openclaw",
+      );
+    }
   }
 
-  installClaudePlugins();
+  if (activeTargets.includes("claude")) {
+    installClaudePlugins();
+  }
 
   // Optional: graphify (code knowledge graph)
   if (!pluginsOnly) {
@@ -368,7 +403,8 @@ async function main() {
   console.log(
     "Note: Codex/OpenClaw have no Claude Code plugin format — same repos are mirrored as skill directories only.",
   );
-  console.log(`Meta_Kim repo (canonical agents/skills): ${repoRoot}`);
+  console.log(`Active runtime targets: ${activeTargets.join(", ")}`);
+  console.log(`Meta_Kim repo (canonical source root): ${repoRoot}`);
 }
 
 main().catch((err) => {
