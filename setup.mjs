@@ -1338,7 +1338,10 @@ function openclawWorkspaceMdComplete(wsPath) {
   return OPENCLAW_WORKSPACE_MD.every((name) => existsSync(join(wsPath, name)));
 }
 
-function checkSync(runtimes, repoTargets = ["claude", "codex", "openclaw"]) {
+function checkSync(
+  runtimes,
+  repoTargets = ["claude", "codex", "openclaw", "cursor"],
+) {
   heading(t.syncHeading);
   let allOk = true;
 
@@ -2268,12 +2271,13 @@ async function runInstall() {
     stepNum--; // don't count skipped steps
   }
 
-  // 验证
+  // 验证：project-only 和 both 检查 repo-local；global-only 跳过 repo-local 检查
   stepNum++;
   await withProgress(`Step ${stepNum}: Validate installation`, async () => {
-    const { supportedTargets } = await resolveTargetContext(args);
-    const checkTargets = needProject ? supportedTargets : [];
-    checkSync(runtimes, checkTargets);
+    if (needProject) {
+      const { supportedTargets } = await resolveTargetContext(args);
+      checkSync(runtimes, supportedTargets);
+    }
     await validate();
   });
 
