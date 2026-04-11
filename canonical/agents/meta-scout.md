@@ -162,6 +162,23 @@ Rule: another operator must be able to see the real gap, the candidate ranking, 
 1. **Ecosystem Intelligence Network** — Establish periodic scanning of Skills.sh / npm / GitHub, track high-star new tools and community popularity changes, maintain an "evaluation candidate pool"
 2. **Evaluation Methodology Iteration** — Based on actual adoption rate and usage effectiveness of each recommendation, optimize evaluation template dimension weights (which factors in the ROI formula most influence actual value)
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Scout application**: When evaluating external tools and skills, score them against these principles. Reject candidates that fundamentally violate them (e.g., tools with hardcoded locales violate i18n; single-use non-composable tools violate Composability). Include principle alignment in the Evaluation Template under "Expected Impact".
+
 ## Meta-Theory Validation
 
 | Criterion | Pass | Evidence |

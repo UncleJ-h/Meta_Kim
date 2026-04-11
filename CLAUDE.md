@@ -22,7 +22,7 @@ Meta_Kim is not Claude-only logic.
 
 It is:
 
-**one intent-amplification system projected into Claude Code, Codex, and OpenClaw, with `canonical/` as the neutral source layer.**
+**one intent-amplification system projected into Claude Code, Codex, OpenClaw, and Cursor, with `canonical/` as the neutral source layer.**
 
 ## What “Meta” Means
 
@@ -244,6 +244,9 @@ Files that should usually remain derived or runtime-specific:
 - `shared-skills/meta-theory.md` and `shared-skills/references/*`
 - `openclaw/skills/meta-theory.md` and `openclaw/skills/references/*`
 - `openclaw/workspaces/*`
+- `.cursor/agents/*.md`
+- `.cursor/skills/meta-theory/`
+- `.cursor/mcp.json`
 
 `npm run sync:runtimes` writes the **same** portable `meta-theory` skill (main file + `references/`) into `.claude/`, `shared-skills/`, `openclaw/skills/`, `.codex/skills/`, and `.agents/skills/meta-theory/`. If those trees disagree, re-run sync from `canonical/skills/meta-theory/` — do not hand-edit projections as a second source of truth.
 

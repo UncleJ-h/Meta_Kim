@@ -12,10 +12,10 @@
 </p>
 
 <p>
-  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw-111827"/>
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw%20%7C%20Cursor-111827"/>
   <img alt="Stars" src="https://img.shields.io/github/stars/KimYx0207/Meta_Kim?style=flat&logo=github"/>
   <img alt="Forks" src="https://img.shields.io/github/forks/KimYx0207/Meta_Kim?style=flat&logo=github"/>
-  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v1.5.0-7c3aed"/>
+  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v2.0.0-7c3aed"/>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green"/>
 </p>
 
@@ -25,10 +25,10 @@
 
 ## 한눈에 보기
 
-**AI 코딩 보조를 위한 거버넌스 레이어**입니다. Claude Code, Codex, OpenClaw 세 런타임에서 같은 규율을 유지해 복잡한 작업을 **먼저 제대로** 끝냅니다. 많은 도구는 곧바로 코드부터 쓰지만, Meta_Kim은 그 앞에 명확화·탐색·실행·검토·진화 단계를 둡니다.
+**AI 코딩 보조를 위한 거버넌스 레이어**입니다. Claude Code, Codex, OpenClaw, Cursor 네 런타임에서 같은 규율을 유지해 복잡한 작업을 **먼저 제대로** 끝냅니다. 많은 도구는 곧바로 코드부터 쓰지만, Meta_Kim은 그 앞에 명확화·탐색·실행·검토·진화 단계를 둡니다.
 
-- 공개 진입점은 하나, 뒤에는 메타 에이전트 8개（**영어 개념명은 Meta**. 한자 「元」는 로고·정본 용어）
-- **하나의 거버넌스 규율**을 세 런타임에 투영
+- 공개 진입점은 하나, 뒤에는 메타 에이전트 8개（**영어 개념명은 Meta**. 한자 「元」는 로고·정본 용어)
+- **하나의 거버넌스 규율**을 네 런타임에 투영
 - 복잡한 작업 흐름: 명확화 → 탐색 → 실행 → 검토 → 진화
 - **네 가지 철칙**: Critical > 추측, Fetch > 가정, Thinking > 성급함, Review > 맹신
 - 규율: 한 부서 · 하나의 주요 산출물 · 닫힌 인수인계 체인
@@ -132,7 +132,7 @@ flowchart LR
 
 ## 런타임 진입점
 
-**Meta_Kim은 세 개의 별도 프로젝트가 아니라 하나의 방법의 세 가지 투영입니다.**
+**Meta_Kim은 네 개의 별도 프로젝트가 아니라 하나의 방법의 네 가지 투영입니다.**
 
 <div align="center">
 
@@ -141,6 +141,7 @@ flowchart LR
 | Claude Code | [CLAUDE.md](CLAUDE.md) | `.claude/`, `.mcp.json` | 정본 편집 런타임 |
 | Codex | [AGENTS.md](AGENTS.md) | `.codex/`, `.agents/`, `codex/` | Codex 투영 |
 | OpenClaw | `openclaw/workspaces/` | `openclaw/` | 로컬 workspace 투영 |
+| Cursor | `.cursor/agents/` | `.cursor/` | Cursor agent·MCP 투영 |
 
 </div>
 
@@ -151,6 +152,7 @@ flowchart LR
   SRC["정본 .claude 와 contracts"] --> CC["Claude Code 편집 런타임"]
   SRC -->|미러| CX["Codex"]
   SRC -->|workspace| OW["OpenClaw"]
+  SRC -->|agent 투영| CU["Cursor"]
 ```
 
 - 유지보수는 **`canonical/`와 `config/contracts/workflow-contract.json`에서 시작**
@@ -165,6 +167,16 @@ npm install
 npm run prepare:openclaw-local
 openclaw agent --local --agent meta-warden --message "..." --json --timeout 120
 ```
+
+### Cursor에서 사용
+
+Cursor는 `.cursor/agents/` 에이전트 정의와 `.cursor/mcp.json` MCP 설정을 읽습니다. 이들은 주원본에서 생성된 투영입니다:
+
+```bash
+npm run sync:runtimes -- --targets cursor
+```
+
+`.cursor/agents/meta-warden.md`(나머지 7개 에이전트도), `.cursor/skills/meta-theory/`, `.cursor/mcp.json`이 생성됩니다. Cursor 에이전트는 YAML frontmatter가 없는 일반 Markdown 형식입니다.
 
 ## Meta_Kim의 「元(Meta)」
 
@@ -494,6 +506,7 @@ npm run graphify:update
 | `.agents/` | Codex 프로젝트 skill 미러 |
 | `codex/` | Codex 글로벌 설정 예시 |
 | `openclaw/` | OpenClaw workspaces, skills, 템플릿 |
+| `.cursor/` | Cursor agent·MCP 투영 (생성물) |
 | `config/contracts/` | 런타임 거버넌스 계약 |
 | `docs/` | 내부 메모 등, 추적 runtime 문서 소량 |
 | `scripts/` | 동기화·검증·MCP·헬스 |

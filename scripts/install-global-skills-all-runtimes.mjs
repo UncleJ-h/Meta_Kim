@@ -386,36 +386,29 @@ async function main() {
       console.log(t.pythonNotFoundGraphify);
       console.log(t.pythonInstallHintGraphify);
     } else {
-      // Use "python -m graphify" instead of bare "graphify" command
-      // graphifyy installs as a Python module, not a PATH executable
-      const gfCheck = spawnSync(pyCmd, ["-m", "graphify", "--version"], {
+      // Check if graphify already installed via pip show (more reliable than --version)
+      const pipCmd = pyCmd === "python3" ? "pip3" : "pip";
+      const pipShow = spawnSync(pipCmd, ["show", "graphifyy"], {
         encoding: "utf8",
         shell: os.platform() === "win32",
       });
-      if (gfCheck.status === 0) {
-        console.log(t.skipGraphifyInstalled((gfCheck.stdout || "").trim()));
+      if (pipShow.status === 0) {
+        const versionMatch = (pipShow.stdout || "").match(/Version:\s*(.+)/);
+        const version = versionMatch ? versionMatch[1].trim() : "unknown";
+        console.log(t.skipGraphifyInstalled(version));
       } else {
         console.log(t.installingGraphify);
-        const pipCmd = pyCmd === "python3" ? "pip3" : "pip";
         const pipResult = spawnSync(pipCmd, ["install", "graphifyy"], {
-          stdio: "inherit",
+          stdio: "pipe",
           shell: os.platform() === "win32",
         });
         if (pipResult.status === 0) {
-          console.log(t.installingGraphifySkill);
-          const skillResult = spawnSync(
-            pyCmd,
-            ["-m", "graphify", "claude", "install"],
-            {
-              stdio: "inherit",
-              shell: os.platform() === "win32",
-            },
-          );
-          if (skillResult.status === 0) {
-            console.log(t.okGraphifyInstalled);
-          } else {
-            console.warn(t.warnGraphifySkillFailed);
-          }
+          // Register Claude skill silently
+          spawnSync(pyCmd, ["-m", "graphify", "claude", "install"], {
+            stdio: "pipe",
+            shell: os.platform() === "win32",
+          });
+          console.log(t.okGraphifyInstalled);
         } else {
           console.warn(t.warnGraphifyPipFailed);
         }

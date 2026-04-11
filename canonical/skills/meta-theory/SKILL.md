@@ -286,6 +286,23 @@ Ask yourself these 3 questions. If any answer is "YES to self-execution", STOP a
 2. Am I about to write code or make file changes? → Dispatch appropriate agent
 3. Am I about to synthesize findings? → Dispatch `meta-warden`
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern. These apply to ALL Types (A/B/C/D/E) and ALL stages of the 8-stage spine.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Dispatcher application**: Before dispatching ANY agent, verify the task brief includes relevant principle constraints. During Stage 5 (Review) and Stage 7 (Verification), include principle compliance as a mandatory check dimension. When capturing evolution patterns (Stage 8), record principle violations as scars.
+
 ## References
 
 Theory and detailed specs live in `.claude/skills/meta-theory/references/`:

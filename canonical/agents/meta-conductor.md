@@ -485,6 +485,23 @@ Rule: if the board allows multiple unrelated topics, detached worker tasks, or m
 1. **Orchestration Pattern Library** — Keep reusable patterns for parallel steps, skip rules, and rollback paths
 2. **Rhythm Awareness Optimization** — Tune Intentional Silence, Interrupt, and Delivery Shell choices from execution evidence
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Conductor application**: Workflow orchestration must follow these principles. Stage cards are Composable units that combine into new workflows. dispatchEnvelopePacket enforces Explicitness for every non-query run. Single-Run Contract is Single Source in action. Parallel lane design is Decoupling between independent work streams.
+
 ## Meta-Theory Verification
 
 | Criterion | Pass | Evidence |

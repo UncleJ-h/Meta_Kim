@@ -162,6 +162,23 @@ Rule: the deliverables must answer "what is the best capability stack for this a
 1. **Skill Ecosystem Tracking** — Regularly scan Skills.sh and Claude Code ecosystem for new skills, update the platform capability index, ensure the recommendation pool stays current
 2. **ROI Model Calibration** — Collect actual usage data (which recommended skills are truly high-frequency, which were installed but unused), calibrate ROI formula weight parameters
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Artisan application**: When matching skills/tools, evaluate candidates against these principles. Reject capabilities that fundamentally violate them (e.g., tools that hardcode paths violate Configurable; monolithic all-in-one tools violate Decoupling and Layering). In ROI Scoring, add principle alignment as a bonus/malus factor.
+
 ## Meta-Theory Validation
 
 | Criterion | Pass | Evidence |

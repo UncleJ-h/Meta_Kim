@@ -12,23 +12,23 @@
 </p>
 
 <p>
-  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw-111827"/>
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw%20%7C%20Cursor-111827"/>
   <img alt="Stars" src="https://img.shields.io/github/stars/KimYx0207/Meta_Kim?style=flat&logo=github"/>
   <img alt="Forks" src="https://img.shields.io/github/forks/KimYx0207/Meta_Kim?style=flat&logo=github"/>
-  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v1.5.0-7c3aed"/>
+  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v2.0.0-7c3aed"/>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green"/>
 </p>
 
 </div>
 
-<!-- Maintainer: suggested GitHub About (avoid implying “only a mirror stack”). Example: Governance layer for AI coding: meta agents, workflow contract, meta-theory; canonical in canonical/, with generated runtime projections for Claude, Codex, and OpenClaw. -->
+<!-- Maintainer: suggested GitHub About (avoid implying “only a mirror stack”). Example: Governance layer for AI coding: meta agents, workflow contract, meta-theory; canonical in canonical/, with generated runtime projections for Claude, Codex, OpenClaw, and Cursor. -->
 
 ## At a Glance
 
-Meta_Kim is a **governance layer for AI coding assistants**: one unified discipline on Claude Code, Codex, and OpenClaw so complex work is **done right before it is done fast**. Most tools jump straight to code; Meta_Kim inserts clarify → search capabilities → plan → execute → review → evolve.
+Meta_Kim is a **governance layer for AI coding assistants**: one unified discipline on Claude Code, Codex, OpenClaw, and Cursor so complex work is **done right before it is done fast**. Most tools jump straight to code; Meta_Kim inserts clarify → search capabilities → plan → execute → review → evolve.
 
 - 8 specialized meta agents behind one public entry point
-- **One unified governance discipline** projected across Claude Code, Codex, and OpenClaw
+- **One unified governance discipline** projected across Claude Code, Codex, OpenClaw, and Cursor
 - Every complex task goes through: clarify -> search -> execute -> review -> evolve
 - **Four iron rules**: Critical > Guessing, Fetch > Assuming, Thinking > Rushing, Review > Trusting
 - Discipline: one department, one primary deliverable, one closed handoff chain
@@ -214,7 +214,7 @@ The paper explains the method. This repository turns that method into runtime-re
 
 The most important sentence in this repository is:
 
-**Meta_Kim is one method projected into three runtimes, not three separate projects.**
+**Meta_Kim is one method projected into four runtimes, not four separate projects.**
 
 <div align="center">
 
@@ -223,16 +223,18 @@ The most important sentence in this repository is:
 | Claude Code | [CLAUDE.md](CLAUDE.md)      | `.claude/`, `.mcp.json`           | Canonical (primary editing / source-of-truth) runtime |
 | Codex       | [AGENTS.md](AGENTS.md)      | `.codex/`, `.agents/`, `codex/` | Codex-native custom agent and skill projection        |
 | OpenClaw    | `openclaw/workspaces/` | `openclaw/`                         | OpenClaw local workspace projection                   |
+| Cursor      | `.cursor/agents/`      | `.cursor/`                          | Cursor agent and MCP projection                       |
 
 </div>
 
-One figure for **one method, three landing points** (details: [Meta Architecture View](#meta-kim-visual-maps-en)):
+One figure for **one method, four landing points** (details: [Meta Architecture View](#meta-kim-visual-maps-en)):
 
 ```mermaid
 flowchart LR
   SRC[Sources .claude + contracts] --> CC[Claude Code]
   SRC -->|mirror| CX[Codex]
   SRC -->|workspace map| OW[OpenClaw]
+  SRC -->|agent projection| CU[Cursor]
 ```
 
 The practical takeaway is simple:
@@ -269,6 +271,16 @@ Then you can call:
 ```bash
 openclaw agent --local --agent meta-warden --message "I need a system to handle batch data exports with progress tracking." --json --timeout 120
 ```
+
+#### In Cursor
+
+Cursor reads `.cursor/agents/` for agent definitions and `.cursor/mcp.json` for MCP server configuration. These are generated projections from canonical sources:
+
+```bash
+npm run sync:runtimes -- --targets cursor
+```
+
+This creates `.cursor/agents/meta-warden.md` (and the other 7 agents), `.cursor/skills/meta-theory/`, and `.cursor/mcp.json`. Cursor agents use plain Markdown without YAML frontmatter for compatibility.
 
 ## Meta_Kim(元)
 
@@ -840,6 +852,7 @@ My agents keep overlapping responsibilities. Fix the organizational structure.
 | `.agents/` | Codex project-level skill mirror |
 | `codex/` | Codex global config example |
 | `openclaw/` | OpenClaw workspaces, skills, config templates |
+| `.cursor/` | Cursor agent and MCP projection (generated) |
 | `config/contracts/` | Runtime governance contracts |
 | `docs/` | Internal/private notes plus selected tracked runtime docs |
 | `scripts/` | Sync, validation, discovery, MCP, health scripts |
@@ -879,6 +892,9 @@ Unless you know exactly why, do not treat these as the long-term maintenance sou
 - `shared-skills/meta-theory.md`
 - `openclaw/skills/meta-theory.md`
 - `openclaw/workspaces/*`
+- `.cursor/agents/*.md`
+- `.cursor/skills/meta-theory/`
+- `.cursor/mcp.json`
 
 Those are normally maintained by:
 
@@ -1290,13 +1306,13 @@ If you are changing agents, skills, README files, or runtime-facing config, the 
 8. run `npm run eval:agents` when smoke-level runtime acceptance matters
 9. only run `npm run eval:agents:live` when you truly need live prompt-backed acceptance
 
-That keeps the three runtime projections aligned.
+That keeps the four runtime projections aligned.
 
 ## Newcomer FAQ
 
-### 1. Do I need Claude Code, Codex, and OpenClaw all installed?
+### 1. Do I need Claude Code, Codex, OpenClaw, and Cursor all installed?
 
-No. Meta_Kim is cross-runtime by design, but you do not have to use all three.
+No. Meta_Kim is cross-runtime by design, but you do not have to use all four.
 
 ### 2. Can I maintain this by editing only `.codex/` or `openclaw/`?
 

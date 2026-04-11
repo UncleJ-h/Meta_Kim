@@ -12,10 +12,10 @@
 </p>
 
 <p>
-  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw-111827"/>
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw%20%7C%20Cursor-111827"/>
   <img alt="Stars" src="https://img.shields.io/github/stars/KimYx0207/Meta_Kim?style=flat&logo=github"/>
   <img alt="Forks" src="https://img.shields.io/github/forks/KimYx0207/Meta_Kim?style=flat&logo=github"/>
-  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v1.5.0-7c3aed"/>
+  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v2.0.0-7c3aed"/>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green"/>
 </p>
 
@@ -25,14 +25,14 @@
 
 ## 简介
 
-**Meta_Kim** 是 AI 编码助手的治理层：一套统一的治理逻辑，同时在 Claude Code、Codex、OpenClaw 三个运行时上工作，让复杂任务**做对了再做**。
+**Meta_Kim** 是 AI 编码助手的治理层：一套统一的治理逻辑，同时在 Claude Code、Codex、OpenClaw、Cursor 四个运行时上工作，让复杂任务**做对了再做**。
 
 多数工具上来就写代码；Meta_Kim 在中间加了一步：先搞清楚你到底要什么，再计划谁干什么，最后才执行并审查。结果是跨文件改动少翻车，agent 职责更清晰，沉淀可复用模式而不是一次性 hack。
 
 ### 要点速览
 
 - 8 个专业元角色，统一走一个默认公开入口
-- **一套统一的治理逻辑**，投影到 Claude Code、Codex、OpenClaw 三个运行时
+- **一套统一的治理逻辑**，投影到 Claude Code、Codex、OpenClaw、Cursor 四个运行时
 - 每个复杂任务走：追问澄清 → 搜索能力 → 执行 → 审查 → 沉淀进化
 - **四条铁律**：追问强于猜测、搜索强于假设、计划强于冲动、验证强于信任
 - 纪律：一个部门、一个主交付物、一条闭合交付链
@@ -363,11 +363,11 @@ node scripts/agent-health-report.mjs
 
 ## 使用指南
 
-### 三个运行时怎么承接
+### 四个运行时怎么承接
 
 最重要的一句：
 
-**Meta_Kim 只有一套方法，不是三个独立项目。**
+**Meta_Kim 只有一套方法，不是四个独立项目。**
 
 <div align="center">
 
@@ -376,23 +376,25 @@ node scripts/agent-health-report.mjs
 | Claude Code | [CLAUDE.md](CLAUDE.md) | `.claude/`、`.mcp.json` | 规范主源和默认编辑运行时 |
 | Codex | [AGENTS.md](AGENTS.md) | `.codex/`、`.agents/`、`codex/` | Codex 原生 custom agents / skills 映射 |
 | OpenClaw | `openclaw/workspaces/` | `openclaw/` | OpenClaw 本地 workspace 映射 |
+| Cursor | `.cursor/agents/` | `.cursor/` | Cursor agent 与 MCP 投影 |
 
 </div>
 
-一图概括「**同一套方法，三处落地**」（细部与同步命令见 [原理与设计 · 元架构视角](#元架构视角) 主源图示）：
+一图概括「**同一套方法，四处落地**」（细部与同步命令见 [原理与设计 · 元架构视角](#元架构视角) 主源图示）：
 
 ```mermaid
 flowchart LR
   SRC[主源 .claude 与 contracts] --> CC[Claude Code 编辑运行时]
   SRC -->|镜像| CX[Codex]
   SRC -->|workspace 映射| OW[OpenClaw]
+  SRC -->|agent 投影| CU[Cursor]
 ```
 
 关键点：
 
 - **Claude Code 是 canonical（正典 / 主编辑源）编辑运行时。**
 - 长期主源主要在 `canonical/` 和 `config/contracts/workflow-contract.json`。
-- `.codex/`、`.agents/`、`openclaw/` 里大多数内容是同步产物或运行时适配层。
+- `.codex/`、`.agents/`、`openclaw/`、`.cursor/` 里大多数内容是同步产物或运行时适配层。
 - 改完主源以后，再用脚本把三端重新对齐。
 
 #### 各运行时怎么接
@@ -423,6 +425,16 @@ npm run prepare:openclaw-local
 ```bash
 openclaw agent --local --agent meta-warden --message "帮我搞一个批量数据导出的系统，要带进度跟踪。" --json --timeout 120
 ```
+
+##### 在 Cursor 里
+
+Cursor 读取 `.cursor/agents/` 目录下的 agent 定义和 `.cursor/mcp.json` 的 MCP 配置。这些都是从主源生成的投影：
+
+```bash
+npm run sync:runtimes -- --targets cursor
+```
+
+这会生成 `.cursor/agents/meta-warden.md`（以及其他 7 个 agent）、`.cursor/skills/meta-theory/` 和 `.cursor/mcp.json`。Cursor agent 使用纯 Markdown 格式（无 YAML frontmatter）。
 
 ### 8 个元角色
 
@@ -538,6 +550,7 @@ npm run validate:run -- tests/fixtures/run-artifacts/valid-run.json
 | `.agents/` | Codex 项目级 skills 镜像 |
 | `codex/` | Codex 全局配置示例 |
 | `openclaw/` | OpenClaw workspaces、skills、配置模板 |
+| `.cursor/` | Cursor agent 与 MCP 投影（生成产物） |
 | `config/contracts/` | 运行时治理合约 |
 | `docs/` | 内部/私有说明文档，以及少量已纳入版本控制的 runtime 文档 |
 | `scripts/` | 同步、校验、探测、MCP、自检脚本 |
@@ -731,9 +744,9 @@ npm run graphify:check
 
 ### 新手最常见的 10 个问题
 
-#### 1. 我必须同时安装 Claude Code、Codex、OpenClaw 吗？
+#### 1. 我必须同时安装 Claude Code、Codex、OpenClaw、Cursor 吗？
 
-不用。你可以只用其中一个运行时。Meta_Kim 设计成跨运行时兼容，但不是强制三端全装。
+不用。你可以只用其中一个运行时。Meta_Kim 设计成跨运行时兼容，但不是强制四端全装。
 
 #### 2. 我能不能只改 `.codex/` 或 `openclaw/`？
 

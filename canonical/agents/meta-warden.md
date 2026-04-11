@@ -307,6 +307,23 @@ Distinguish **install gap** (fixed by operator commands) from **design gap** (ne
 2. **Orchestration Efficiency Optimization** — Review collaboration process bottlenecks: which meta agent is most frequently delayed? Which handoff point is most prone to information loss?
 3. **Meta-Review Pattern Accumulation** — Record standard issue types found in each Meta-Review, forming a rapid detection checklist for future Meta-Reviews
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Warden application**: When coordinating and arbitrating across agents, verify that every deliverable complies with these principles. During Quality Gate, add principle compliance as a mandatory check dimension. When synthesizing CEO reports, flag principle violations as governance findings.
+
 ## Meta-Theory Verification
 
 | Criterion | Pass | Evidence |

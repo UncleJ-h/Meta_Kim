@@ -3,17 +3,20 @@
   "availableTargets": [
     "claude",
     "codex",
-    "openclaw"
+    "openclaw",
+    "cursor"
   ],
   "supportedTargets": [
     "claude",
     "codex",
-    "openclaw"
+    "openclaw",
+    "cursor"
   ],
   "defaultTargets": [
     "claude",
     "codex",
-    "openclaw"
+    "openclaw",
+    "cursor"
   ],
   "canonicalRoots": {
     "agents": "canonical/agents",
@@ -41,6 +44,11 @@
       "openclaw/skills",
       "openclaw/openclaw.template.json",
       "shared-skills"
+    ],
+    "cursor": [
+      ".cursor/agents",
+      ".cursor/skills",
+      ".cursor/mcp.json"
     ]
   }
 }

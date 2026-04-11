@@ -219,6 +219,23 @@ Rule: another operator must be able to wake the agent up and restore context fro
 1. **Memory Compression Technique Evolution** -- Track latest research in LLM memory management (e.g., MemGPT, long-term memory vectorization), evaluate whether the current 3-layer architecture can be optimized
 2. **Cross-platform Memory Adaptation** -- Study memory limit differences across platforms (CC/OC/Claude.ai), design portable memory strategy templates
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Librarian application**: Memory architecture must follow these principles. Three-layer design is Layering in action. MEMORY.md is the Single Source index; topic files must not duplicate index content. Expiration policy is Configurable by information type. Frontmatter schema enforces Normalization across all topic files.
+
 ## Meta-Theory Verification
 
 | Criterion | Status | Evidence |

@@ -257,6 +257,23 @@ Rule: another operator must be able to reproduce the judgment or close the findi
 1. **Evaluation Methodology Evolution** -- Track latest developments in LLM-as-Judge, skill-creator grader, and other evaluation frameworks, continuously upgrade assertion-based evaluation and claims verification methods
 2. **AI-Slop Signature Library Expansion** -- Expand the SLOP-01~09 signature library based on new AI Slop patterns discovered during actual reviews, keeping detection capabilities up to date
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Prism application**: When reviewing quality, include principle compliance as a standard evaluation dimension. Add principle-violation assertions to the Assertion-based Evaluation Framework. During Claims Extraction, flag implicit principle violations (e.g., "assumes single language" violates i18n, "reads from two sources of truth" violates Single Source).
+
 ## Meta-Theory Verification
 
 | Criterion | Status | Evidence |

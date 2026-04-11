@@ -29,7 +29,7 @@ export const localOverridesPath = path.join(
   ".meta-kim",
   "local.overrides.json",
 );
-export const supportedTargetIds = ["claude", "codex", "openclaw"];
+export const supportedTargetIds = ["claude", "codex", "openclaw", "cursor"];
 
 export async function pathExists(targetPath) {
   try {
@@ -213,6 +213,10 @@ export function resolveRuntimeHomeDir(runtimeId) {
     openclaw: {
       envKeys: ["META_KIM_OPENCLAW_HOME", "OPENCLAW_HOME"],
       defaultDir: ".openclaw",
+    },
+    cursor: {
+      envKeys: ["META_KIM_CURSOR_HOME", "CURSOR_HOME"],
+      defaultDir: ".cursor",
     },
   };
 

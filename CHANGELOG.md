@@ -4,6 +4,33 @@ All notable changes to Meta_Kim are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 When you tag a release, add a new **`## [version] - YYYY-MM-DD`** section at the top (above older entries) and list changes there.
 
+## [2.0.0] - 2026-04-11
+
+### Added
+
+- **Configurable multi-platform framework**: Meta_Kim now supports mapping to any runtime platform via `config/sync.json` manifests — add a new `generatedTargets` entry and a corresponding profile, and `sync-runtimes.mjs` projects to it automatically. No hardcoded platform list.
+- **Cursor as a fourth runtime target**: `.cursor/agents/*.md`, `.cursor/skills/meta-theory/`, `.cursor/mcp.json`. Cursor agents use plain Markdown (no YAML frontmatter) for compatibility with Cursor's agent system.
+- `runtimes/cursor.profile.json` with Cursor-specific projection and activation config.
+- `--targets cursor` support in all sync/setup commands.
+- **Enhanced agent principles**: all 8 canonical agents (`meta-warden` through `meta-scout`) updated with strengthened capability-first dispatch, explicit ownership boundaries, and cross-runtime awareness including Cursor.
+- **Shared i18n module** (`scripts/meta-kim-i18n.mjs`) unifies all install/update strings across 4 languages.
+- **Setup UI overhaul**: `setup.mjs` now features a branded ASCII art banner with gold gradient, streamlined headings (`▸` style), and compact status output.
+- **X/Twitter contact** (`https://x.com/KimYx0207`) in banner and `config/skills.json` author links.
+- Plugin pre-check in `install-global-skills-all-runtimes.mjs`: uses `claude plugins list --json` to detect already-installed plugins.
+
+### Changed
+
+- `installPythonTools()` and `install-global-skills-all-runtimes.mjs` now use `pip show graphifyy` for reliable detection with suppressed verbose output.
+- `sync-global-meta-theory.mjs` and `meta-kim-sync-config.mjs` updated with cursor runtime spec support.
+- `--scope project|global|both` now works consistently across `setup.mjs --update` and `sync:runtimes`.
+- `meta-theory` skill version bumped to 2.0.0.
+
+### Fixed
+
+- **Graphify verbose output**: pip install no longer prints 20+ "Requirement already satisfied" lines when already installed.
+- `sync-global-meta-theory.mjs` crash on cursor target (`Cannot read properties of undefined`) — cursor was missing from `runtimeSpecs` dict.
+- `sync-runtimes.mjs` Codex paths corrected: `.claude/` → `.codex/` for all codex-*-Dir variables.
+
 ## [1.5.0] - 2026-04-11
 
 ### Added

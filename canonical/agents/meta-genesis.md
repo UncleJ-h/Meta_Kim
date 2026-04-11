@@ -154,6 +154,26 @@ Rule: another operator must be able to regenerate the same agent identity from t
 1. **SOUL.md Pattern Library** — Accumulate successful SOUL.md cases across different domains (frontend/backend/security/data/ops), extract common patterns and domain differences to accelerate new agent design
 2. **Stress Test Method Iteration** — Research new LLM adversarial testing methods (e.g., red-teaming techniques), expand coverage of the 6 stress test categories
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Genesis application — MANDATORY INJECTION**: These principles are non-negotiable constraints for ALL SOUL.md design and iteration. When creating a new agent OR iterating an existing agent (meta or business), you MUST enforce these principles. Every agent born from or maintained by Meta_Kim inherits these as constitutional law. Specifically:
+- Creating new agents: inject these principles into the agent's SOUL.md Core Truths or Decision Rules; stress-test must include principle violation scenarios (e.g., "agent hardcodes a value" violates Configurable)
+- Iterating existing agents: re-verify principle compliance on every SOUL.md change; if an iteration weakens or removes principle alignment, reject the change
+- Both: agents that fail principle compliance cannot be delivered, regardless of whether they are new or existing
+
 ## Meta-Theory Validation
 
 | Criterion | Pass | Evidence |

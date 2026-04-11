@@ -12,10 +12,10 @@
 </p>
 
 <p>
-  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw-111827"/>
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw%20%7C%20Cursor-111827"/>
   <img alt="Stars" src="https://img.shields.io/github/stars/KimYx0207/Meta_Kim?style=flat&logo=github"/>
   <img alt="Forks" src="https://img.shields.io/github/forks/KimYx0207/Meta_Kim?style=flat&logo=github"/>
-  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v1.5.0-7c3aed"/>
+  <img alt="Skill" src="https://img.shields.io/badge/skill-meta--theory%20v2.0.0-7c3aed"/>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green"/>
 </p>
 
@@ -25,10 +25,10 @@
 
 ## ひと目で
 
-**AI コーディング支援のためのガバナンス層**です。Claude Code・Codex・OpenClaw の三ランタイムで同じ規律を貫き、複雑タスクを先に**正しく**進めます。多くのツールはいきなりコードを書き始めますが、Meta_Kim はその手前に明確化・探索・実行・レビュー・進化の段を置きます。
+**AI コーディング支援のためのガバナンス層**です。Claude Code・Codex・OpenClaw・Cursor の四ランタイムで同じ規律を貫き、複雑タスクを先に**正しく**進めます。多くのツールはいきなりコードを書き始めますが、Meta_Kim はその手前に明確化・探索・実行・レビュー・進化の段を置きます。
 
 - 公開エントリは一つ、その背後に 8 つのメタ（**英語概念名は Meta**。漢字「元」はロゴ／正典用語）
-- **一つのガバナンス規律**を三ランタイムに投影
+- **一つのガバナンス規律**を四ランタイムに投影
 - 複雑タスクの流れ: 明確化 → 探索 → 実行 → レビュー → 進化
 - **四つの鉄則**: Critical > 推測、Fetch > 思い込み、Thinking > 突っ走り、Review > 盲信
 - 規律: 一部署・一主たる成果物・閉じた引き渡しチェーン
@@ -132,7 +132,7 @@ flowchart LR
 
 ## ランタイム入口
 
-**Meta_Kim は三つの別プロジェクトではなく、一つの方法の三つの投影です。**
+**Meta_Kim は四つの別プロジェクトではなく、一つの方法の四つの投影です。**
 
 <div align="center">
 
@@ -141,6 +141,7 @@ flowchart LR
 | Claude Code | [CLAUDE.md](CLAUDE.md) | `.claude/`、`.mcp.json` | 正典編集ランタイム |
 | Codex | [AGENTS.md](AGENTS.md) | `.codex/`、`.agents/`、`codex/` | Codex 向け投影 |
 | OpenClaw | `openclaw/workspaces/` | `openclaw/` | ローカル workspace 投影 |
+| Cursor | `.cursor/agents/` | `.cursor/` | Cursor agent・MCP 投影 |
 
 </div>
 
@@ -151,6 +152,7 @@ flowchart LR
   SRC["正典 .claude と contracts"] --> CC["Claude Code 編集ランタイム"]
   SRC -->|鏡像| CX["Codex"]
   SRC -->|workspace| OW["OpenClaw"]
+  SRC -->|agent 投影| CU["Cursor"]
 ```
 
 - メンテは **`canonical/` と `config/contracts/workflow-contract.json` から**
@@ -165,6 +167,16 @@ npm install
 npm run prepare:openclaw-local
 openclaw agent --local --agent meta-warden --message "..." --json --timeout 120
 ```
+
+### Cursor での使い方
+
+Cursor は `.cursor/agents/` の agent 定義と `.cursor/mcp.json` の MCP 設定を読み取ります。これらは主源から生成された投影です：
+
+```bash
+npm run sync:runtimes -- --targets cursor
+```
+
+`.cursor/agents/meta-warden.md`（他 7 エージェントも）、`.cursor/skills/meta-theory/`、`.cursor/mcp.json` が生成されます。Cursor エージェントは YAML frontmatter のないプレーン Markdown 形式です。
 
 ## Meta_Kim における「元（Meta）」
 
@@ -494,6 +506,7 @@ npm run graphify:update
 | `.agents/` | Codex プロジェクト skill ミラー |
 | `codex/` | Codex グローバル設定の例 |
 | `openclaw/` | OpenClaw workspaces、skills、テンプレート |
+| `.cursor/` | Cursor agent・MCP 投影（生成物） |
 | `config/contracts/` | ランタイム治理契約 |
 | `docs/` | 内部メモ等、追跡済み runtime ドキュメント少量 |
 | `scripts/` | 同期・検証・MCP・ヘルス |

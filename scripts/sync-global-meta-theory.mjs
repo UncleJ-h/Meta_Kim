@@ -50,6 +50,13 @@ const runtimeSpecs = {
     requiredMarkers: ["skills"],
     preferredMarkers: ["config.toml", "commands"],
   },
+  cursor: {
+    label: "Cursor",
+    envKeys: ["META_KIM_CURSOR_HOME", "CURSOR_HOME"],
+    defaultDirName: ".cursor",
+    requiredMarkers: ["skills"],
+    preferredMarkers: ["mcp.json", "agents"],
+  },
 };
 let runtimeHomes = {};
 let allowedRoots = [];
@@ -60,10 +67,12 @@ let selectedTargetIds = [];
 function assertHomeBound(targetPath) {
   const resolved = path.resolve(targetPath);
   const isAllowed = allowedRoots.some(
-    (root) => resolved === root || resolved.startsWith(`${root}${path.sep}`)
+    (root) => resolved === root || resolved.startsWith(`${root}${path.sep}`),
   );
   if (!isAllowed) {
-    throw new Error(`Refusing to write outside the configured runtime homes: ${resolved}`);
+    throw new Error(
+      `Refusing to write outside the configured runtime homes: ${resolved}`,
+    );
   }
 }
 
@@ -78,14 +87,18 @@ async function pathExists(targetPath) {
 
 async function hasRequiredMarkers(candidateDir, spec) {
   const checks = await Promise.all(
-    spec.requiredMarkers.map((marker) => pathExists(path.join(candidateDir, marker)))
+    spec.requiredMarkers.map((marker) =>
+      pathExists(path.join(candidateDir, marker)),
+    ),
   );
   return checks.every(Boolean);
 }
 
 async function countPreferredMarkers(candidateDir, spec) {
   const checks = await Promise.all(
-    spec.preferredMarkers.map((marker) => pathExists(path.join(candidateDir, marker)))
+    spec.preferredMarkers.map((marker) =>
+      pathExists(path.join(candidateDir, marker)),
+    ),
   );
   return checks.filter(Boolean).length;
 }
@@ -135,9 +148,11 @@ async function resolveRuntimeHome(spec) {
   if (discovered) {
     return {
       dir: discovered,
-      source: discovered === path.join(path.resolve(os.homedir()), spec.defaultDirName)
-        ? "default"
-        : "search",
+      source:
+        discovered ===
+        path.join(path.resolve(os.homedir()), spec.defaultDirName)
+          ? "default"
+          : "search",
     };
   }
 
@@ -153,11 +168,14 @@ async function resolveTargets() {
     claude: await resolveRuntimeHome(runtimeSpecs.claude),
     openclaw: await resolveRuntimeHome(runtimeSpecs.openclaw),
     codex: await resolveRuntimeHome(runtimeSpecs.codex),
+    cursor: await resolveRuntimeHome(runtimeSpecs.cursor),
   };
 
   selectedTargetIds = [...targetContext.activeTargets];
 
-  allowedRoots = Object.values(runtimeHomes).map(({ dir }) => path.resolve(dir));
+  allowedRoots = Object.values(runtimeHomes).map(({ dir }) =>
+    path.resolve(dir),
+  );
 
   activeTargets = selectedTargetIds.map((targetId) => ({
     targetId,
@@ -238,8 +256,7 @@ function isMetaKimManagedHookCommand(command) {
     return false;
   }
   return (
-    command.includes("hooks/meta-kim/") ||
-    command.includes("hooks\\meta-kim\\")
+    command.includes("hooks/meta-kim/") || command.includes("hooks\\meta-kim\\")
   );
 }
 
@@ -258,7 +275,10 @@ function buildMetaKimHooksTemplate(absHooksDir) {
     PreToolUse: [
       {
         matcher: "Bash",
-        hooks: [cmd("block-dangerous-bash.mjs"), cmd("pre-git-push-confirm.mjs")],
+        hooks: [
+          cmd("block-dangerous-bash.mjs"),
+          cmd("pre-git-push-confirm.mjs"),
+        ],
       },
     ],
     PostToolUse: [
@@ -294,7 +314,7 @@ function stripMetaKimHookEntriesFromBlocks(blocks) {
     .map((block) => ({
       ...block,
       hooks: (block.hooks || []).filter(
-        (h) => !isMetaKimManagedHookCommand(h.command || "")
+        (h) => !isMetaKimManagedHookCommand(h.command || ""),
       ),
     }))
     .filter((block) => (block.hooks || []).length > 0);
@@ -309,7 +329,7 @@ function mergeHookMatcherBlocks(existing, additions) {
       continue;
     }
     const cmds = new Set(
-      (result[idx].hooks || []).map((h) => h.command).filter(Boolean)
+      (result[idx].hooks || []).map((h) => h.command).filter(Boolean),
     );
     for (const h of addBlock.hooks || []) {
       if (!cmds.has(h.command)) {
@@ -363,13 +383,15 @@ async function syncClaudeGlobalSettingsHooks() {
     try {
       base = JSON.parse(raw);
     } catch {
-      throw new Error(`Invalid JSON in ${settingsPath}; fix or move aside before sync.`);
+      throw new Error(
+        `Invalid JSON in ${settingsPath}; fix or move aside before sync.`,
+      );
     }
   }
 
   if (base.disableAllHooks === true) {
     console.warn(
-      "Warning: ~/.claude/settings.json has disableAllHooks=true — Meta_Kim hook entries were merged but will not run until disabled."
+      "Warning: ~/.claude/settings.json has disableAllHooks=true — Meta_Kim hook entries were merged but will not run until disabled.",
     );
   }
 
@@ -380,7 +402,9 @@ async function syncClaudeGlobalSettingsHooks() {
     : null;
 
   if (prev === out) {
-    console.log(`Claude Code settings hooks already up to date: ${settingsPath}`);
+    console.log(
+      `Claude Code settings hooks already up to date: ${settingsPath}`,
+    );
     return;
   }
 
@@ -430,7 +454,7 @@ async function runCheck() {
       repoHooksFp.hash === globalHooksFp.hash &&
       repoHooksFp.fileCount === globalHooksFp.fileCount;
     console.log(
-      `${hooksInSync ? "OK" : "MISSING"} Claude Code global hooks (meta-kim): ${globalHooksPath}`
+      `${hooksInSync ? "OK" : "MISSING"} Claude Code global hooks (meta-kim): ${globalHooksPath}`,
     );
     if (!hooksInSync) {
       failed = true;
@@ -468,9 +492,18 @@ async function runSync() {
 
 function printTargets() {
   console.log("Resolved runtime homes:");
-  console.log(`- Claude Code: ${runtimeHomes.claude.dir} (${runtimeHomes.claude.source})`);
-  console.log(`- OpenClaw: ${runtimeHomes.openclaw.dir} (${runtimeHomes.openclaw.source})`);
-  console.log(`- Codex: ${runtimeHomes.codex.dir} (${runtimeHomes.codex.source})`);
+  console.log(
+    `- Claude Code: ${runtimeHomes.claude.dir} (${runtimeHomes.claude.source})`,
+  );
+  console.log(
+    `- OpenClaw: ${runtimeHomes.openclaw.dir} (${runtimeHomes.openclaw.source})`,
+  );
+  console.log(
+    `- Codex: ${runtimeHomes.codex.dir} (${runtimeHomes.codex.source})`,
+  );
+  console.log(
+    `- Cursor: ${runtimeHomes.cursor.dir} (${runtimeHomes.cursor.source})`,
+  );
   console.log("");
   console.log("Resolved active targets:");
   for (const target of activeTargets) {
@@ -481,10 +514,13 @@ function printTargets() {
   console.log("- META_KIM_CLAUDE_HOME or CLAUDE_HOME");
   console.log("- META_KIM_OPENCLAW_HOME or OPENCLAW_HOME");
   console.log("- META_KIM_CODEX_HOME or CODEX_HOME");
+  console.log("- META_KIM_CURSOR_HOME or CURSOR_HOME");
   console.log("");
   console.log("Claude Code hooks (unless --skip-global-hooks):");
   console.log(`- Scripts: ${globalMetaKimHooksDir()}`);
-  console.log(`- Merged into: ${path.join(runtimeHomes.claude.dir, "settings.json")}`);
+  console.log(
+    `- Merged into: ${path.join(runtimeHomes.claude.dir, "settings.json")}`,
+  );
 }
 
 async function main() {

@@ -12,6 +12,7 @@ codex/
 openclaw/
 openclaw/workspaces/*/.openclaw/
 shared-skills/
+.cursor/
 
 # ========== Local State (Never commit) ==========
 .meta-kim/

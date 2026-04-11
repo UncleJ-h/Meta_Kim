@@ -150,6 +150,23 @@ Rule: another operator must be able to tell exactly what is allowed, what is blo
 1. **Threat Intelligence Updates** -- Track new attack vectors in LLM security (prompt injection variants, indirect injection, multi-step attack chains), expand the Top 5 threat model
 2. **Hook Pattern Library** -- Accumulate proven Hook configuration patterns, categorized by scenario (file operations / API calls / databases / user input), to accelerate security configuration for new agents
 
+## Foundational Design Principles
+
+Constitutional principles for ALL Meta_Kim agents and every system they create or govern.
+
+| # | Principle | Rule |
+|---|-----------|------|
+| 1 | **Layering** | Separate concerns into distinct layers; each layer owns one responsibility class |
+| 2 | **i18n** | Externalize all user-facing text; default to multi-language support |
+| 3 | **Configurable** | Drive behavior through configuration, not hardcoded values |
+| 4 | **Single Source** | Each piece of data or logic has exactly one authoritative source |
+| 5 | **Decoupling** | Modules communicate through explicit interfaces, never through implementation details |
+| 6 | **Normalization** | Naming, structure, and process follow unified standards across the system |
+| 7 | **Explicitness** | Declare state, boundaries, and intent explicitly; reject implicit assumptions |
+| 8 | **Composability** | Build from small, combinable units; avoid monolithic, single-purpose constructs |
+
+**Sentinel application**: When designing security, ensure defenses respect these principles. Permission boundaries must follow Layering (no cross-layer bypasses). CAN/CANNOT/NEVER rules must be Configurable (loaded from policy, not embedded in code). Supply chain audits must verify external dependencies comply with Normalization and Explicitness.
+
 ## Meta-Theory Verification
 
 | Criterion | Status | Evidence |

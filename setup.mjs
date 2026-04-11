@@ -52,6 +52,7 @@ const RUNTIME_CHOICES = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
   { id: "openclaw", label: "OpenClaw" },
+  { id: "cursor", label: "Cursor" },
 ];
 
 /** Load skills manifest from shared config (single source of truth) */
@@ -121,7 +122,7 @@ const I18N = {
     modeUpdate: "update",
     modeSilent: "silent",
     modeInteractive: "interactive",
-    /** Shared gate before menu / CLI modes — headings below are titles only, no “step 1/N” */
+    /** Shared gate before menu / CLI modes — headings below are titles only, no "step 1/N" */
     preflightHeading: "Environment check",
     nodeOld: (v) => `Node.js v${v} too old, need >=18`,
     nodeOk: (v) => `Node.js v${v}`,
@@ -139,8 +140,11 @@ const I18N = {
     codexNotDetected: "Codex CLI not detected (optional)",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "OpenClaw CLI not detected (optional)",
+    cursorDetected: (v) => `Cursor ${v}`,
+    cursorNotDetected: "Cursor CLI not detected (optional)",
     noRuntime: "No AI coding tool detected.",
-    noRuntimeHint1: "Meta_Kim works with Claude Code, Codex, or OpenClaw.",
+    noRuntimeHint1:
+      "Meta_Kim works with Claude Code, Codex, OpenClaw, or Cursor.",
     noRuntimeHint2: "Install at least one: {claudeCodeDocs}",
     continueAnyway: "Continue setup anyway?",
     setupCancelled: "Setup cancelled. Install an AI coding tool and re-run.",
@@ -184,6 +188,7 @@ const I18N = {
     step3Hint: "(Meta_Kim will auto-coordinate the specialists)",
     codexNote: "Codex prompts are synced to .codex/",
     openclawNote: "OpenClaw workspace is synced to openclaw/",
+    cursorNote: "Cursor agents are synced to .cursor/",
     noRuntimeGetStarted:
       "No AI coding tool detected. Install Claude Code to get started:",
     usefulCommands: "Useful commands:",
@@ -208,7 +213,7 @@ const I18N = {
     installScopeHeading: "Installation Scope",
     installScopePrompt: "Where would you like to install Meta_Kim?",
     installScopeProject:
-      "Project only — Files in .claude/.codex/openclaw/ (current project only)",
+      "Project only — Files in .claude/.codex/openclaw/.cursor/ (current project only)",
     installScopeGlobal:
       "Global only — ~/.claude/skills/ (shared across all projects)",
     installScopeBoth: "Both (recommended) — Project files + global skills",
@@ -216,7 +221,7 @@ const I18N = {
     installScopeGlobalLabel: "Global only",
     installScopeBothLabel: "Both (recommended)",
     installScopeProjectDesc:
-      "Install to project directory only (.claude/, .codex/, openclaw/)",
+      "Install to project directory only (.claude/, .codex/, openclaw/, .cursor/)",
     installScopeGlobalDesc:
       "Install to global directory only (~/.claude/skills/)",
     installScopeBothDesc:
@@ -243,6 +248,9 @@ const I18N = {
       `OpenClaw workspaces: ${n}/8 agents — each folder has the 9 required .md files (BOOT, SOUL, …)`,
     syncOpenclawSkill: "OpenClaw shared meta-theory",
     syncSharedSkills: "shared-skills/meta-theory.md",
+    syncCursorAgents: (n) => `Cursor agents: ${n}/8 .md files`,
+    syncCursorSkills: "Cursor skills/meta-theory/SKILL.md",
+    syncCursorMcp: "Cursor .cursor/mcp.json",
     syncOk: "All sync targets verified",
     syncMissing: (p) => `Missing: ${p}`,
     syncPartial: (label, got, need) => `${label}: got ${got}, need ${need}`,
@@ -283,7 +291,7 @@ const I18N = {
     installOverviewTitle: "Meta_Kim Installation Overview",
     installOverviewWill: "This process will:",
     installOverviewSyncConfig:
-      "Sync configurations to project directory (canonical → .claude/.codex/openclaw/)",
+      "Sync configurations to project directory (canonical → .claude/.codex/openclaw/.cursor/)",
     installOverviewInstallSkills:
       "Install 9 global skill repositories (~/.claude/skills/)",
     installOverviewSyncMeta: "Sync meta-theory to global directory",
@@ -342,8 +350,10 @@ const I18N = {
     codexNotDetected: "未检测到 Codex CLI（可选）",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "未检测到 OpenClaw CLI（可选）",
+    cursorDetected: (v) => `Cursor ${v}`,
+    cursorNotDetected: "未检测到 Cursor CLI（可选）",
     noRuntime: "未检测到 AI 编程工具。",
-    noRuntimeHint1: "Meta_Kim 支持 Claude Code、Codex 或 OpenClaw。",
+    noRuntimeHint1: "Meta_Kim 支持 Claude Code、Codex、OpenClaw 或 Cursor。",
     noRuntimeHint2: "至少安装一个：{claudeCodeDocs}",
     continueAnyway: "仍然继续安装？",
     setupCancelled: "安装已取消。请先安装 AI 编程工具。",
@@ -386,6 +396,7 @@ const I18N = {
     step3Hint: "（Meta_Kim 会自动协调各专家）",
     codexNote: "Codex 提示词同步到 .codex/",
     openclawNote: "OpenClaw 工作区同步到 openclaw/",
+    cursorNote: "Cursor 智能体同步到 .cursor/",
     noRuntimeGetStarted: "未检测到 AI 编程工具。安装 Claude Code 开始使用：",
     usefulCommands: "常用命令：",
     cmdUpdate: "更新所有技能",
@@ -409,13 +420,14 @@ const I18N = {
     installScopeHeading: "安装范围",
     installScopePrompt: "Meta_Kim 安装到哪里？",
     installScopeProject:
-      "仅项目 — 文件在 .claude/.codex/openclaw/（仅当前项目）",
+      "仅项目 — 文件在 .claude/.codex/openclaw/.cursor/（仅当前项目）",
     installScopeGlobal: "仅全局 — ~/.claude/skills/（所有项目共享）",
     installScopeBoth: "全部（推荐）— 项目文件 + 全局技能",
     installScopeProjectLabel: "仅项目",
     installScopeGlobalLabel: "仅全局",
     installScopeBothLabel: "全部（推荐）",
-    installScopeProjectDesc: "仅安装到项目目录（.claude/, .codex/, openclaw/）",
+    installScopeProjectDesc:
+      "仅安装到项目目录（.claude/, .codex/, openclaw/, .cursor/）",
     installScopeGlobalDesc: "仅安装到全局目录（~/.claude/skills/）",
     installScopeBothDesc: "同时安装项目和全局（推荐，完整体验）",
     depCheckHeading: "依赖检查",
@@ -439,6 +451,9 @@ const I18N = {
       `OpenClaw 工作区：${n}/8 个智能体，各目录 9 个必备 Markdown 已齐（含 BOOT、SOUL 等；不含子文件夹里的额外文件）`,
     syncOpenclawSkill: "OpenClaw 共享 meta-theory",
     syncSharedSkills: "共享技能/meta-theory.md",
+    syncCursorAgents: (n) => `Cursor 智能体: ${n}/8 .md 文件`,
+    syncCursorSkills: "Cursor 技能/meta-theory/SKILL.md",
+    syncCursorMcp: "Cursor .cursor/mcp.json",
     syncOk: "所有同步目标验证通过",
     syncMissing: (p) => `缺失：${p}`,
     syncPartial: (label, got, need) => `${label}：实际 ${got}，需要 ${need}`,
@@ -477,7 +492,7 @@ const I18N = {
     installOverviewTitle: "Meta_Kim 安装概览",
     installOverviewWill: "此过程将：",
     installOverviewSyncConfig:
-      "同步配置文件 (canonical → .claude/.codex/openclaw/)",
+      "同步配置文件 (canonical → .claude/.codex/openclaw/.cursor/)",
     installOverviewInstallSkills: "安装 9 个全局技能仓库",
     installOverviewSyncMeta: "同步 meta-theory 到全局目录",
     installOverviewOptionalPython: "可选：安装 Python graphify 工具",
@@ -535,9 +550,11 @@ const I18N = {
     codexNotDetected: "Codex CLI が検出されませんでした（オプション）",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "OpenClaw CLI が検出されませんでした（オプション）",
+    cursorDetected: (v) => `Cursor ${v}`,
+    cursorNotDetected: "Cursor CLI が検出されませんでした（オプション）",
     noRuntime: "AIコーディングツールが検出されませんでした。",
     noRuntimeHint1:
-      "Meta_Kim は Claude Code、Codex、または OpenClaw で動作します。",
+      "Meta_Kim は Claude Code、Codex、OpenClaw、または Cursor で動作します。",
     noRuntimeHint2: "少なくとも1つインストールしてください：{claudeCodeDocs}",
     continueAnyway: "セットアップを続行しますか？",
     setupCancelled:
@@ -583,6 +600,7 @@ const I18N = {
     step3Hint: "（Meta_Kim が自動的に専門家を調整します）",
     codexNote: "Codex プロンプトは .codex/ に同期されます",
     openclawNote: "OpenClaw ワークスペースは openclaw/ に同期されます",
+    cursorNote: "Cursor エージェントは .cursor/ に同期されます",
     noRuntimeGetStarted:
       "AIコーディングツールが検出されませんでした。Claude Code をインストールしてください：",
     usefulCommands: "便利なコマンド：",
@@ -608,7 +626,7 @@ const I18N = {
     installScopeHeading: "インストール範囲",
     installScopePrompt: "Meta_Kim をどこにインストールしますか？",
     installScopeProject:
-      "プロジェクトのみ — .claude/.codex/openclaw/ のファイル（現在のプロジェクトのみ）",
+      "プロジェクトのみ — .claude/.codex/openclaw/.cursor/ のファイル（現在のプロジェクトのみ）",
     installScopeGlobal:
       "グローバルのみ — ~/.claude/skills/（すべてのプロジェクトで共有）",
     installScopeBoth: "両方（推奨）— プロジェクトファイル + グローバルスキル",
@@ -616,7 +634,7 @@ const I18N = {
     installScopeGlobalLabel: "グローバルのみ",
     installScopeBothLabel: "両方（推奨）",
     installScopeProjectDesc:
-      "プロジェクトディレクトリのみにインストール（.claude/, .codex/, openclaw/）",
+      "プロジェクトディレクトリのみにインストール（.claude/, .codex/, openclaw/, .cursor/）",
     installScopeGlobalDesc:
       "グローバルディレクトリのみにインストール（~/.claude/skills/）",
     installScopeBothDesc:
@@ -643,6 +661,9 @@ const I18N = {
       `OpenClaw ワークスペース: ${n}/8 エージェント — 各フォルダに必須の .md 9 件（BOOT、SOUL など）`,
     syncOpenclawSkill: "OpenClaw 共有 meta-theory",
     syncSharedSkills: "共有スキル/meta-theory.md",
+    syncCursorAgents: (n) => `Cursor エージェント: ${n}/8 .md ファイル`,
+    syncCursorSkills: "Cursor スキル/meta-theory/SKILL.md",
+    syncCursorMcp: "Cursor .cursor/mcp.json",
     syncOk: "すべての同期ターゲット検証済み",
     syncMissing: (p) => `不足：${p}`,
     syncPartial: (label, got, need) => `${label}：実際 ${got}、必要 ${need}`,
@@ -687,7 +708,7 @@ const I18N = {
     installOverviewTitle: "Meta_Kim インストール概要",
     installOverviewWill: "このプロセスでは：",
     installOverviewSyncConfig:
-      "プロジェクトディレクトリに設定を同期 (canonical → .claude/.codex/openclaw/)",
+      "プロジェクトディレクトリに設定を同期 (canonical → .claude/.codex/openclaw/.cursor/)",
     installOverviewInstallSkills:
       "9つのグローバルスキルリポジトリをインストール (~/.claude/skills/)",
     installOverviewSyncMeta: "meta-theory をグローバルディレクトリに同期",
@@ -750,9 +771,11 @@ const I18N = {
     codexNotDetected: "Codex CLI 감지되지 않음 (선택)",
     openclawDetected: (v) => `OpenClaw ${v}`,
     openclawNotDetected: "OpenClaw CLI 감지되지 않음 (선택)",
+    cursorDetected: (v) => `Cursor ${v}`,
+    cursorNotDetected: "Cursor CLI 감지되지 않음 (선택)",
     noRuntime: "AI 코딩 도구가 감지되지 않았습니다.",
     noRuntimeHint1:
-      "Meta_Kim은 Claude Code, Codex 또는 OpenClaw에서 작동합니다.",
+      "Meta_Kim은 Claude Code, Codex, OpenClaw 또는 Cursor에서 작동합니다.",
     noRuntimeHint2: "최소 하나를 설치하세요: {claudeCodeDocs}",
     continueAnyway: "설정을 계속 진행할까요?",
     setupCancelled:
@@ -796,6 +819,7 @@ const I18N = {
     step3Hint: "(Meta_Kim이 자동으로 전문가를 조정합니다)",
     codexNote: "Codex 프롬프트는 .codex/에 동기화됩니다",
     openclawNote: "OpenClaw 워크스페이스는 openclaw/에 동기화됩니다",
+    cursorNote: "Cursor 에이전트는 .cursor/에 동기화됩니다",
     noRuntimeGetStarted:
       "AI 코딩 도구가 감지되지 않았습니다. Claude Code를 설치하세요:",
     usefulCommands: "유용한 명령:",
@@ -820,14 +844,14 @@ const I18N = {
     installScopeHeading: "설치 범위",
     installScopePrompt: "Meta_Kim을 어디에 설치하시겠습니까?",
     installScopeProject:
-      "프로젝트만 — .claude/.codex/openclaw/ 파일 (현재 프로젝트만)",
+      "프로젝트만 — .claude/.codex/openclaw/.cursor/ 파일 (현재 프로젝트만)",
     installScopeGlobal: "전역만 — ~/.claude/skills/ (모든 프로젝트 공유)",
     installScopeBoth: "둘 다 (권장) — 프로젝트 파일 + 전역 스킬",
     installScopeProjectLabel: "프로젝트만",
     installScopeGlobalLabel: "전역만",
     installScopeBothLabel: "둘 다 (권장)",
     installScopeProjectDesc:
-      "프로젝트 디렉토리에만 설치 (.claude/, .codex/, openclaw/)",
+      "프로젝트 디렉토리에만 설치 (.claude/, .codex/, openclaw/, .cursor/)",
     installScopeGlobalDesc: "전역 디렉토리에만 설치 (~/.claude/skills/)",
     installScopeBothDesc: "프로젝트와 전역 모두 설치 (권장, 완전한 경험)",
     depCheckHeading: "의존성 확인",
@@ -851,6 +875,9 @@ const I18N = {
       `OpenClaw 워크스페이스: ${n}/8 에이전트 — 각 폴더에 필수 .md 9개(BOOT, SOUL 등)`,
     syncOpenclawSkill: "OpenClaw 공유 meta-theory",
     syncSharedSkills: "공유 스킬/meta-theory.md",
+    syncCursorAgents: (n) => `Cursor 에이전트: ${n}/8 .md 파일`,
+    syncCursorSkills: "Cursor 스킬/meta-theory/SKILL.md",
+    syncCursorMcp: "Cursor .cursor/mcp.json",
     syncOk: "모든 동기화 대상 확인 완료",
     syncMissing: (p) => `누락: ${p}`,
     syncPartial: (label, got, need) => `${label}: 실제 ${got}, 필요 ${need}`,
@@ -889,7 +916,7 @@ const I18N = {
     installOverviewTitle: "Meta_Kim 설치 개요",
     installOverviewWill: "이 과정에서:",
     installOverviewSyncConfig:
-      "프로젝트 디렉토리에 설정 동기화 (canonical → .claude/.codex/openclaw/)",
+      "프로젝트 디렉토리에 설정 동기화 (canonical → .claude/.codex/openclaw/.cursor/)",
     installOverviewInstallSkills:
       "9개 전역 스킬 리포지토리 설치 (~/.claude/skills/)",
     installOverviewSyncMeta: "meta-theory를 전역 디렉토리에 동기화",
@@ -974,7 +1001,7 @@ function info(msg) {
   log(`${C.cyan}ℹ${C.reset}`, msg);
 }
 function heading(msg) {
-  console.log(`\n${C.bold}${C.magenta}── ${msg} ──${C.reset}\n`);
+  console.log(`\n${C.bold}${C.cyan}▸ ${msg}${C.reset}\n`);
 }
 
 function run(cmd, opts = {}) {
@@ -1294,7 +1321,7 @@ const META_AGENTS = [
   "meta-sentinel",
   "meta-warden",
 ];
-/** Same nine as scripts/validate-project.mjs (not “everything in readdir”) */
+/** Same nine as scripts/validate-project.mjs (not "everything in readdir") */
 const OPENCLAW_WORKSPACE_MD = [
   "BOOT.md",
   "BOOTSTRAP.md",
@@ -1442,6 +1469,45 @@ function checkSync(runtimes, repoTargets = ["claude", "codex", "openclaw"]) {
     }
   }
 
+  // --- Cursor ---
+  if (repoTargets.includes("cursor")) {
+    const cursorAgentsDir = join(PROJECT_DIR, ".cursor", "agents");
+    if (existsSync(cursorAgentsDir)) {
+      const agents = readdirSync(cursorAgentsDir).filter((f) =>
+        f.endsWith(".md"),
+      );
+      if (agents.length === META_AGENTS.length)
+        ok(t.syncCursorAgents(agents.length));
+      else {
+        warn(t.syncPartial("Cursor agents", agents.length, META_AGENTS.length));
+        allOk = false;
+      }
+    } else {
+      fail(t.syncMissing(".cursor/agents/"));
+      allOk = false;
+    }
+
+    const cursorSkillPath = join(
+      PROJECT_DIR,
+      ".cursor",
+      "skills",
+      "meta-theory",
+      "SKILL.md",
+    );
+    if (existsSync(cursorSkillPath)) ok(t.syncCursorSkills);
+    else {
+      fail(t.syncMissing(".cursor/skills/meta-theory/SKILL.md"));
+      allOk = false;
+    }
+
+    const cursorMcp = join(PROJECT_DIR, ".cursor", "mcp.json");
+    if (existsSync(cursorMcp)) ok(t.syncCursorMcp);
+    else {
+      warn(t.syncMissing(".cursor/mcp.json"));
+      allOk = false;
+    }
+  }
+
   console.log();
   if (allOk) info(t.syncOk);
   return allOk;
@@ -1489,7 +1555,12 @@ function preflight() {
 
 async function detectRuntimes() {
   heading(t.stepRuntime);
-  const runtimes = { claude: false, codex: false, openclaw: false };
+  const runtimes = {
+    claude: false,
+    codex: false,
+    openclaw: false,
+    cursor: false,
+  };
 
   const claudeVer = detectCli("claude");
   if (claudeVer) {
@@ -1509,7 +1580,18 @@ async function detectRuntimes() {
     runtimes.openclaw = true;
   } else skip(t.openclawNotDetected);
 
-  if (!runtimes.claude && !runtimes.codex && !runtimes.openclaw) {
+  const cursorVer = detectCli("cursor");
+  if (cursorVer) {
+    ok(t.cursorDetected(cursorVer));
+    runtimes.cursor = true;
+  } else skip(t.cursorNotDetected);
+
+  if (
+    !runtimes.claude &&
+    !runtimes.codex &&
+    !runtimes.openclaw &&
+    !runtimes.cursor
+  ) {
     console.log(`\n  ${C.yellow}⚠ ${t.noRuntime}${C.reset}`);
     console.log(`  ${C.dim}${t.noRuntimeHint1}${C.reset}`);
     console.log(
@@ -1728,24 +1810,27 @@ async function installPythonTools() {
     return;
   }
 
-  // Check if graphify already installed (use python -m, not bare command)
-  const gfCheck = run(`${pyCmd} -m graphify --version`);
-  if (gfCheck) {
-    ok(t.graphifyAlreadyInstalled(gfCheck.trim()));
+  // Check if graphify already installed via pip show (more reliable than --version)
+  const pipCmd = pyCmd === "python3" ? "pip3" : "pip";
+  const pipShow = run(`${pipCmd} show graphifyy`);
+  if (pipShow) {
+    const versionMatch = pipShow.match(/Version:\s*(.+)/);
+    const version = versionMatch ? versionMatch[1].trim() : "unknown";
+    ok(t.graphifyAlreadyInstalled(version));
     return;
   }
 
   // Install graphify
   info(t.graphifyInstalling);
-  const pipCmd = pyCmd === "python3" ? "pip3" : "pip";
   const installResult = spawnSync(pipCmd, ["install", "graphifyy"], {
-    stdio: "inherit",
+    stdio: "pipe",
     shell: isWin,
   });
   if (installResult.status !== 0) {
     warn(t.graphifyInstallFailed);
     return;
   }
+  ok(t.graphifyInstalled);
 
   // Register Claude skill — use python -m graphify, not bare "graphify" command
   // graphifyy installs a module, not a system PATH command on Windows
@@ -1754,7 +1839,7 @@ async function installPythonTools() {
     pyCmd,
     ["-m", "graphify", "claude", "install"],
     {
-      stdio: "inherit",
+      stdio: "pipe",
       shell: isWin,
     },
   );
@@ -1784,17 +1869,10 @@ async function validate() {
 }
 
 function showNextSteps(runtimes) {
-  console.log(`
-${C.bold}${C.green}  ──────────────────────────────────────────────
-  ${t.setupComplete}
-  ──────────────────────────────────────────────${C.reset}
-
-${C.bold}  ${t.whatMetaDoes}${C.reset}
-  ${C.dim}${t.whatMetaDoesDesc1}${C.reset}
-  ${C.dim}${t.whatMetaDoesDesc2}${C.reset}
-  ${C.dim}${t.whatMetaDoesDesc3}${C.reset}
-
-${C.bold}  ${t.howToUse}${C.reset}
+  console.log("");
+  console.log(`  ${C.bold}${C.green}✓ ${t.setupComplete}${C.reset}`);
+  console.log("");
+  console.log(`${C.bold}  ${t.howToUse}${C.reset}
 `);
 
   if (runtimes.claude) {
@@ -1816,8 +1894,17 @@ ${C.bold}  ${t.howToUse}${C.reset}
     console.log(
       `  ${C.cyan}OpenClaw:${C.reset} ${C.dim}${t.openclawNote}${C.reset}`,
     );
+  if (runtimes.cursor)
+    console.log(
+      `  ${C.cyan}Cursor:${C.reset} ${C.dim}${t.cursorNote}${C.reset}`,
+    );
 
-  if (!runtimes.claude && !runtimes.codex && !runtimes.openclaw) {
+  if (
+    !runtimes.claude &&
+    !runtimes.codex &&
+    !runtimes.openclaw &&
+    !runtimes.cursor
+  ) {
     console.log(`  ${C.yellow}${t.noRuntimeGetStarted}${C.reset}`);
     console.log(
       `  ${C.dim}${
@@ -1828,104 +1915,110 @@ ${C.bold}  ${t.howToUse}${C.reset}
   }
 
   console.log(`${C.bold}  ${t.usefulCommands}${C.reset}
-    ${C.dim}node setup.mjs --update      # ${t.cmdUpdate}${C.reset}
-    ${C.dim}node setup.mjs --check       # ${t.cmdCheck}${C.reset}
-    ${C.dim}npm run doctor:governance     # ${t.cmdDoctor}${C.reset}
-    ${C.dim}npm run verify:all            # ${t.cmdVerify}${C.reset}
-    ${C.dim}npm run rebuild:run-index -- tests/fixtures/run-artifacts${C.reset}
-    ${C.dim}npm run query:runs -- --owner meta-warden${C.reset}
-    ${C.dim}npm run migrate:meta-kim -- <source-dir> --apply${C.reset}
+    ${C.dim}node setup.mjs --update          # ${t.cmdUpdate}${C.reset}
+    ${C.dim}node setup.mjs --check           # ${t.cmdCheck}${C.reset}
+    ${C.dim}npm run doctor:governance         # ${t.cmdDoctor}${C.reset}
+    ${C.dim}npm run verify:all                # ${t.cmdVerify}${C.reset}
 `);
 }
 
 // ── Main ────────────────────────────────────────────────
 
 function bannerLogo() {
+  // Double-width block pixels for maximum visual impact
+  const B = "\u2588\u2588"; // ██
+  const S = "  ";
+
   const G = {
-    /** Clear “M” apex (avoid 1010101 mid rows — reads like W) */
     M: [
-      "1000001",
-      "1100011",
-      "1011101",
-      "1001001",
-      "1000001",
-      "1000001",
-      "1000001",
+      `${B}${S}${S}${S}${S}${S}${B}`,
+      `${B}${B}${S}${S}${S}${B}${B}`,
+      `${B}${S}${B}${S}${B}${S}${B}`,
+      `${B}${S}${S}${B}${S}${S}${B}`,
+      `${B}${S}${S}${S}${S}${S}${B}`,
+      `${B}${S}${S}${S}${S}${S}${B}`,
+      `${B}${S}${S}${S}${S}${S}${B}`,
     ],
     E: [
-      "1111111",
-      "1000000",
-      "1000000",
-      "1111100",
-      "1000000",
-      "1000000",
-      "1111111",
+      `${B}${B}${B}${B}${B}${B}${B}`,
+      `${B}${S}${S}${S}${S}${S}${S}`,
+      `${B}${S}${S}${S}${S}${S}${S}`,
+      `${B}${B}${B}${B}${B}${S}${S}`,
+      `${B}${S}${S}${S}${S}${S}${S}`,
+      `${B}${S}${S}${S}${S}${S}${S}`,
+      `${B}${B}${B}${B}${B}${B}${B}`,
     ],
     T: [
-      "1111111",
-      "0011100",
-      "0011100",
-      "0011100",
-      "0011100",
-      "0011100",
-      "0011100",
+      `${B}${B}${B}${B}${B}${B}${B}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
     ],
     A: [
-      "0011100",
-      "0100010",
-      "0100010",
-      "0111110",
-      "0100010",
-      "0100010",
-      "0100010",
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${B}${S}${B}${S}${S}`,
+      `${S}${S}${B}${S}${B}${S}${S}`,
+      `${S}${B}${B}${B}${B}${B}${S}`,
+      `${S}${B}${S}${S}${S}${B}${S}`,
+      `${S}${B}${S}${S}${S}${B}${S}`,
+      `${B}${B}${S}${S}${S}${B}${B}`,
     ],
     _: [
-      "0000000",
-      "0000000",
-      "0000000",
-      "0111110",
-      "0000000",
-      "0000000",
-      "0000000",
+      `${S}${S}${S}${S}${S}${S}${S}`,
+      `${S}${S}${S}${S}${S}${S}${S}`,
+      `${S}${S}${S}${S}${S}${S}${S}`,
+      `${S}${S}${S}${S}${S}${S}${S}`,
+      `${S}${S}${S}${S}${S}${S}${S}`,
+      `${S}${S}${S}${S}${S}${S}${S}`,
+      `${B}${B}${B}${B}${B}${B}${B}`,
     ],
     K: [
-      "1100011",
-      "1100110",
-      "1101100",
-      "1111000",
-      "1101100",
-      "1100110",
-      "1100011",
+      `${B}${B}${S}${S}${S}${B}${S}`,
+      `${B}${B}${S}${S}${B}${S}${S}`,
+      `${B}${B}${S}${B}${S}${S}${S}`,
+      `${B}${B}${B}${S}${S}${S}${S}`,
+      `${B}${B}${S}${B}${S}${S}${S}`,
+      `${B}${B}${S}${S}${B}${S}${S}`,
+      `${B}${B}${S}${S}${S}${B}${S}`,
     ],
     I: [
-      "0111110",
-      "0011100",
-      "0011100",
-      "0011100",
-      "0011100",
-      "0011100",
-      "0111110",
+      `${B}${B}${B}${B}${B}${B}${B}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${S}${S}${S}${B}${S}${S}${S}`,
+      `${B}${B}${B}${B}${B}${B}${B}`,
     ],
   };
+
   const word = ["M", "E", "T", "A", "_", "K", "I", "M"];
-  const art = [];
+  // Gold gradient: bright yellow → amber → gold (hermes-inspired)
+  const rowColors = [
+    "\x1b[38;5;226m",
+    "\x1b[38;5;220m",
+    "\x1b[38;5;214m",
+    "\x1b[38;5;208m",
+    "\x1b[38;5;202m",
+    "\x1b[38;5;214m",
+    "\x1b[38;5;220m",
+  ];
+
+  // Build ASCII art lines
+  const artLines = [];
   for (let row = 0; row < 7; row++) {
     let line = "";
     word.forEach((ch, idx) => {
-      line += G[ch][row].replace(/1/g, "█").replace(/0/g, " ");
-      if (idx < word.length - 1) line += " ";
+      line += G[ch][row];
+      if (idx < word.length - 1) line += " "; // 1-char gap between letters
     });
-    art.push(line);
+    artLines.push(line);
   }
-  const contacts = [
-    `Website: ${EXTERNAL_URLS.author?.website || "https://www.aiking.dev/"}`,
-    `GitHub:  ${EXTERNAL_URLS.author?.github || "https://github.com/KimYx0207"}`,
-    `Feishu:  ${
-      EXTERNAL_URLS.author?.feishu ||
-      "https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf"
-    }`,
-    "WeChat:  老金带你玩AI",
-  ];
+
+  // Visual width helper (CJK characters = 2 columns, everything else = 1)
   const dw = (s) =>
     [...s].reduce((w, ch) => {
       const cp = ch.codePointAt(0);
@@ -1937,39 +2030,63 @@ function bannerLogo() {
         (cp >= 0x3000 && cp <= 0x303f);
       return w + (isCJK ? 2 : 1);
     }, 0);
+
+  const contacts = [
+    `Website: ${EXTERNAL_URLS.author?.website || "https://www.aiking.dev/"}`,
+    `GitHub:  ${EXTERNAL_URLS.author?.github || "https://github.com/KimYx0207"}`,
+    `X:       ${EXTERNAL_URLS.author?.x || "https://x.com/KimYx0207"}`,
+    `Feishu:  ${
+      EXTERNAL_URLS.author?.feishu ||
+      "https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf"
+    }`,
+    "WeChat:  \u8001\u91d1\u5e26\u4f60\u73a9AI",
+  ];
+
   const padVis = (s, width) => s + " ".repeat(Math.max(0, width - dw(s)));
-  const artW = art[0].length;
-  const contentW = Math.max(artW, ...contacts.map(dw));
+  // Art width: all chars are ASCII (█ = 1 col, space = 1 col), string length = visual width
+  const artW = artLines[0].length;
   const PAD = 3;
-  const innerW = contentW + PAD * 2;
-  const bar = "━".repeat(innerW);
+  const innerW = artW + PAD * 2;
+  const bar = "\u2501".repeat(innerW);
   const blank = " ".repeat(innerW);
   const center = (text) => {
     const p = innerW - dw(text);
     const l = Math.floor(p / 2);
     return " ".repeat(l) + text + " ".repeat(p - l);
   };
-  const leftPad = (text) =>
-    " ".repeat(PAD) + padVis(text, contentW) + " ".repeat(PAD);
 
-  const sep = "─".repeat(30);
-  const frame = `${C.bold}${C.cyan}`;
+  const sep = "\u2500".repeat(30);
+  const frame = `\x1b[38;5;214m${C.bold}`; // amber frame
 
-  console.log(`
-${frame}  ┏${bar}┓
-  ┃${blank}┃
-${art
-  .map((l) => `  ┃${C.bold}${C.white}${leftPad(l)}${C.reset}${frame}┃`)
-  .join("\n")}
-  ┃${blank}┃
-  ┃${C.green}${center(`Setup ${packageVersion}`)}${C.reset}${frame}┃
-  ┃${blank}┃
-  ┃${blank}┃
-  ┃${C.dim}${center(sep)}${C.reset}${frame}┃
-  ┃${blank}┃
-${contacts.map((c) => `  ┃${C.dim}${leftPad(c)}${C.reset}${frame}┃`).join("\n")}
-  ┃${blank}┃
-  ┗${bar}┛${C.reset}`);
+  const versionText = `Setup v${packageVersion}`;
+  const tagline = "AI Coding Governance Layer";
+
+  console.log("");
+  console.log(`${frame}  \u250f${bar}\u2513`);
+  console.log(`${frame}  \u2503${blank}\u2503`);
+  artLines.forEach((line, row) => {
+    const color = rowColors[row];
+    const padded = " ".repeat(PAD) + padVis(line, artW) + " ".repeat(PAD);
+    console.log(
+      `${frame}  \u2503${color}${C.bold}${padded}${C.reset}${frame}\u2503`,
+    );
+  });
+  console.log(`${frame}  \u2503${blank}\u2503`);
+  console.log(
+    `${frame}  \u2503${C.bold}\x1b[38;5;226m${center(versionText)}${C.reset}${frame}\u2503`,
+  );
+  console.log(
+    `${frame}  \u2503${C.dim}${center(tagline)}${C.reset}${frame}\u2503`,
+  );
+  console.log(`${frame}  \u2503${blank}\u2503`);
+  console.log(`${frame}  \u2503${C.dim}${center(sep)}${C.reset}${frame}\u2503`);
+  console.log(`${frame}  \u2503${blank}\u2503`);
+  contacts.forEach((c) => {
+    console.log(`${frame}  \u2503${C.dim}${center(c)}${C.reset}${frame}\u2503`);
+  });
+  console.log(`${frame}  \u2503${blank}\u2503`);
+  console.log(`${frame}  \u2517${bar}\u251b${C.reset}`);
+  console.log("");
 }
 
 function showModeInfo() {
@@ -1980,10 +2097,9 @@ function showModeInfo() {
       : silentMode
         ? t.modeSilent
         : t.modeInteractive;
-  console.log(`${C.dim}  Mode: ${modeStr}${C.reset}
-${C.dim}  OS: ${platform()} | Node ${process.versions.node}${C.reset}
-${C.dim}  Dir: ${PROJECT_DIR}${C.reset}
-`);
+  console.log(
+    `  ${C.dim}Mode: ${modeStr} | ${platform()} | Node ${process.versions.node}${C.reset}`,
+  );
 }
 
 async function main() {
@@ -2001,7 +2117,7 @@ async function main() {
 
   // ── CLI shortcut modes (non-interactive) ──
   if (checkOnly) {
-    console.log(`\n${C.green}  ${t.envOk}${C.reset}\n`);
+    console.log(`\n  ${C.green}✓ ${t.envOk}${C.reset}\n`);
     const detectedRuntimes = await detectRuntimes();
     const targetContext = await resolveTargetContext(args);
     checkSync(detectedRuntimes, targetContext.supportedTargets);
@@ -2161,7 +2277,7 @@ async function runInstall() {
     await validate();
   });
 
-  console.log(`\n${C.green}${C.bold}  ${t.installComplete}${C.reset}\n`);
+  console.log(`\n  ${C.bold}${C.green}✓ ${t.installComplete}${C.reset}\n`);
   showNextSteps(runtimes);
 }
 
@@ -2236,11 +2352,11 @@ async function runUpdate() {
   // ── 6. checkSync (repo-local, project scope) ───────────────────────
   const { supportedTargets } = await resolveTargetContext(args);
   checkSync(runtimes, supportedTargets);
-  console.log(`\n${C.bold}${C.green}  ${t.updateComplete}${C.reset}\n`);
+  console.log(`\n  ${C.bold}${C.green}✓ ${t.updateComplete}${C.reset}\n`);
 }
 
 async function runCheck() {
-  console.log(`\n${C.green}  ${t.envOk}${C.reset}\n`);
+  console.log(`\n  ${C.green}✓ ${t.envOk}${C.reset}\n`);
   const runtimes = await detectRuntimes();
   const targetContext = await resolveTargetContext(args);
   checkSync(runtimes, targetContext.supportedTargets);

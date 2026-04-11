@@ -39,6 +39,7 @@ function resolveProjectionDirs(scope) {
   const claudeHome = getProjectionBase(scope, "claude");
   const codexHome = getProjectionBase(scope, "codex");
   const openclawHome = getProjectionBase(scope, "openclaw");
+  const cursorHome = getProjectionBase(scope, "cursor");
 
   return {
     // Claude Code
@@ -82,6 +83,11 @@ function resolveProjectionDirs(scope) {
     // Shared skills (mirrored to shared-skills/ in both scopes)
     sharedSkillsDir: path.join(openclawHome, "shared-skills"),
 
+    // Cursor
+    cursorAgentsDir: path.join(cursorHome, ".cursor", "agents"),
+    cursorSkillRoot: path.join(cursorHome, ".cursor", "skills", "meta-theory"),
+    cursorMcpPath: path.join(cursorHome, ".cursor", "mcp.json"),
+
     // Allowed roots for safety assertion
     allowedRoots:
       scope === "global"
@@ -89,6 +95,7 @@ function resolveProjectionDirs(scope) {
             resolveRuntimeHomeDir("claude"),
             resolveRuntimeHomeDir("codex"),
             resolveRuntimeHomeDir("openclaw"),
+            resolveRuntimeHomeDir("cursor"),
           ]
         : [repoRoot],
 
@@ -109,6 +116,9 @@ function resolveProjectionDirs(scope) {
             openclawWorkspaces: path.join(openclawHome, "workspaces"),
             openclawTemplate: path.join(openclawHome, "openclaw.template.json"),
             openclawSkills: path.join(openclawHome, "skills"),
+            cursorAgents: path.join(cursorHome, "agents"),
+            cursorSkill: path.join(cursorHome, "skills", "meta-theory"),
+            cursorMcp: path.join(cursorHome, "mcp.json"),
           }
         : {
             claudeAgents: ".claude/agents",
@@ -124,6 +134,9 @@ function resolveProjectionDirs(scope) {
             openclawTemplate: "openclaw/openclaw.template.json",
             openclawSkills: "openclaw/skills",
             sharedSkills: "shared-skills",
+            cursorAgents: ".cursor/agents",
+            cursorSkill: ".cursor/skills/meta-theory",
+            cursorMcp: ".cursor/mcp.json",
           },
   };
 }
@@ -496,6 +509,30 @@ description = "${agent.description.replace(/"/g, '\\"')}"
 developer_instructions = """
 ${instructions}
 """
+`;
+}
+
+/**
+ * Build a Cursor-compatible agent Markdown file.
+ * Cursor agents live in .cursor/agents/*.md — plain Markdown, no YAML frontmatter.
+ */
+function buildCursorAgent(agent) {
+  return `# ${agent.title}
+
+> ${agent.summary}
+
+<!-- Generated from ${agent.sourceFile} by npm run sync:runtimes. Edit canonical source first. -->
+
+You are the Cursor agent mirror of Meta_Kim agent \`${agent.id}\`.
+Primary responsibility: ${agent.description}
+
+Stay inside your own responsibility boundary.
+If the task crosses agent boundaries, hand the decision back to the parent session or recommend the correct sibling meta agent.
+Use the portable meta-theory skill when it helps, but do not claim ownership of another agent's deliverable.
+
+---
+
+${agent.body}
 `;
 }
 
@@ -894,6 +931,57 @@ Examples:
     }
   }
 
+  // ── Cursor sync ───────────────────────────────────────────────
+  if (selectedTargets.includes("cursor")) {
+    const dp = dirs.displayPaths;
+
+    // Agent projections (.cursor/agents/*.md)
+    for (const agent of agents) {
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorAgentsDir, `${agent.id}.md`),
+            buildCursorAgent(agent),
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorAgents}/${agent.id}.md`);
+      }
+    }
+
+    // Skill projections (.cursor/skills/meta-theory/)
+    if (
+      (
+        await writeGeneratedFile(
+          path.join(dirs.cursorSkillRoot, "SKILL.md"),
+          portableSkill,
+        )
+      ).changed
+    ) {
+      changedFiles.push(`${dp.cursorSkill}/SKILL.md`);
+    }
+    for (const reference of skillReferences) {
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorSkillRoot, "references", reference.name),
+            reference.content,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorSkill}/references/${reference.name}`);
+      }
+    }
+
+    // MCP config (.cursor/mcp.json) — reuse Claude's MCP template
+    if (dirs.cursorMcpPath) {
+      const mcpContent = await fs.readFile(canonicalClaudeMcpPath, "utf8");
+      if ((await writeGeneratedFile(dirs.cursorMcpPath, mcpContent)).changed) {
+        changedFiles.push(dp.cursorMcp);
+      }
+    }
+  }
+
   if (checkOnly && changedFiles.length > 0) {
     console.error("Generated runtime assets are out of date:");
     for (const file of changedFiles) {
@@ -941,6 +1029,15 @@ Examples:
     "OpenClaw/shared-skills/": changedFiles.filter((f) =>
       f.startsWith("shared-skills/"),
     ).length,
+    "Cursor/.cursor/agents/": changedFiles.filter((f) =>
+      f.startsWith(".cursor/agents/"),
+    ).length,
+    "Cursor/.cursor/skills/": changedFiles.filter((f) =>
+      f.startsWith(".cursor/skills/"),
+    ).length,
+    "Cursor/.cursor/mcp.json": changedFiles.filter(
+      (f) => f === ".cursor/mcp.json",
+    ).length,
   };
 
   const groups = {
@@ -960,6 +1057,11 @@ Examples:
       "OpenClaw/openclaw/workspaces/",
       "OpenClaw/openclaw/skills/",
       "OpenClaw/shared-skills/",
+    ],
+    Cursor: [
+      "Cursor/.cursor/agents/",
+      "Cursor/.cursor/skills/",
+      "Cursor/.cursor/mcp.json",
     ],
   };
 
