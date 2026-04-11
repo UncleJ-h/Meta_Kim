@@ -227,6 +227,39 @@ The most important sentence in this repository is:
 
 </div>
 
+<a id="runtime-sync-targets-en"></a>
+
+#### What Gets Synced (`npm run sync:runtimes`)
+
+`sync-runtimes` projects canonical sources into all four runtime trees simultaneously. Run `npm run sync:runtimes` after editing `canonical/` or `config/contracts/`.
+
+<div align="center">
+
+| Runtime     | Synced directory / files                   | Description                                               |
+| ---------- | ---------------------------------------- | --------------------------------------------------------- |
+| Claude Code | `.claude/agents/`                       | 8 meta-agent .md files                                    |
+|            | `.claude/skills/meta-theory/SKILL.md`   | meta-theory skill entry                                    |
+|            | `.claude/skills/meta-theory/references/` | 6 reference docs (dev-governance, rhythm, etc.)           |
+|            | `.claude/hooks/`                        | 8 hook scripts                                           |
+|            | `.claude/settings.json`                  | Claude settings (project-level)                            |
+|            | `.mcp.json`                             | MCP runtime server config (root)                          |
+| Codex      | `.codex/agents/`                        | 8 meta-agent .toml files                                 |
+|            | `.codex/skills/meta-theory.md`           | meta-theory skill (flat format)                          |
+|            | `.codex/skills/references/`              | reference docs                                           |
+|            | `.agents/skills/meta-theory/SKILL.md`    | project-level meta-theory skill                          |
+| OpenClaw   | `openclaw/workspaces/{agent}/`           | 8 workspaces × 9 .md files each (BOOT, SOUL, TOOLS…)  |
+|            | `openclaw/openclaw.template.json`         | workspace template config                                 |
+|            | `openclaw/skills/meta-theory.md`         | shared meta-theory skill                                 |
+|            | `openclaw/skills/references/`            | reference docs                                           |
+| Cursor     | `.cursor/agents/`                       | 8 meta-agent .md files (plain Markdown, no YAML frontmatter) |
+|            | `.cursor/skills/meta-theory/SKILL.md`   | meta-theory skill entry                                  |
+|            | `.cursor/skills/meta-theory/references/` | reference docs                                           |
+|            | `.cursor/mcp.json`                      | Cursor MCP config                                        |
+| Shared     | `shared-skills/meta-theory.md`            | cross-runtime shared meta-theory skill                   |
+|            | `shared-skills/references/`              | reference docs                                           |
+
+</div>
+
 One figure for **one method, four landing points** (details: [Meta Architecture View](#meta-kim-visual-maps-en)):
 
 ```mermaid

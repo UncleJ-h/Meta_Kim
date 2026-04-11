@@ -380,6 +380,39 @@ node scripts/agent-health-report.mjs
 
 </div>
 
+<a id="runtime-sync-targets-zh"></a>
+
+#### 同步清单（`npm run sync:runtimes`）
+
+`sync-runtimes` 将规范主源同步到全部四个运行时树。修改 `canonical/` 或 `config/contracts/` 后执行此命令。
+
+<div align="center">
+
+| 运行时 | 同步目录 / 文件                     | 说明                                              |
+| --- | --- | --- |
+| Claude Code | `.claude/agents/`                     | 8 个 meta-agent .md 文件                             |
+|            | `.claude/skills/meta-theory/SKILL.md` | meta-theory 技能入口                               |
+|            | `.claude/skills/meta-theory/references/` | 6 个参考文档（dev-governance, rhythm 等）          |
+|            | `.claude/hooks/`                      | 8 个 hook 脚本                                     |
+|            | `.claude/settings.json`               | Claude 设置（项目级）                             |
+|            | `.mcp.json`                          | MCP 运行时服务器配置（根目录）                  |
+| Codex      | `.codex/agents/`                     | 8 个 meta-agent .toml 文件                       |
+|            | `.codex/skills/meta-theory.md`        | meta-theory 技能（扁平格式）                     |
+|            | `.codex/skills/references/`           | 参考文档                                         |
+|            | `.agents/skills/meta-theory/SKILL.md` | 项目级 meta-theory 技能                          |
+| OpenClaw   | `openclaw/workspaces/{agent}/`         | 8 个 workspace × 各 9 个 .md（BOOT, SOUL…）  |
+|            | `openclaw/openclaw.template.json`       | workspace 模板配置                               |
+|            | `openclaw/skills/meta-theory.md`       | 共享 meta-theory 技能                          |
+|            | `openclaw/skills/references/`          | 参考文档                                         |
+| Cursor     | `.cursor/agents/`                    | 8 个 meta-agent .md 文件（纯 Markdown，无 YAML）   |
+|            | `.cursor/skills/meta-theory/SKILL.md` | meta-theory 技能入口                           |
+|            | `.cursor/skills/meta-theory/references/` | 参考文档                                     |
+|            | `.cursor/mcp.json`                  | Cursor MCP 配置                               |
+| 共享       | `shared-skills/meta-theory.md`          | 跨运行时共享 meta-theory 技能                |
+|            | `shared-skills/references/`            | 参考文档                                         |
+
+</div>
+
 一图概括「**同一套方法，四处落地**」（细部与同步命令见 [原理与设计 · 元架构视角](#元架构视角) 主源图示）：
 
 ```mermaid

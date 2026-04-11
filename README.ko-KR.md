@@ -174,6 +174,39 @@ flowchart LR
 
 </div>
 
+<a id="runtime-sync-targets-ko"></a>
+
+#### 동기 대상（`npm run sync:runtimes`）
+
+`sync-runtimes`는規範 主源을 네 런타임 모두에 동시에投影합니다. `canonical/` 또는 `config/contracts/`를編集後に実行してください.
+
+<div align="center">
+
+| 런타임 | 동기 디렉토리 / 파일                        | 설명                                                     |
+| ------ | ---------------------------------------- | -------------------------------------------------------- |
+| Claude Code | `.claude/agents/`                      | 8개 meta-agent .md 파일                               |
+|            | `.claude/skills/meta-theory/SKILL.md`  | meta-theoryスキルエントリ                              |
+|            | `.claude/skills/meta-theory/references/`| 6개참조 문서（dev-governance, rhythm 등）               |
+|            | `.claude/hooks/`                       | 8개 hook 스크립트                                    |
+|            | `.claude/settings.json`                | Claude 설정（프로젝트 레벨）                        |
+|            | `.mcp.json`                          | MCP 런타임 서버 설정（루트）                      |
+| Codex      | `.codex/agents/`                     | 8개 meta-agent .toml 파일                         |
+|            | `.codex/skills/meta-theory.md`        | meta-theoryスキル（플랫 형식）                     |
+|            | `.codex/skills/references/`            | 참조 문서                                             |
+|            | `.agents/skills/meta-theory/SKILL.md`  | 프로젝트 레벨 meta-theoryスキル                  |
+| OpenClaw   | `openclaw/workspaces/{agent}/`        | 8개 workspace × 각 9개 .md（BOOT, SOUL, TOOLS…） |
+|            | `openclaw/openclaw.template.json`      | workspace 템플릿 설정                              |
+|            | `openclaw/skills/meta-theory.md`        | 공유 meta-theoryスキル                         |
+|            | `openclaw/skills/references/`          | 참조 문서                                             |
+| Cursor     | `.cursor/agents/`                  | 8개 meta-agent .md（YAML frontmatter 없음）            |
+|            | `.cursor/skills/meta-theory/SKILL.md` | meta-theoryスキルエントリ                          |
+|            | `.cursor/skills/meta-theory/references/` | 참조 문서                                     |
+|            | `.cursor/mcp.json`                  | Cursor MCP 설정                                   |
+| 공유       | `shared-skills/meta-theory.md`         | 런타임 간 공유 meta-theoryスキル                |
+|            | `shared-skills/references/`           | 참조 문서                                             |
+
+</div>
+
 **같은 방법을 네 곳에 내려놓기** 요약(세부는 위 [그림: 정본·도구·런타임 미러](#meta-kim-visual-maps-ko)):
 
 ```mermaid

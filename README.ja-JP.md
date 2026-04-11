@@ -174,6 +174,39 @@ flowchart LR
 
 </div>
 
+<a id="runtime-sync-targets-ja"></a>
+
+#### 同期対象（`npm run sync:runtimes`）
+
+`sync-runtimes` は規範主源を四つのランタイムすべてに同時に投影します。`canonical/` または `config/contracts/` を編集後に実行してください。
+
+<div align="center">
+
+| ランタイム | 同期ディレクトリ / ファイル                       | 説明                                                       |
+| ---------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| Claude Code | `.claude/agents/`                              | 8つの meta-agent .md ファイル                              |
+|            | `.claude/skills/meta-theory/SKILL.md`           | meta-theory スキルエントリ                                |
+|            | `.claude/skills/meta-theory/references/`         | 6つの参照ドキュメント（dev-governance, rhythm 等）          |
+|            | `.claude/hooks/`                               | 8つの hook スクリプト                                    |
+|            | `.claude/settings.json`                        | Claude 設定（プロジェクトレベル）                        |
+|            | `.mcp.json`                                   | MCP ランタイムサーバー設定（ルート）                      |
+| Codex      | `.codex/agents/`                              | 8つの meta-agent .toml ファイル                         |
+|            | `.codex/skills/meta-theory.md`                 | meta-theory スキル（フラット形式）                       |
+|            | `.codex/skills/references/`                    | 参照ドキュメント                                         |
+|            | `.agents/skills/meta-theory/SKILL.md`          | プロジェクトレベルの meta-theory スキル                  |
+| OpenClaw   | `openclaw/workspaces/{agent}/`                 | 8ワークスペース × 各9つの .md（BOOT, SOUL, TOOLS…） |
+|            | `openclaw/openclaw.template.json`               | workspace テンプレート設定                                |
+|            | `openclaw/skills/meta-theory.md`               | 共有 meta-theory スキル                               |
+|            | `openclaw/skills/references/`                  | 参照ドキュメント                                         |
+| Cursor     | `.cursor/agents/`                           | 8つの meta-agent .md（YAML frontmatter なし）            |
+|            | `.cursor/skills/meta-theory/SKILL.md`        | meta-theory スキルエントリ                            |
+|            | `.cursor/skills/meta-theory/references/`    | 参照ドキュメント                                     |
+|            | `.cursor/mcp.json`                          | Cursor MCP 設定                                      |
+| 共有       | `shared-skills/meta-theory.md`                 | ランタイム横断の meta-theory スキル                |
+|            | `shared-skills/references/`                  | 参照ドキュメント                                         |
+
+</div>
+
 **同一の方法を四か所に落とす**略図（詳細は上文 [図: 主源・ツール・ランタイム鏡像](#meta-kim-visual-maps-ja)）:
 
 ```mermaid
