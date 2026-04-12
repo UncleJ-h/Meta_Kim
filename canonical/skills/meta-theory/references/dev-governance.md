@@ -61,6 +61,7 @@ When Step 2 is chosen, the governed run must explicitly record the factory lane:
 Before Stage 4 starts, Thinking must produce explicit protocol artifacts for the run:
 - `runHeader`
 - `taskClassification`
+- `fetchPacket`
 - `cardPlanPacket`
 - `dispatchEnvelopePacket`
 - `orchestrationTaskBoardPacket`
@@ -230,6 +231,10 @@ Meta_Kim now uses a **two-layer classifier** so trigger decisions are reviewable
 **Classification output fields**:
 - `taskClass`
 - `requestClass`
+- `queryScope` (`current_project` | `all_projects`)
+- `projectRef` (e.g., `project-abc123def456`)
+- `registryStatus` (`known` | `prompt_join` | `joined` | `skipped`)
+- `crossProjectReason` (required when `queryScope` = `all_projects`)
 - `governanceFlow`
 - `triggerReasons[]`
 - `upgradeReasons[]`
@@ -352,6 +357,10 @@ On receiving an escalation signal: re-enter Fetch (Stage 2) to find a more capab
 {
   "taskClass": "A",
   "requestClass": "execute",
+  "queryScope": "current_project",
+  "projectRef": "project-abc123def456",
+  "registryStatus": "known",
+  "crossProjectReason": null,
   "governanceFlow": "complex_dev",
   "triggerReasons": ["multi_file", "durable_artifact"],
   "upgradeReasons": ["review_or_verify_required"],
@@ -419,6 +428,11 @@ IF discover:global lists few skills/agents but the task needs Meta_Kim third-par
 Read .claude/capability-index/meta-kim-capabilities.json
 Search for agents declaring the needed capability
 Score match
+
+IF globalProjectRegistry is available (~/.meta-kim/global/project-registry.sqlite)
+  → check whether other registered projects have relevant capabilities
+  → record globalRegistryHits in fetchPacket
+  → respect cross_project_readonly memory mode when using external project context
 ```
 
 **Step 3 — External skill discovery** (if the local + indexed baseline still has no perfect match):
@@ -501,9 +515,21 @@ This is a **preference**, not a hard rule — if the lightweight agent escalates
     "confidenceDistribution": null,
     "quality": null
   },
+  "fetchPacket": {
+    "projectsChecked": ["current_project"],
+    "projectLocalSources": [".claude/agents", ".claude/skills"],
+    "globalRegistryHits": [],
+    "capabilityMatches": [
+      { "name": "code-reviewer", "source": "global", "score": 3, "matchReason": "Own covers code quality review" }
+    ],
+    "capabilityGaps": [],
+    "graphSources": [],
+    "knowledgeSources": []
+  },
   "searchTrail": [
     "local-agents",
     "global-capability-index",
+    "global-project-registry",
     "findskill",
     "specialist-ecosystem"
   ],
@@ -575,6 +601,10 @@ Thinking must lock down the execution protocol before any `Agent` tool invocatio
   "taskClassification": {
     "taskClass": "A",
     "requestClass": "execute",
+    "queryScope": "current_project",
+    "projectRef": "project-abc123def456",
+    "registryStatus": "known",
+    "crossProjectReason": null,
     "governanceFlow": "complex_dev",
     "triggerReasons": ["multi_file", "durable_artifact"],
     "upgradeReasons": ["review_or_verify_required"],
@@ -856,6 +886,11 @@ If files involve UI/components:
   "skipLevelScar": null,
   "ownerCoverage": "PASS",
   "protocolCompliance": "PASS",
+  "qualityGate": "FAIL",
+  "revisionNeeded": true,
+  "revisionRound": 1,
+  "sourceProjects": ["project-abc123def456"],
+  "crossProjectContaminationCheck": "pass",
   "temporaryOwnerFollowUp": [],
   "reviews": [
     { "type": "code-quality", "agent": "code-reviewer", "result": "PASS", "issues": [] },
@@ -866,16 +901,14 @@ If files involve UI/components:
       "findingId": "rev-001",
       "severity": "high",
       "owner": "security-reviewer",
+      "sourceProject": "project-abc123def456",
       "summary": "hardcoded API key in config.ts",
       "requiredAction": "remove secret and load from secure runtime config",
       "fixArtifact": "src/config.ts",
       "verifiedBy": "meta-prism",
       "closeState": "open"
     }
-  ],
-  "qualityGate": "FAIL",
-  "revisionNeeded": true,
-  "revisionRound": 1
+  ]
 }
 ```
 
@@ -1000,6 +1033,7 @@ The 8-stage spine has no separate “summary stage”, but business runs still n
   "deliverableChainClosed": true,
   "consolidatedDeliverablePresent": true,
   "publicReady": true,
+  "sourceProjects": ["project-abc123def456"],
   "deliveryShellsUsed": ["shell-tech-detail"],
   "blockedBy": []
 }

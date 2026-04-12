@@ -127,19 +127,33 @@ Conductor's planning output, before writing worker tasks, must first write the c
 
 Missing any of these 6 items means execution cannot begin.
 
-For every non-query run, execution also requires a **`dispatchEnvelopePacket`** before any worker starts:
+For every non-query run, execution also requires a **`fetchPacket`** and a **`dispatchEnvelopePacket`** before any worker starts:
+
+**fetchPacket** (explicit Fetch-stage evidence):
+
+- `projectsChecked`
+- `projectLocalSources`
+- `globalRegistryHits`
+- `capabilityMatches`
+- `capabilityGaps`
+- `graphSources`
+- `knowledgeSources`
+
+**dispatchEnvelopePacket**:
 
 - `ownerAgent`
 - `taskRef`
 - `allowedCapabilities`
 - `blockedCapabilities`
-- `memoryMode`
+- `route` (`project_only` | `cross_project`)
+- `ownerSelection` (`capability_first`)
+- `memoryMode` (`project_only` | `cross_project_readonly`)
 - `workspaceHint`
 - `resultSchemaRef`
 - `reviewOwner`
 - `verificationOwner`
 
-Rule: Conductor deals the envelope **before** dispatch. No envelope, no execution.
+Rule: Conductor deals both packets **before** dispatch. No fetch evidence or envelope, no execution.
 
 ### B. Standard Task Board Fields
 

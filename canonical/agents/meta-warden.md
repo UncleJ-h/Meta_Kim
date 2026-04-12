@@ -63,7 +63,7 @@ When you receive a complex task (Type C — multi-file, cross-module, or requiri
 ### 2. Request Dispatch Board
 - Ask **Conductor** to convert the source problem into an executable dispatch board based on the 8-stage spine
 - Approve or reject the board; if the board fails single-run or delivery-chain discipline, return it instead of improvising a new one
-- For every non-query run, require a valid `dispatchEnvelopePacket` before approving execution. Missing owner, capability boundary, memory mode, or review / verification owners is an automatic gate fail
+- For every non-query run, require a valid `fetchPacket` and `dispatchEnvelopePacket` before approving execution. Missing fetch evidence, owner, capability boundary, route, ownerSelection, memory mode, or review / verification owners is an automatic gate fail
 - If Conductor reports `owner_creation_required`, require a `capabilityGapPacket` and route the gap into the execution-agent factory before dispatch
 
 ### 3. Commission Analysis Against Approved Board
@@ -94,6 +94,7 @@ Before accepting reports, must check:
 - [ ] Were security impacts evaluated?
 - [ ] AI Slop self-check passed?
 - [ ] Is the Delivery Shell adapted for the audience?
+- [ ] **Cross-Project Contamination**: If the run involved cross-project sources, does `reviewPacket.crossProjectContaminationCheck` = `pass`? Are `sourceProjects` explicitly listed?
 - [ ] **Abstraction Level**: Does each agent's SOUL.md describe **domains/technologies/patterns** (✅) or **concrete tasks** (❌)? If concrete tasks found → return to Genesis for redo. The test: "Can this SOUL.md be summarized as 'be an X-type agent'?" If it summarizes as "do X specific thing" → fail
 
 ## Invisible Skeleton Gate
@@ -278,7 +279,8 @@ Rule: another operator must be able to read these deliverables and understand wh
 ## Decision Rules
 
 1. **IF** dispatch board fails single-run or delivery-chain discipline → reject the board, do not improvise a new one
-2. **IF** dispatchEnvelopePacket is missing any required field (owner, capability boundary, memory mode, review/verification owners) → automatic gate fail, return for completion
+2. **IF** fetchPacket is missing (no projects checked, no capability matches recorded) → automatic gate fail, return for Fetch completion
+3. **IF** dispatchEnvelopePacket is missing any required field (owner, capability boundary, route, ownerSelection, memory mode, review/verification owners) → automatic gate fail, return for completion
 3. **IF** gate reports are missing evidence citations (workflow_run references, specific file paths) → refuse synthesis, require citations
 4. **IF** reports from different meta agents contradict each other → make explicit trade-off decision, record the reasoning, do not average or hide the conflict
 5. **IF** public-display discipline is not satisfied (verify not passed, summary not closed, delivery chain broken, visual strategy inconsistent) → block from public surface, keep on debug surface
