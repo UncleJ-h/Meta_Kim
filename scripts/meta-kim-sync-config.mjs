@@ -70,7 +70,7 @@ const runtimeProfileCatalog = {
     projection: {
       supportsRepoProjection: true,
       supportsLocalActivation: true,
-      assetTypes: ["agents", "skills", "config"],
+      assetTypes: ["agents", "skills", "config", "mcp"],
       outputPaths: {
         agentsDir: ".codex/agents",
         legacySkillFile: ".codex/skills/meta-theory.md",
@@ -93,7 +93,7 @@ const runtimeProfileCatalog = {
     projection: {
       supportsRepoProjection: true,
       supportsLocalActivation: true,
-      assetTypes: ["workspaces", "skills", "config", "sharedSkills"],
+      assetTypes: ["workspaces", "skills", "config", "sharedSkills", "mcp"],
       outputPaths: {
         workspacesDir: "openclaw/workspaces",
         skillsDir: "openclaw/skills",
@@ -125,7 +125,7 @@ const runtimeProfileCatalog = {
     },
     activation: {
       supportsGlobalSkillSync: true,
-      supportsGlobalDependencyInstall: false,
+      supportsGlobalDependencyInstall: true,
       supportsGlobalHooks: false,
       envKeys: ["META_KIM_CURSOR_HOME", "CURSOR_HOME"],
       defaultHomeDir: ".cursor",
@@ -292,28 +292,111 @@ export async function resolveTargetContext(argv = process.argv.slice(2)) {
 
 // ── Path resolution ─────────────────────────────────────────
 
-/** Home directory resolver for each runtime. Priority: env var > ~/.runtime */
-export function resolveRuntimeHomeDir(runtimeId) {
-  const specs = {
-    claude: {
-      envKeys: ["META_KIM_CLAUDE_HOME", "CLAUDE_HOME"],
-      defaultDir: ".claude",
-    },
-    codex: {
-      envKeys: ["META_KIM_CODEX_HOME", "CODEX_HOME"],
-      defaultDir: ".codex",
-    },
-    openclaw: {
-      envKeys: ["META_KIM_OPENCLAW_HOME", "OPENCLAW_HOME"],
-      defaultDir: ".openclaw",
-    },
-    cursor: {
-      envKeys: ["META_KIM_CURSOR_HOME", "CURSOR_HOME"],
-      defaultDir: ".cursor",
-    },
-  };
+const runtimeHomeSpecs = {
+  claude: {
+    envKeys: ["META_KIM_CLAUDE_HOME", "CLAUDE_HOME"],
+    defaultDir: ".claude",
+  },
+  codex: {
+    envKeys: ["META_KIM_CODEX_HOME", "CODEX_HOME"],
+    defaultDir: ".codex",
+  },
+  openclaw: {
+    envKeys: ["META_KIM_OPENCLAW_HOME", "OPENCLAW_HOME"],
+    defaultDir: ".openclaw",
+  },
+  cursor: {
+    envKeys: ["META_KIM_CURSOR_HOME", "CURSOR_HOME"],
+    defaultDir: ".cursor",
+  },
+};
 
-  const spec = specs[runtimeId];
+const runtimeProjectionLayouts = {
+  claude: {
+    project: {
+      agentsDir: [".claude", "agents"],
+      skillRoot: [".claude", "skills", "meta-theory"],
+      hooksDir: [".claude", "hooks"],
+      settingsFile: [".claude", "settings.json"],
+      mcpFile: [".mcp.json"],
+    },
+    global: {
+      agentsDir: ["agents"],
+      skillRoot: ["skills", "meta-theory"],
+      hooksDir: ["hooks", "meta-kim"],
+      settingsFile: ["settings.json"],
+      mcpFile: null,
+    },
+  },
+  codex: {
+    project: {
+      agentsDir: [".codex", "agents"],
+      legacySkillFile: [".codex", "skills", "meta-theory.md"],
+      legacySkillReferencesDir: [".codex", "skills", "references"],
+      projectSkillRoot: [".agents", "skills", "meta-theory"],
+      configExampleFile: ["codex", "config.toml.example"],
+    },
+    global: {
+      agentsDir: ["agents"],
+      skillRoot: ["skills", "meta-theory"],
+      configExampleFile: ["config.toml.example"],
+    },
+  },
+  openclaw: {
+    project: {
+      workspacesRoot: ["openclaw", "workspaces"],
+      legacySkillFile: ["openclaw", "skills", "meta-theory.md"],
+      legacySkillReferencesDir: ["openclaw", "skills", "references"],
+      templateConfigFile: ["openclaw", "openclaw.template.json"],
+      sharedSkillFile: ["shared-skills", "meta-theory.md"],
+      sharedSkillReferencesDir: ["shared-skills", "references"],
+    },
+    global: {
+      workspacesRoot: [],
+      skillRoot: ["skills", "meta-theory"],
+      templateConfigFile: ["openclaw.template.json"],
+    },
+  },
+  cursor: {
+    project: {
+      agentsDir: [".cursor", "agents"],
+      skillRoot: [".cursor", "skills", "meta-theory"],
+      mcpFile: [".cursor", "mcp.json"],
+    },
+    global: {
+      agentsDir: ["agents"],
+      skillRoot: ["skills", "meta-theory"],
+      mcpFile: ["mcp.json"],
+    },
+  },
+};
+
+function normalizeProjectionScope(scope) {
+  return scope === "global" ? "global" : "project";
+}
+
+function joinProjectionPath(baseDir, segments) {
+  if (!Array.isArray(segments)) {
+    return null;
+  }
+  if (segments.length === 0) {
+    return baseDir;
+  }
+  return path.join(baseDir, ...segments);
+}
+
+function relativeProjectionLabel(segments) {
+  if (!Array.isArray(segments)) {
+    return null;
+  }
+  if (segments.length === 0) {
+    return ".";
+  }
+  return segments.join("/").replace(/\\/g, "/");
+}
+
+export function resolveRuntimeHomeInfo(runtimeId) {
+  const spec = runtimeHomeSpecs[runtimeId];
   if (!spec) {
     throw new Error(`Unknown runtime: ${runtimeId}`);
   }
@@ -321,10 +404,92 @@ export function resolveRuntimeHomeDir(runtimeId) {
   for (const key of spec.envKeys) {
     const value = process.env[key];
     if (typeof value === "string" && value.trim()) {
-      return path.resolve(value.trim());
+      return {
+        dir: path.resolve(value.trim()),
+        source: `env:${key}`,
+      };
     }
   }
-  return path.join(os.homedir(), spec.defaultDir);
+
+  return {
+    dir: path.join(os.homedir(), spec.defaultDir),
+    source: "default",
+  };
+}
+
+/** Home directory resolver for each runtime. Priority: env var > ~/.runtime */
+export function resolveRuntimeHomeDir(runtimeId) {
+  return resolveRuntimeHomeInfo(runtimeId).dir;
+}
+
+export function resolveRuntimeProjection(
+  runtimeId,
+  scope = "project",
+  options = {},
+) {
+  const normalizedScope = normalizeProjectionScope(scope);
+  const layout = runtimeProjectionLayouts[runtimeId]?.[normalizedScope];
+  if (!layout) {
+    throw new Error(
+      `Missing projection layout for runtime ${runtimeId} (${normalizedScope})`,
+    );
+  }
+
+  const projectRoot = options.projectRoot ?? repoRoot;
+  const baseDir =
+    normalizedScope === "global"
+      ? resolveRuntimeHomeDir(runtimeId)
+      : projectRoot;
+
+  const resolved = {
+    runtimeId,
+    scope: normalizedScope,
+    baseDir,
+    display: {},
+  };
+
+  for (const [key, segments] of Object.entries(layout)) {
+    resolved[key] = joinProjectionPath(baseDir, segments);
+    resolved.display[key] =
+      normalizedScope === "global"
+        ? resolved[key]
+        : relativeProjectionLabel(segments);
+  }
+
+  if (runtimeId === "openclaw") {
+    resolved.workspaceDir = (agentId) =>
+      normalizedScope === "global"
+        ? path.join(baseDir, `workspace-${agentId}`)
+        : path.join(baseDir, "openclaw", "workspaces", agentId);
+    resolved.displayWorkspaceDir = (agentId) =>
+      normalizedScope === "global"
+        ? path.join(baseDir, `workspace-${agentId}`)
+        : `openclaw/workspaces/${agentId}`;
+  }
+
+  return resolved;
+}
+
+export function resolveRuntimeProjectionRoots(scope = "project", options = {}) {
+  const normalizedScope = normalizeProjectionScope(scope);
+  return supportedTargetIds.reduce((accumulator, runtimeId) => {
+    accumulator[runtimeId] = resolveRuntimeProjection(
+      runtimeId,
+      normalizedScope,
+      options,
+    );
+    return accumulator;
+  }, {});
+}
+
+export function resolveRuntimeAllowedRoots(scope = "project", options = {}) {
+  const normalizedScope = normalizeProjectionScope(scope);
+  if (normalizedScope === "global") {
+    return supportedTargetIds.map((runtimeId) =>
+      resolveRuntimeHomeDir(runtimeId),
+    );
+  }
+  return [options.projectRoot ?? repoRoot];
 }
 
 /**

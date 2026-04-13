@@ -1,0 +1,335 @@
+{
+  "runHeader": {
+    "department": "engineering",
+    "primaryDeliverable": "shared-auth-pattern-extraction",
+    "audience": "developer",
+    "freshnessRequirement": "current-repo-state",
+    "visualPolicy": "fit_department_nature",
+    "handoffPlan": "merge owner closes one consolidated deliverable after verification"
+  },
+  "taskClassification": {
+    "taskClass": "A",
+    "requestClass": "execute",
+    "queryScope": "all_projects",
+    "projectRef": "project-shared-auth-pattern",
+    "registryStatus": "known",
+    "crossProjectReason": "user_explicit_cross_project_request",
+    "governanceFlow": "complex_dev",
+    "triggerReasons": [
+      "multi_file",
+      "cross_module",
+      "durable_artifact",
+      "verification_required"
+    ],
+    "upgradeReasons": [
+      "review_or_verify_required"
+    ],
+    "bypassReasons": [],
+    "ownerRequired": true,
+    "decisionSource": "classifier-v2",
+    "classifierVersion": "v2",
+    "complexity": "high"
+  },
+  "fetchPacket": {
+    "projectsChecked": [
+      {
+        "projectRef": "project-shared-auth-pattern",
+        "checkMode": "current_project",
+        "reason": "primary project"
+      },
+      {
+        "projectRef": "project-auth-refresh-hardening",
+        "checkMode": "global_registry_hit",
+        "reason": "related auth implementation in registered project"
+      }
+    ],
+    "projectLocalSources": [
+      {
+        "projectRef": "project-shared-auth-pattern",
+        "sourceType": "run_index",
+        "sourceRef": ".meta-kim/state/default/run-index.sqlite"
+      }
+    ],
+    "globalRegistryHits": [
+      {
+        "projectRef": "project-auth-refresh-hardening",
+        "sourceType": "project_registry",
+        "sourceRef": "~/.meta-kim/global/project-registry.sqlite"
+      }
+    ],
+    "capabilityMatches": [
+      {
+        "capability": "auth_pattern_extraction",
+        "owner": "meta-conductor",
+        "sourceProject": "project-shared-auth-pattern"
+      },
+      {
+        "capability": "auth_refresh_hardening",
+        "owner": "meta-conductor",
+        "sourceProject": "project-auth-refresh-hardening"
+      }
+    ],
+    "capabilityGaps": [],
+    "graphSources": [
+      {
+        "projectRef": "project-shared-auth-pattern",
+        "sourceType": "graph",
+        "sourceRef": "graphify-out/graph.json"
+      }
+    ],
+    "knowledgeSources": [
+      {
+        "projectRef": "project-shared-auth-pattern",
+        "sourceType": "doc",
+        "sourceRef": "docs/auth-patterns.md"
+      },
+      {
+        "projectRef": "project-auth-refresh-hardening",
+        "sourceType": "doc",
+        "sourceRef": "docs/auth-refresh.md"
+      }
+    ]
+  },
+  "intentPacket": {
+    "trueUserIntent": "Extract a shared auth pattern library by analyzing auth implementations across multiple registered projects; deliver one consolidated pattern module.",
+    "successCriteria": "Shared auth pattern module compiles; both source projects verified as correctly referenced; review finds no cross-project contamination.",
+    "nonGoals": "No changes to existing project-specific auth modules; no production deploy.",
+    "intentPacketVersion": "v1"
+  },
+  "intentGatePacket": {
+    "ambiguitiesResolved": true,
+    "requiresUserChoice": false,
+    "defaultAssumptions": [
+      "Read-only access to project-auth-refresh-hardening sources.",
+      "Only the shared pattern library gets write changes."
+    ],
+    "intentGatePacketVersion": "v1"
+  },
+  "cardPlanPacket": {
+    "dealerOwner": "meta-conductor",
+    "dealerMode": "conductor-primary-warden-escalation",
+    "cards": [
+      {
+        "cardId": "card-clarify",
+        "cardType": "info",
+        "cardIntent": "clarify",
+        "cardDecision": "deal",
+        "cardAudience": "user",
+        "cardTiming": "immediate",
+        "cardShell": "conversation",
+        "cardPriority": 9,
+        "cardReason": "cross-project scope must be explicit",
+        "cardSource": "meta-conductor",
+        "cardSuppressed": false,
+        "suppressionReason": "",
+        "deliveryShellId": "shell-structured-status"
+      },
+      {
+        "cardId": "card-risk",
+        "cardType": "risk",
+        "cardIntent": "risk_surface",
+        "cardDecision": "deal",
+        "cardAudience": "governance",
+        "cardTiming": "on_risk",
+        "cardShell": "summary",
+        "cardPriority": 10,
+        "cardReason": "cross-project read may leak project-specific secrets into shared artifact",
+        "cardSource": "meta-sentinel",
+        "cardSuppressed": false,
+        "suppressionReason": "",
+        "deliveryShellId": "shell-review-delta"
+      }
+    ],
+    "deliveryShells": [
+      {
+        "deliveryShellId": "shell-structured-status",
+        "shellType": "structured_status",
+        "presentationMode": "direct",
+        "exposureLevel": "internal",
+        "interventionForm": "conversation",
+        "audience": "developer",
+        "contentBoundary": "status + next action only"
+      },
+      {
+        "deliveryShellId": "shell-review-delta",
+        "shellType": "review_delta",
+        "presentationMode": "digest",
+        "exposureLevel": "review",
+        "interventionForm": "task_packet",
+        "audience": "reviewer",
+        "contentBoundary": "finding + evidence + closure target"
+      }
+    ],
+    "silenceDecision": {
+      "silenceDecision": "defer",
+      "noInterventionPreferred": true,
+      "interruptionJustified": false,
+      "deferUntil": "cross-project-review-complete",
+      "reasonForSilence": "no clear intervention gain while cross-project review is running"
+    },
+    "controlDecisions": [],
+    "defaultShellId": "shell-structured-status"
+  },
+  "dispatchEnvelopePacket": {
+    "ownerAgent": "meta-conductor",
+    "taskRef": "task-cross-001",
+    "allowedCapabilities": [
+      "auth_pattern_extraction",
+      "cross_project_read"
+    ],
+    "blockedCapabilities": [
+      "write_to_other_project"
+    ],
+    "route": "cross_project",
+    "ownerSelection": "capability_first",
+    "memoryMode": "cross_project_readonly",
+    "workspaceHint": "shared-auth-pattern",
+    "resultSchemaRef": "config/contracts/workflow-contract.json#/protocols/workerResultPacket",
+    "reviewOwner": "meta-prism",
+    "verificationOwner": "meta-warden"
+  },
+  "orchestrationTaskBoardPacket": {
+    "dispatchBoardId": "dispatch-cross-001",
+    "boardMode": "direct_dispatch",
+    "tasks": [
+      {
+        "taskId": "task-cross-001",
+        "taskKind": "execution",
+        "owner": "meta-conductor",
+        "sequence": 1,
+        "dependsOn": [],
+        "deliverable": "shared-auth-pattern-extraction:pattern-module"
+      }
+    ],
+    "synthesisOwner": "meta-warden"
+  },
+  "dispatchBoard": {
+    "boardId": "dispatch-cross-001",
+    "goal": "extract shared auth patterns from multiple projects into a reusable module",
+    "ownerResolution": "existing-owner",
+    "primaryDeliverable": "shared-auth-pattern-extraction",
+    "mergeStrategy": "merge owner consolidates worker artifacts into one deliverable"
+  },
+  "workerTaskPackets": [
+    {
+      "taskPacketId": "task-cross-001",
+      "owner": "meta-conductor",
+      "ownerMode": "existing-owner",
+      "todayTask": "extract shared auth patterns from project auth implementations",
+      "output": "shared pattern module + verification notes",
+      "deliverableLink": "shared-auth-pattern-extraction:pattern-module",
+      "qualityBar": "no project-specific secrets leaked; all source projects correctly cited",
+      "referenceDirection": "cross-project readonly access to auth sources",
+      "handoffTarget": "meta-prism",
+      "lengthExpectation": "targeted multi-file change",
+      "visualOrAssetPlan": "none",
+      "dependsOn": [],
+      "parallelGroup": "auth-pattern",
+      "mergeOwner": "meta-warden"
+    }
+  ],
+  "workerResultPackets": [
+    {
+      "taskPacketId": "task-cross-001",
+      "owner": "meta-conductor",
+      "status": "completed",
+      "producedArtifacts": [
+        "src/shared/auth-patterns.ts",
+        "tests/shared/auth-patterns.test.ts"
+      ],
+      "handoffTarget": "meta-prism",
+      "blockingIssues": []
+    }
+  ],
+  "reviewPacket": {
+    "ownerCoverage": "PASS",
+    "protocolCompliance": "PASS",
+    "qualityGate": "PASS",
+    "revisionNeeded": false,
+    "sourceProjects": [
+      "project-shared-auth-pattern",
+      "project-auth-refresh-hardening"
+    ],
+    "crossProjectContaminationCheck": "pass",
+    "reviews": [
+      {
+        "type": "security",
+        "agent": "meta-sentinel",
+        "result": "PASS",
+        "issues": []
+      }
+    ],
+    "findings": []
+  },
+  "verificationPacket": {
+    "verified": true,
+    "remainingIssues": [],
+    "evidence": [
+      "shared auth pattern module references both source projects correctly",
+      "no project-specific secrets found in shared artifact"
+    ],
+    "fixEvidence": [],
+    "revisionResponses": [],
+    "verificationResults": [],
+    "closeFindings": []
+  },
+  "summaryPacket": {
+    "verifyPassed": true,
+    "summaryClosed": true,
+    "singleDeliverableMaintained": true,
+    "deliverableChainClosed": true,
+    "consolidatedDeliverablePresent": true,
+    "publicReady": true,
+    "commentReviewAcknowledged": true,
+    "sourceProjects": [
+      "project-shared-auth-pattern",
+      "project-auth-refresh-hardening"
+    ],
+    "deliveryShellsUsed": [
+      "shell-structured-status",
+      "shell-review-delta"
+    ],
+    "blockedBy": []
+  },
+  "compactionPacket": {
+    "packetVersion": "v1",
+    "runRef": "shared-auth-pattern-extraction",
+    "profile": "default",
+    "profileKey": "shared-cross-project-key",
+    "openFindings": [],
+    "pendingRevisions": [],
+    "verifyGateState": "verified",
+    "singleDeliverableState": {
+      "singleDeliverableMaintained": true,
+      "deliverableChainClosed": true
+    },
+    "summaryDelta": {
+      "verifyPassed": true,
+      "summaryClosed": true,
+      "publicReady": true,
+      "blockedBy": []
+    },
+    "writebackDecision": "writeback"
+  },
+  "evolutionWritebackPacket": {
+    "ownerAssessment": "keep-existing",
+    "writebackDecision": "writeback",
+    "decisionReason": "cross-project auth pattern extraction should be captured as governance example",
+    "writebacks": [
+      {
+        "target": "config/contracts/workflow-contract.json",
+        "reason": "cross-project governance pattern captured"
+      }
+    ],
+    "retain": [
+      {
+        "target": "meta-conductor",
+        "reason": "Existing owner boundary remains valid for cross-project auth pattern runs."
+      }
+    ],
+    "upgrade": [],
+    "retire": [],
+    "scarIds": [],
+    "syncRequired": true
+  }
+}

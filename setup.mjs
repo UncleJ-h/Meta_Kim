@@ -46,6 +46,7 @@ import {
   loadLocalOverrides,
   normalizeTargets,
   resolveTargetContext,
+  resolveRuntimeHomeDir,
   writeLocalOverrides,
 } from "./scripts/meta-kim-sync-config.mjs";
 import {
@@ -56,7 +57,7 @@ import {
 // ── Config ──────────────────────────────────────────────
 
 const PROJECT_DIR = resolve(import.meta.dirname || ".");
-const SKILLS_DIR = join(homedir(), ".claude", "skills");
+const SKILLS_DIR = join(resolveRuntimeHomeDir("claude"), "skills");
 const PROXY = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "";
 const isWin = platform() === "win32";
 const args = process.argv.slice(2);
@@ -106,7 +107,7 @@ function loadSkillsManifest() {
       }),
     };
   } catch (err) {
-    warn(`Failed to load skills manifest: ${err.message}`);
+    warn(t.warnManifestLoadFail(err.message));
     return { skillOwner: "KimYx0207", externalUrls: {}, skills: [] };
   }
 }
@@ -333,6 +334,30 @@ const I18N = {
     warnMetaTheorySyncFailed: "meta-theory sync failed, check error messages",
     warnSkillsUpdateFailed: "Global skills update failed, check error messages",
     warnMetaTheoryUpdateFailed: "meta-theory sync failed, check error messages",
+    warnManifestLoadFail: (msg) => `Failed to load skills manifest: ${msg}`,
+    labelOptional: "(optional)",
+    selectedScope: (name) => `Selected: ${name}`,
+    npmVerOk: (v) => `npm v${v}`,
+    activeRuntimesSavedCli: (list) =>
+      `Active runtimes saved from --targets: ${list}`,
+    savedActiveTargets: (list) => `Saved active runtime targets: ${list}`,
+    okRepoSynced: "Repo projections synced from canonical/",
+    failRepoSync:
+      "Repo projection sync failed — some runtime configs may be stale",
+    pipErrorDetail: (err) => `  pip error: ${err}`,
+    modeInfoLine: (mode, plat, ver) => `Mode: ${mode} | ${plat} | Node ${ver}`,
+    stepLabel: (n, label) => `Step ${n}: ${label}`,
+    progressInstallPython: "Install Python graphify tool",
+    checkTargets: (active, supported) =>
+      `activeTargets=${active} supportedTargets=${supported}`,
+    localStateHeader: "Local state",
+    localStateProfile: (profile, key) => `profile=${profile} key=${key}`,
+    localStateRunIndex: (path) => `run index: ${path}`,
+    localStateCompaction: (path) => `compaction: ${path}`,
+    localStateDispatch:
+      "dispatch envelope: config/contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket",
+    localStateMigration:
+      "migration helper: npm run migrate:meta-kim -- <source-dir> --apply",
     actionPrompt: "What would you like to do?",
     actionInstall: "Install — Full first-time setup",
     actionUpdate: "Update — Refresh skills & sync tools",
@@ -535,6 +560,28 @@ const I18N = {
     warnMetaTheorySyncFailed: "meta-theory 同步失败，请检查错误信息",
     warnSkillsUpdateFailed: "全局技能更新失败，请检查错误信息",
     warnMetaTheoryUpdateFailed: "meta-theory 同步失败，请检查错误信息",
+    warnManifestLoadFail: (msg) => `加载技能清单失败：${msg}`,
+    labelOptional: "（可选）",
+    selectedScope: (name) => `已选择：${name}`,
+    npmVerOk: (v) => `npm v${v}`,
+    activeRuntimesSavedCli: (list) => `已从 --targets 保存活跃运行时：${list}`,
+    savedActiveTargets: (list) => `已保存活跃运行时目标：${list}`,
+    okRepoSynced: "仓库投影已从 canonical/ 同步",
+    failRepoSync: "仓库投影同步失败 — 部分运行时配置可能过期",
+    pipErrorDetail: (err) => `  pip 错误：${err}`,
+    modeInfoLine: (mode, plat, ver) => `模式：${mode} | ${plat} | Node ${ver}`,
+    stepLabel: (n, label) => `步骤 ${n}：${label}`,
+    progressInstallPython: "安装 Python graphify 工具",
+    checkTargets: (active, supported) =>
+      `activeTargets=${active} supportedTargets=${supported}`,
+    localStateHeader: "本地状态",
+    localStateProfile: (profile, key) => `profile=${profile} key=${key}`,
+    localStateRunIndex: (path) => `运行索引：${path}`,
+    localStateCompaction: (path) => `压缩目录：${path}`,
+    localStateDispatch:
+      "调度信封：config/contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket",
+    localStateMigration:
+      "迁移助手：npm run migrate:meta-kim -- <source-dir> --apply",
     actionPrompt: "你想做什么？",
     actionInstall: "安装 — 首次完整安装",
     actionUpdate: "更新 — 刷新技能并同步配置",
@@ -552,7 +599,8 @@ const I18N = {
     modeSilent: "サイレント",
     modeInteractive: "インタラクティブ",
     preflightHeading: "環境チェック",
-    nodeOld: (v) => `Node.js v${v} は古すぎます。>=${MIN_NODE_VERSION} が必要です`,
+    nodeOld: (v) =>
+      `Node.js v${v} は古すぎます。>=${MIN_NODE_VERSION} が必要です`,
     nodeOk: (v) => `Node.js v${v}`,
     npmNotFound: "npm が見つかりません",
     gitNotFound: "git が見つかりません — スキルのインストールに必要です",
@@ -759,6 +807,32 @@ const I18N = {
       "グローバルスキル更新失敗、エラーを確認してください",
     warnMetaTheoryUpdateFailed:
       "meta-theory 同期失敗、エラーを確認してください",
+    warnManifestLoadFail: (msg) => `スキルマニフェストの読み込みに失敗：${msg}`,
+    labelOptional: "（オプション）",
+    selectedScope: (name) => `選択済み：${name}`,
+    npmVerOk: (v) => `npm v${v}`,
+    activeRuntimesSavedCli: (list) =>
+      `--targets からアクティブランタイムを保存：${list}`,
+    savedActiveTargets: (list) =>
+      `アクティブランタイムターゲットを保存：${list}`,
+    okRepoSynced: "canonical/ からリポジトリプロジェクションを同期",
+    failRepoSync:
+      "リポジトリプロジェクション同期失敗 — 一部ランタイム設定が古い可能性",
+    pipErrorDetail: (err) => `  pip エラー：${err}`,
+    modeInfoLine: (mode, plat, ver) =>
+      `モード：${mode} | ${plat} | Node ${ver}`,
+    stepLabel: (n, label) => `ステップ ${n}：${label}`,
+    progressInstallPython: "Python graphify ツールをインストール",
+    checkTargets: (active, supported) =>
+      `activeTargets=${active} supportedTargets=${supported}`,
+    localStateHeader: "ローカル状態",
+    localStateProfile: (profile, key) => `profile=${profile} key=${key}`,
+    localStateRunIndex: (path) => `ランインデックス：${path}`,
+    localStateCompaction: (path) => `コンパクション：${path}`,
+    localStateDispatch:
+      "ディスパッチエンベロープ：config/contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket",
+    localStateMigration:
+      "マイグレーションヘルパー：npm run migrate:meta-kim -- <source-dir> --apply",
     actionPrompt: "何をしますか？",
     actionInstall: "インストール — 初回セットアップ",
     actionUpdate: "アップデート — スキル更新＆設定同期",
@@ -776,7 +850,8 @@ const I18N = {
     modeSilent: "자동",
     modeInteractive: "대화형",
     preflightHeading: "환경 확인",
-    nodeOld: (v) => `Node.js v${v} 버전이 너무 낮습니다. >=${MIN_NODE_VERSION} 필요`,
+    nodeOld: (v) =>
+      `Node.js v${v} 버전이 너무 낮습니다. >=${MIN_NODE_VERSION} 필요`,
     nodeOk: (v) => `Node.js v${v}`,
     npmNotFound: "npm을 찾을 수 없습니다",
     gitNotFound: "git을 찾을 수 없습니다 — 스킬 설치에 필요합니다",
@@ -968,6 +1043,29 @@ const I18N = {
     warnSkillsUpdateFailed: "전역 스킬 업데이트 실패, 오류 메시지를 확인하세요",
     warnMetaTheoryUpdateFailed:
       "meta-theory 동기화 실패, 오류 메시지를 확인하세요",
+    warnManifestLoadFail: (msg) => `스킬 매니페스트 로드 실패：${msg}`,
+    labelOptional: "(선택)",
+    selectedScope: (name) => `선택됨：${name}`,
+    npmVerOk: (v) => `npm v${v}`,
+    activeRuntimesSavedCli: (list) => `--targets에서 활성 런타임 저장：${list}`,
+    savedActiveTargets: (list) => `활성 런타임 대상 저장：${list}`,
+    okRepoSynced: "canonical/에서 리포지토리 프로젝션 동기화됨",
+    failRepoSync:
+      "리포지토리 프로젝션 동기화 실패 — 일부 런타임 설정이 오래되었을 수 있음",
+    pipErrorDetail: (err) => `  pip 오류：${err}`,
+    modeInfoLine: (mode, plat, ver) => `모드：${mode} | ${plat} | Node ${ver}`,
+    stepLabel: (n, label) => `단계 ${n}：${label}`,
+    progressInstallPython: "Python graphify 도구 설치",
+    checkTargets: (active, supported) =>
+      `activeTargets=${active} supportedTargets=${supported}`,
+    localStateHeader: "로컬 상태",
+    localStateProfile: (profile, key) => `profile=${profile} key=${key}`,
+    localStateRunIndex: (path) => `런 인덱스：${path}`,
+    localStateCompaction: (path) => `컴팩션：${path}`,
+    localStateDispatch:
+      "디스패치 엔벨로프：config/contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket",
+    localStateMigration:
+      "마이그레이션 도우미：npm run migrate:meta-kim -- <source-dir> --apply",
     actionPrompt: "무엇을 하시겠습니까?",
     actionInstall: "설치 — 최초 전체 설정",
     actionUpdate: "업데이트 — 스킬 갱신 및 설정 동기화",
@@ -1199,7 +1297,7 @@ ${C.bold}${t.installOverviewTitle}${C.reset}
 
 ${C.dim}${t.installOverviewWill}${C.reset}
 ${bullets.map((b) => `${C.dim}•${C.reset} ${b}`).join("\n")}
-${C.dim}•${C.reset} ${C.dim}${t.installOverviewOptionalPython}${C.reset} ${C.yellow}(optional)${C.reset}
+${C.dim}•${C.reset} ${C.dim}${t.installOverviewOptionalPython}${C.reset} ${C.yellow}${t.labelOptional}${C.reset}
 
 ${C.dim}${t.installOverviewTargets}${C.reset}${activeTargets.join(", ")}
 ${C.dim}${t.installOverviewScope}${C.reset}${scopeLabel}
@@ -1273,7 +1371,7 @@ async function askInstallScope() {
     both: "both",
   }[selected];
 
-  info(`Selected: ${scopeName}`);
+  info(t.selectedScope(scopeName));
   return selected;
 }
 
@@ -1368,7 +1466,8 @@ function checkSync(
         readdirSync(claudeAgentsDir).filter((f) => f.endsWith(".md")),
         expectedAgentProjectionFiles(".md"),
       );
-      if (summary.missing.length === 0) ok(t.syncClaudeAgents(summary.presentCount));
+      if (summary.missing.length === 0)
+        ok(t.syncClaudeAgents(summary.presentCount));
       else {
         warn(
           t.syncPartial(
@@ -1406,9 +1505,7 @@ function checkSync(
       ok(t.syncClaudeHooks(CLAUDE_HOOK_FILES.length));
     } else {
       warn(
-        t.syncMissing(
-          `.claude/hooks/ — missing: ${missingHooks.join(", ")}`,
-        ),
+        t.syncMissing(`.claude/hooks/ — missing: ${missingHooks.join(", ")}`),
       );
       allOk = false;
     }
@@ -1436,7 +1533,8 @@ function checkSync(
         readdirSync(codexAgentsDir).filter((f) => f.endsWith(".toml")),
         expectedAgentProjectionFiles(".toml"),
       );
-      if (summary.missing.length === 0) ok(t.syncCodexAgents(summary.presentCount));
+      if (summary.missing.length === 0)
+        ok(t.syncCodexAgents(summary.presentCount));
       else {
         warn(
           t.syncPartial(
@@ -1518,7 +1616,8 @@ function checkSync(
         readdirSync(cursorAgentsDir).filter((f) => f.endsWith(".md")),
         expectedAgentProjectionFiles(".md"),
       );
-      if (summary.missing.length === 0) ok(t.syncCursorAgents(summary.presentCount));
+      if (summary.missing.length === 0)
+        ok(t.syncCursorAgents(summary.presentCount));
       else {
         warn(
           t.syncPartial(
@@ -1574,7 +1673,7 @@ function preflight() {
   }
 
   const npmVer = run("npm --version");
-  if (npmVer) ok(`npm v${npmVer}`);
+  if (npmVer) ok(t.npmVerOk(npmVer));
   else {
     fail(t.npmNotFound);
     passed = false;
@@ -1669,7 +1768,7 @@ async function selectActiveTargets(runtimes) {
 
   if (cliTargets.length > 0) {
     await writeLocalOverrides({ ...localOverrides, activeTargets: cliTargets });
-    info(`Active runtimes saved from --targets: ${cliTargets.join(", ")}`);
+    info(t.activeRuntimesSavedCli(cliTargets.join(", ")));
     return cliTargets;
   }
 
@@ -1691,7 +1790,7 @@ async function selectActiveTargets(runtimes) {
     ...localOverrides,
     activeTargets: chosenTargets,
   });
-  info(`Saved active runtime targets: ${chosenTargets.join(", ")}`);
+  info(t.savedActiveTargets(chosenTargets.join(", ")));
   return chosenTargets;
 }
 
@@ -1705,11 +1804,7 @@ function runNodeScript(scriptRelative, extraArgs = []) {
     extraArgs,
     langArgs,
   );
-  return spawnSync(
-    spawnConfig.command,
-    spawnConfig.args,
-    spawnConfig.options,
-  );
+  return spawnSync(spawnConfig.command, spawnConfig.args, spawnConfig.options);
 }
 
 // ── Step 3: Auto-configure project files ────────────────
@@ -1721,10 +1816,10 @@ async function autoConfigure(installScope = "project") {
     installScope,
   ]);
   if (syncResult.status === 0) {
-    ok("Repo projections synced from canonical/");
+    ok(t.okRepoSynced);
     return true;
   }
-  fail("Repo projection sync failed — some runtime configs may be stale");
+  fail(t.failRepoSync);
   return false;
 }
 
@@ -1883,7 +1978,7 @@ async function installPythonTools() {
     const stderr = readProcessText(installResult);
     warn(t.graphifyInstallFailed);
     if (stderr) {
-      console.log(`${C.dim}  pip error: ${stderr}${C.reset}`);
+      console.log(`${C.dim}${t.pipErrorDetail(stderr)}${C.reset}`);
     }
     return;
   }
@@ -2165,7 +2260,7 @@ function showModeInfo() {
         ? t.modeSilent
         : t.modeInteractive;
   console.log(
-    `${C.dim}Mode: ${modeStr} | ${platform()} | Node ${process.versions.node}${C.reset}`,
+    `${C.dim}${t.modeInfoLine(modeStr, platform(), process.versions.node)}${C.reset}`,
   );
 }
 
@@ -2189,25 +2284,21 @@ async function main() {
     const targetContext = await resolveTargetContext(args);
     checkSync(detectedRuntimes, targetContext.supportedTargets);
     console.log(
-      `${C.dim}activeTargets=${targetContext.activeTargets.join(", ")} supportedTargets=${targetContext.supportedTargets.join(", ")}${C.reset}`,
+      `${C.dim}${t.checkTargets(targetContext.activeTargets.join(", "), targetContext.supportedTargets.join(", "))}${C.reset}`,
     );
     const localState = await ensureProfileState();
-    console.log(`${C.bold}  Local state${C.reset}`);
+    console.log(`${C.bold}  ${t.localStateHeader}${C.reset}`);
     console.log(
-      `    ${C.dim}profile=${localState.profile} key=${localState.metadata.profileKey}${C.reset}`,
+      `    ${C.dim}${t.localStateProfile(localState.profile, localState.metadata.profileKey)}${C.reset}`,
     );
     console.log(
-      `    ${C.dim}run index: ${toRepoRelative(localState.runIndexPath)}${C.reset}`,
+      `    ${C.dim}${t.localStateRunIndex(toRepoRelative(localState.runIndexPath))}${C.reset}`,
     );
     console.log(
-      `    ${C.dim}compaction: ${toRepoRelative(localState.compactionDir)}${C.reset}`,
+      `    ${C.dim}${t.localStateCompaction(toRepoRelative(localState.compactionDir))}${C.reset}`,
     );
-    console.log(
-      `    ${C.dim}dispatch envelope: config/contracts/workflow-contract.json -> protocols.dispatchEnvelopePacket${C.reset}`,
-    );
-    console.log(
-      `    ${C.dim}migration helper: npm run migrate:meta-kim -- <source-dir> --apply${C.reset}\n`,
-    );
+    console.log(`    ${C.dim}${t.localStateDispatch}${C.reset}`);
+    console.log(`    ${C.dim}${t.localStateMigration}${C.reset}\n`);
     process.exit(0);
   }
 
@@ -2265,37 +2356,31 @@ async function runInstall() {
   // 项目本地同步 (project-only 或 both)
   if (needProject) {
     stepNum++;
-    await withProgress(
-      `Step ${stepNum}: Sync project runtime files`,
-      async () => {
-        const configResult = await autoConfigure(installScope);
-        if (!configResult) {
-          warn(t.warnConfigSyncFailed);
-        }
-        return configResult;
-      },
-    );
+    await withProgress(t.stepLabel(stepNum, t.progressSyncConfig), async () => {
+      const configResult = await autoConfigure(installScope);
+      if (!configResult) {
+        warn(t.warnConfigSyncFailed);
+      }
+      return configResult;
+    });
   }
 
   // 全局安装 (global-only 或 both)
   if (needGlobal) {
     // 准备全局目录
     stepNum++;
-    await withProgress(
-      `Step ${stepNum}: Prepare global skills directory`,
-      async () => {
-        const dirReady = existsSync(SKILLS_DIR);
-        if (!dirReady) {
-          mkdirSync(SKILLS_DIR, { recursive: true });
-        }
-        ok(t.globalDirReady(SKILLS_DIR));
-        return true;
-      },
-    );
+    await withProgress(t.stepLabel(stepNum, t.progressPrepareDir), async () => {
+      const dirReady = existsSync(SKILLS_DIR);
+      if (!dirReady) {
+        mkdirSync(SKILLS_DIR, { recursive: true });
+      }
+      ok(t.globalDirReady(SKILLS_DIR));
+      return true;
+    });
 
     // 安装全局技能
     stepNum++;
-    await withProgress(`Step ${stepNum}: Install global skills`, () => {
+    await withProgress(t.stepLabel(stepNum, t.progressInstallSkills), () => {
       const installResult = runNodeScript(
         "scripts/install-global-skills-all-runtimes.mjs",
         ["--targets", activeTargets.join(",")],
@@ -2308,7 +2393,7 @@ async function runInstall() {
 
     // 同步全局 meta-theory
     stepNum++;
-    await withProgress(`Step ${stepNum}: Sync meta-theory to global`, () => {
+    await withProgress(t.stepLabel(stepNum, t.progressSyncMeta), () => {
       const syncResult = runNodeScript("scripts/sync-global-meta-theory.mjs", [
         "--targets",
         activeTargets.join(","),
@@ -2323,7 +2408,7 @@ async function runInstall() {
   // [Optional] Python tools (graphify)
   stepNum++;
   await withProgress(
-    `Step ${stepNum}: Install Python graphify tool`,
+    t.stepLabel(stepNum, t.progressInstallPython),
     async () => {
       const wantPython = await askYesNo(t.askPythonToolsUpdate, true);
       if (wantPython) {
@@ -2336,7 +2421,7 @@ async function runInstall() {
 
   // 验证：project-only 和 both 检查 repo-local；global-only 跳过 repo-local 检查
   stepNum++;
-  await withProgress(`Step ${stepNum}: Validate installation`, async () => {
+  await withProgress(t.stepLabel(stepNum, t.progressValidate), async () => {
     if (needProject) {
       const { supportedTargets } = await resolveTargetContext(args);
       checkSync(runtimes, supportedTargets);
@@ -2431,7 +2516,7 @@ async function runCheck() {
   const targetContext = await resolveTargetContext(args);
   checkSync(runtimes, targetContext.supportedTargets);
   console.log(
-    `${C.dim}activeTargets=${targetContext.activeTargets.join(", ")} supportedTargets=${targetContext.supportedTargets.join(", ")}${C.reset}`,
+    `${C.dim}${t.checkTargets(targetContext.activeTargets.join(", "), targetContext.supportedTargets.join(", "))}${C.reset}`,
   );
 }
 

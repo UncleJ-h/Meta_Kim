@@ -42,6 +42,8 @@ const STRINGS = {
     dryRun: (cmd) => `[dry-run] ${cmd}`,
     okUpdated: (path) => `[OK] updated ${path}`,
     warnPullFailed: (path) => `[WARN] pull failed, re-cloning ${path}`,
+    warnGitRetry: (cmd, attempt, max, delay) =>
+      `[WARN] git ${cmd} failed (attempt ${attempt}/${max}), retrying in ${delay}ms...`,
     warnGitInstallFailed: (id, category) =>
       `[WARN] git install failed for ${id} (${category})`,
     warnArchiveFallback: (id, category) =>
@@ -58,8 +60,6 @@ const STRINGS = {
     pluginsHeader: "--- Claude Code plugins (user scope) ---",
     warnClaNotFound:
       "claude CLI not found on PATH — skip plugin install. Install Claude Code CLI, then re-run with --plugins-only.",
-    warnNpmPrefixBroken:
-      "npm global prefix is misconfigured. Fix ~/.npmrc: remove or correct the prefix= line, then re-run.",
     warnPluginFailed: (spec, code) =>
       `[WARN] plugin install failed: ${spec} (exit ${code})`,
     skipAlreadyInstalled: (name) => `[SKIP] ${name} — already installed`,
@@ -89,6 +89,31 @@ const STRINGS = {
     activeTargets: (targets) => `Active runtime targets: ${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim repo (canonical source root): ${root}`,
     warnManifestMissing: "skills manifest missing — no skills to install",
+    warnRepairLegacyLayout: (id, dir) =>
+      `repairing legacy install layout for ${id}: ${dir}`,
+    warnRepairLegacySharedRoot: (dir) =>
+      `Repairing legacy full-clone in shared root: ${dir}`,
+    warnRemovingObsoleteDir:
+      "Removing obsolete directory (left by a previous Meta_Kim version):",
+    warnNestedCopyNotUsed: (runtimeId) =>
+      `This nested copy is not used by ${runtimeId} and can be safely removed.`,
+    warnPre2Artifact: "Pre-2.0 install artifact, no longer needed.",
+    okRemovedObsolete: (n) =>
+      `Removed ${n} obsolete director${n > 1 ? "ies" : "y"} left by a previous Meta_Kim version.`,
+    noteSettingsNotAffected:
+      "Your current settings, skills, and hooks are not affected.",
+    warnQuarantineDryRun: (id, detail) =>
+      `${id}: would quarantine invalid SKILL.md within managed install (${detail})`,
+    warnQuarantined: (id, detail) =>
+      `${id}: quarantined invalid SKILL.md within managed install (${detail})`,
+    warnReplaceFailed: (id, dir, msg) =>
+      `${id}: failed to replace existing install at ${dir}: ${msg}`,
+    summaryInstallFailures: (n) => `Installation failures (${n}):`,
+    summaryArchiveFallbacks: (n) => `Archive fallbacks used (${n}):`,
+    summaryRepairedOrFlagged: (n) =>
+      `Meta_Kim-managed legacy installs repaired or flagged (${n}):`,
+    summaryQuarantined: (n) =>
+      `Invalid nested SKILL.md files quarantined inside Meta_Kim-managed installs (${n}):`,
     val: {
       headerTitle: "Meta_Kim Project Integrity Check",
       step01: "Checking required files",
@@ -158,6 +183,8 @@ const STRINGS = {
     dryRun: (cmd) => `[dry-run] ${cmd}`,
     okUpdated: (path) => `[OK] 已更新 ${path}`,
     warnPullFailed: (path) => `[WARN] pull 失败，重新克隆 ${path}`,
+    warnGitRetry: (cmd, attempt, max, delay) =>
+      `[WARN] git ${cmd} 失败（第 ${attempt}/${max} 次），${delay}ms 后重试...`,
     warnGitInstallFailed: (id, category) =>
       `[WARN] ${id} git 安装失败 (${category})`,
     warnArchiveFallback: (id, category) =>
@@ -172,8 +199,6 @@ const STRINGS = {
     pluginsHeader: "--- Claude Code 插件（用户范围）---",
     warnClaNotFound:
       "未找到 claude CLI — 跳过插件安装。请先安装 Claude Code CLI，然后运行 --plugins-only。",
-    warnNpmPrefixBroken:
-      "npm 全局路径配置错误。修复 ~/.npmrc：删除或修正 prefix= 行，然后重新运行。",
     skipAlreadyInstalled: (name) => `[SKIP] ${name} — 已安装`,
     installingPlugin: (spec) => `正在安装插件：${spec}`,
     warnPluginFailed: (spec, code) =>
@@ -196,6 +221,27 @@ const STRINGS = {
     activeTargets: (targets) => `活跃运行时目标：${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim 仓库（正典源根目录）：${root}`,
     warnManifestMissing: "缺少技能清单 — 无技能可安装",
+    warnRepairLegacyLayout: (id, dir) => `正在修复遗留安装布局 ${id}：${dir}`,
+    warnRepairLegacySharedRoot: (dir) =>
+      `正在修复共享根目录中的遗留完整克隆：${dir}`,
+    warnRemovingObsoleteDir: "正在移除过时目录（由旧版 Meta_Kim 留下）：",
+    warnNestedCopyNotUsed: (runtimeId) =>
+      `该嵌套副本未被 ${runtimeId} 使用，可安全移除。`,
+    warnPre2Artifact: "2.0 之前的安装残留，不再需要。",
+    okRemovedObsolete: (n) => `已移除 ${n} 个旧版 Meta_Kim 遗留的过时目录。`,
+    noteSettingsNotAffected: "您当前的设置、技能和钩子不受影响。",
+    warnQuarantineDryRun: (id, detail) =>
+      `${id}：将隔离托管安装中的无效 SKILL.md（${detail}）`,
+    warnQuarantined: (id, detail) =>
+      `${id}：已隔离托管安装中的无效 SKILL.md（${detail}）`,
+    warnReplaceFailed: (id, dir, msg) =>
+      `${id}：替换已有安装失败 ${dir}：${msg}`,
+    summaryInstallFailures: (n) => `安装失败（${n}）：`,
+    summaryArchiveFallbacks: (n) => `使用了归档回退（${n}）：`,
+    summaryRepairedOrFlagged: (n) =>
+      `Meta_Kim 管理的遗留安装已修复或标记（${n}）：`,
+    summaryQuarantined: (n) =>
+      `Meta_Kim 管理安装中隔离的无效嵌套 SKILL.md 文件（${n}）：`,
     pythonToolsOptionalHeader: "--- Python 工具（可选）---",
     pythonNotFoundGraphify: "未找到 Python 3.10+，跳过 graphify。",
     pythonInstallHintGraphify:
@@ -262,6 +308,8 @@ const STRINGS = {
     dryRun: (cmd) => `[dry-run] ${cmd}`,
     okUpdated: (path) => `[OK] 更新済み ${path}`,
     warnPullFailed: (path) => `[WARN] pull 失敗、再クローン ${path}`,
+    warnGitRetry: (cmd, attempt, max, delay) =>
+      `[WARN] git ${cmd} 失敗（${attempt}/${max} 回目）、${delay}ms 後にリトライ...`,
     warnGitInstallFailed: (id, category) =>
       `[WARN] ${id} gitインストール失敗 (${category})`,
     warnArchiveFallback: (id, category) =>
@@ -277,8 +325,6 @@ const STRINGS = {
     pluginsHeader: "--- Claude Code プラグイン（ユーザー範囲）---",
     warnClaNotFound:
       "claude CLI が見つかりません — プラグインインストールをスキップ。Claude Code CLI をインストール後、--plugins-only を再実行してください。",
-    warnNpmPrefixBroken:
-      "npm グローバルプレフィックスが誤っています。~/.npmrc を修正: prefix= の行を削除または修正してから再実行してください。",
     skipAlreadyInstalled: (name) => `[SKIP] ${name} — インストール済み`,
     installingPlugin: (spec) => `プラグインをインストール中：${spec}`,
     warnPluginFailed: (spec, code) =>
@@ -303,6 +349,30 @@ const STRINGS = {
     metaKimRoot: (root) => `Meta_Kim リポジトリ（正典ソースルート）：${root}`,
     warnManifestMissing:
       "スキルマニフェストが見つかりません — インストールするスキルがありません",
+    warnRepairLegacyLayout: (id, dir) =>
+      `レガシーインストールレイアウトを修復中 ${id}：${dir}`,
+    warnRepairLegacySharedRoot: (dir) =>
+      `共有ルートのレガシーフルクローンを修復中：${dir}`,
+    warnRemovingObsoleteDir:
+      "旧バージョンの Meta_Kim が残した古いディレクトリを削除中：",
+    warnNestedCopyNotUsed: (runtimeId) =>
+      `このネストされたコピーは ${runtimeId} で使用されておらず、安全に削除できます。`,
+    warnPre2Artifact: "2.0 以前のインストールアーティファクト、不要です。",
+    okRemovedObsolete: (n) =>
+      `旧バージョンの Meta_Kim が残した古いディレクトリ ${n} 個を削除しました。`,
+    noteSettingsNotAffected: "現在の設定、スキル、フックには影響しません。",
+    warnQuarantineDryRun: (id, detail) =>
+      `${id}：管理下インストールの無効な SKILL.md を隔離予定（${detail}）`,
+    warnQuarantined: (id, detail) =>
+      `${id}：管理下インストールの無効な SKILL.md を隔離しました（${detail}）`,
+    warnReplaceFailed: (id, dir, msg) =>
+      `${id}：既存インストールの置換に失敗 ${dir}：${msg}`,
+    summaryInstallFailures: (n) => `インストール失敗（${n}）：`,
+    summaryArchiveFallbacks: (n) => `アーカイブフォールバック使用（${n}）：`,
+    summaryRepairedOrFlagged: (n) =>
+      `Meta_Kim 管理のレガシーインストール修復/フラグ（${n}）：`,
+    summaryQuarantined: (n) =>
+      `Meta_Kim 管理インストール内の無効なネスト SKILL.md ファイルを隔離（${n}）：`,
     pythonToolsOptionalHeader: "--- Python ツール（オプション）---",
     pythonNotFoundGraphify:
       "Python 3.10+ が見つかりません — graphify をスキップ。",
@@ -376,6 +446,8 @@ const STRINGS = {
     dryRun: (cmd) => `[dry-run] ${cmd}`,
     okUpdated: (path) => `[OK] 업데이트됨 ${path}`,
     warnPullFailed: (path) => `[WARN] pull 실패, 재클론 ${path}`,
+    warnGitRetry: (cmd, attempt, max, delay) =>
+      `[WARN] git ${cmd} 실패（${attempt}/${max}회）, ${delay}ms 후 재시도...`,
     warnGitInstallFailed: (id, category) =>
       `[WARN] ${id} git 설치 실패 (${category})`,
     warnArchiveFallback: (id, category) =>
@@ -391,8 +463,6 @@ const STRINGS = {
     pluginsHeader: "--- Claude Code 플러그인 (사용자 범위) ---",
     warnClaNotFound:
       "claude CLI를 찾을 수 없음 — 플러그인 설치 건너뜀. Claude Code CLI를 설치한 후 --plugins-only를 다시 실행하세요.",
-    warnNpmPrefixBroken:
-      "npm 글로벌 접두사가 잘못되었습니다. ~/.npmrc을 수정: prefix= 줄을 삭제하거나 수정한 후 다시 실행하세요.",
     skipAlreadyInstalled: (name) => `[SKIP] ${name} — 이미 설치됨`,
     installingPlugin: (spec) => `플러그인 설치 중：${spec}`,
     warnPluginFailed: (spec, code) =>
@@ -415,6 +485,30 @@ const STRINGS = {
     activeTargets: (targets) => `활성 런타임 대상：${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim 저장소 (정본 소스 루트)：${root}`,
     warnManifestMissing: "스킬 매니페스트 누락 — 설치할 스킬이 없습니다",
+    warnRepairLegacyLayout: (id, dir) =>
+      `레거시 설치 레이아웃 복구 중 ${id}：${dir}`,
+    warnRepairLegacySharedRoot: (dir) =>
+      `공유 루트의 레거시 전체 클론 복구 중：${dir}`,
+    warnRemovingObsoleteDir:
+      "이전 버전 Meta_Kim이 남긴 구식 디렉토리 제거 중：",
+    warnNestedCopyNotUsed: (runtimeId) =>
+      `이 중첩 복사본은 ${runtimeId}에서 사용되지 않으며 안전하게 제거할 수 있습니다.`,
+    warnPre2Artifact: "2.0 이전 설치 아티팩트, 더 이상 필요하지 않습니다.",
+    okRemovedObsolete: (n) =>
+      `이전 버전 Meta_Kim이 남긴 구식 디렉토리 ${n}개를 제거했습니다.`,
+    noteSettingsNotAffected: "현재 설정, 스킬 및 훅은 영향을 받지 않습니다.",
+    warnQuarantineDryRun: (id, detail) =>
+      `${id}：관리 설치 내 무효한 SKILL.md 격리 예정（${detail}）`,
+    warnQuarantined: (id, detail) =>
+      `${id}：관리 설치 내 무효한 SKILL.md 격리 완료（${detail}）`,
+    warnReplaceFailed: (id, dir, msg) =>
+      `${id}：기존 설치 교체 실패 ${dir}：${msg}`,
+    summaryInstallFailures: (n) => `설치 실패（${n}）：`,
+    summaryArchiveFallbacks: (n) => `아카이브 폴백 사용（${n}）：`,
+    summaryRepairedOrFlagged: (n) =>
+      `Meta_Kim 관리 레거시 설치 복구/플래그（${n}）：`,
+    summaryQuarantined: (n) =>
+      `Meta_Kim 관리 설치 내 무효한 중첩 SKILL.md 파일 격리（${n}）：`,
     pythonToolsOptionalHeader: "--- Python 도구 (선택) ---",
     pythonNotFoundGraphify: "Python 3.10+ 없음 — graphify 건너뜀.",
     pythonInstallHintGraphify:

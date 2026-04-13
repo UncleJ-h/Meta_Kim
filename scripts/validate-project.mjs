@@ -1364,6 +1364,28 @@ async function validatePackageJson() {
     "package.json is missing prepare:openclaw-local.",
   );
   assert(
+    pkg.scripts?.["deps:install"] ===
+      "node scripts/install-global-skills-all-runtimes.mjs --targets claude",
+    "package.json deps:install must use the Node-based installer with --targets claude.",
+  );
+  assert(
+    pkg.scripts?.["deps:update"] ===
+      "node scripts/install-global-skills-all-runtimes.mjs --update --targets claude",
+    "package.json deps:update must use the Node-based installer with --targets claude.",
+  );
+  assert(
+    pkg.scripts?.["test:setup"] === "node --test tests/setup/*.test.mjs",
+    "package.json must expose test:setup for installer regression coverage.",
+  );
+  assert(
+    pkg.scripts?.["verify:all"]?.includes("npm run test:setup"),
+    "package.json verify:all must include npm run test:setup.",
+  );
+  assert(
+    pkg.scripts?.["verify:all:live"]?.includes("npm run test:setup"),
+    "package.json verify:all:live must include npm run test:setup.",
+  );
+  assert(
     pkg.dependencies?.["@modelcontextprotocol/sdk"],
     "package.json is missing @modelcontextprotocol/sdk.",
   );

@@ -8,9 +8,10 @@ import {
   canonicalSkillReferencesDir,
   repoRoot,
   resolveTargetContext,
-  resolveRuntimeHomeDir,
   parseScopeArg,
   assertHomeBound,
+  resolveRuntimeProjection,
+  resolveRuntimeAllowedRoots,
 } from "./meta-kim-sync-config.mjs";
 
 const cliArgs = process.argv.slice(2);
@@ -23,11 +24,7 @@ const checkOnly = process.argv.includes("--check");
  * project → repoRoot, global → runtime home dir
  */
 function getProjectionBase(scope, runtimeId) {
-  if (scope === "global") {
-    return resolveRuntimeHomeDir(runtimeId);
-  }
-  // project or both: use repoRoot
-  return repoRoot;
+  return resolveRuntimeProjection(runtimeId, scope).baseDir;
 }
 
 /**
@@ -35,109 +32,67 @@ function getProjectionBase(scope, runtimeId) {
  * Returns an object with all paths needed for sync.
  */
 function resolveProjectionDirs(scope) {
-  const base = repoRoot;
-  const claudeHome = getProjectionBase(scope, "claude");
-  const codexHome = getProjectionBase(scope, "codex");
-  const openclawHome = getProjectionBase(scope, "openclaw");
-  const cursorHome = getProjectionBase(scope, "cursor");
+  const claude = resolveRuntimeProjection("claude", scope);
+  const codex = resolveRuntimeProjection("codex", scope);
+  const openclaw = resolveRuntimeProjection("openclaw", scope);
+  const cursor = resolveRuntimeProjection("cursor", scope);
+  const globalScope = scope === "global";
 
   return {
     // Claude Code
-    claudeAgentsProjectionDir: path.join(claudeHome, ".claude", "agents"),
-    claudeSkillProjectionRoot: path.join(
-      claudeHome,
-      ".claude",
-      "skills",
-      "meta-theory",
-    ),
-    claudeHooksProjectionDir: path.join(claudeHome, ".claude", "hooks"),
-    claudeSettingsProjectionPath: path.join(
-      claudeHome,
-      ".claude",
-      "settings.json",
-    ),
-    claudeMcpProjectionPath:
-      scope === "global"
-        ? null // Skip .mcp.json in global mode (per-machine config)
-        : path.join(claudeHome, ".mcp.json"),
+    claudeAgentsProjectionDir: claude.agentsDir,
+    claudeSkillProjectionRoot: claude.skillRoot,
+    claudeHooksProjectionDir: claude.hooksDir,
+    claudeSettingsProjectionPath: claude.settingsFile,
+    claudeMcpProjectionPath: claude.mcpFile,
 
     // Codex
-    codexLegacySkillsDir: path.join(codexHome, ".codex", "skills"),
-    codexAgentsDir: path.join(codexHome, ".codex", "agents"),
-    codexProjectSkillsDir: path.join(codexHome, ".agents", "skills"),
-    codexConfigExamplePath: path.join(
-      codexHome,
-      "codex",
-      "config.toml.example",
-    ),
+    codexSkillRoot: globalScope
+      ? codex.skillRoot
+      : path.dirname(codex.legacySkillFile),
+    codexUsesDirectorySkill: globalScope,
+    codexAgentsDir: codex.agentsDir,
+    codexProjectSkillRoot: globalScope ? null : codex.projectSkillRoot,
+    codexConfigExamplePath: codex.configExampleFile,
 
-    // OpenClaw (uses openclawHome in both scopes)
-    openclawDir: path.join(openclawHome, "openclaw"),
-    openclawWorkspacesDir: path.join(openclawHome, "openclaw", "workspaces"),
-    openclawSkillsDir: path.join(openclawHome, "openclaw", "skills"),
-    openclawTemplateConfigPath: path.join(
-      openclawHome,
-      "openclaw",
-      "openclaw.template.json",
-    ),
-    // Shared skills (mirrored to shared-skills/ in both scopes)
-    sharedSkillsDir: path.join(openclawHome, "shared-skills"),
+    // OpenClaw
+    openclawWorkspaceDir: openclaw.workspaceDir,
+    openclawDisplayWorkspaceDir: openclaw.displayWorkspaceDir,
+    openclawSkillRoot: globalScope
+      ? openclaw.skillRoot
+      : path.dirname(openclaw.legacySkillFile),
+    openclawUsesDirectorySkill: globalScope,
+    openclawTemplateConfigPath: openclaw.templateConfigFile,
+    sharedSkillsDir: globalScope
+      ? null
+      : path.dirname(openclaw.sharedSkillFile),
 
     // Cursor
-    cursorAgentsDir: path.join(cursorHome, ".cursor", "agents"),
-    cursorSkillRoot: path.join(cursorHome, ".cursor", "skills", "meta-theory"),
-    cursorMcpPath: path.join(cursorHome, ".cursor", "mcp.json"),
+    cursorAgentsDir: cursor.agentsDir,
+    cursorSkillRoot: cursor.skillRoot,
+    cursorMcpPath: cursor.mcpFile,
 
     // Allowed roots for safety assertion
-    allowedRoots:
-      scope === "global"
-        ? [
-            resolveRuntimeHomeDir("claude"),
-            resolveRuntimeHomeDir("codex"),
-            resolveRuntimeHomeDir("openclaw"),
-            resolveRuntimeHomeDir("cursor"),
-          ]
-        : [repoRoot],
+    allowedRoots: resolveRuntimeAllowedRoots(scope),
 
-    // Display paths: repo-relative for "project" scope, absolute for "global"
-    // Note: claudeHome IS already ~/.claude for global; no extra ".claude" segment needed
-    displayPaths:
-      scope === "global"
-        ? {
-            claudeAgents: path.join(claudeHome, "agents"),
-            claudeSkill: path.join(claudeHome, "skills", "meta-theory"),
-            claudeHooks: path.join(claudeHome, "hooks"),
-            claudeSettings: path.join(claudeHome, "settings.json"),
-            claudeMcp: null,
-            codexAgents: path.join(codexHome, ".codex", "agents"),
-            codexSkills: path.join(codexHome, ".codex", "skills"),
-            codexProjectSkills: path.join(codexHome, ".agents", "skills"),
-            codexConfig: path.join(codexHome, ".codex", "config.toml.example"),
-            openclawWorkspaces: path.join(openclawHome, "workspaces"),
-            openclawTemplate: path.join(openclawHome, "openclaw.template.json"),
-            openclawSkills: path.join(openclawHome, "skills"),
-            cursorAgents: path.join(cursorHome, "agents"),
-            cursorSkill: path.join(cursorHome, "skills", "meta-theory"),
-            cursorMcp: path.join(cursorHome, "mcp.json"),
-          }
-        : {
-            claudeAgents: ".claude/agents",
-            claudeSkill: ".claude/skills/meta-theory",
-            claudeHooks: ".claude/hooks",
-            claudeSettings: ".claude/settings.json",
-            claudeMcp: ".mcp.json",
-            codexAgents: ".codex/agents",
-            codexSkills: ".codex/skills",
-            codexProjectSkills: ".agents/skills",
-            codexConfig: "codex/config.toml.example",
-            openclawWorkspaces: "openclaw/workspaces",
-            openclawTemplate: "openclaw/openclaw.template.json",
-            openclawSkills: "openclaw/skills",
-            sharedSkills: "shared-skills",
-            cursorAgents: ".cursor/agents",
-            cursorSkill: ".cursor/skills/meta-theory",
-            cursorMcp: ".cursor/mcp.json",
-          },
+    displayPaths: {
+      claudeAgents: claude.display.agentsDir,
+      claudeSkill: claude.display.skillRoot,
+      claudeHooks: claude.display.hooksDir,
+      claudeSettings: claude.display.settingsFile,
+      claudeMcp: claude.display.mcpFile,
+      codexAgents: codex.display.agentsDir,
+      codexSkills: globalScope ? codex.display.skillRoot : ".codex/skills",
+      codexProjectSkills: globalScope ? null : ".agents/skills",
+      codexConfig: codex.display.configExampleFile,
+      openclawWorkspaces: globalScope ? openclaw.baseDir : "openclaw/workspaces",
+      openclawTemplate: openclaw.display.templateConfigFile,
+      openclawSkills: globalScope ? openclaw.display.skillRoot : "openclaw/skills",
+      sharedSkills: globalScope ? null : "shared-skills",
+      cursorAgents: cursor.display.agentsDir,
+      cursorSkill: cursor.display.skillRoot,
+      cursorMcp: cursor.display.mcpFile,
+    },
   };
 }
 
@@ -765,7 +720,7 @@ Examples:
     const dp = dirs.displayPaths;
 
     for (const agent of agents) {
-      const workspaceDir = path.join(dirs.openclawWorkspacesDir, agent.id);
+      const workspaceDir = dirs.openclawWorkspaceDir(agent.id);
       const writes = await Promise.all([
         writeGeneratedFile(
           path.join(workspaceDir, "BOOT.md"),
@@ -800,7 +755,7 @@ Examples:
       ]);
 
       if (writes.some((result) => result.changed)) {
-        changedFiles.push(`${dp.openclawWorkspaces}/${agent.id}`);
+        changedFiles.push(dirs.openclawDisplayWorkspaceDir(agent.id));
       }
     }
 
@@ -821,18 +776,24 @@ Examples:
     if (
       (
         await writeGeneratedFile(
-          path.join(dirs.openclawSkillsDir, "meta-theory.md"),
+          dirs.openclawUsesDirectorySkill
+            ? path.join(dirs.openclawSkillRoot, "SKILL.md")
+            : path.join(dirs.openclawSkillRoot, "meta-theory.md"),
           portableSkill,
         )
       ).changed
     ) {
-      changedFiles.push(`${dp.openclawSkills}/meta-theory.md`);
+      changedFiles.push(
+        dirs.openclawUsesDirectorySkill
+          ? `${dp.openclawSkills}/SKILL.md`
+          : `${dp.openclawSkills}/meta-theory.md`,
+      );
     }
     for (const reference of skillReferences) {
       if (
         (
           await writeGeneratedFile(
-            path.join(dirs.openclawSkillsDir, "references", reference.name),
+            path.join(dirs.openclawSkillRoot, "references", reference.name),
             reference.content,
           )
         ).changed
@@ -842,26 +803,28 @@ Examples:
     }
 
     // ── shared-skills/ (mirrored skill layer) ───────────────────
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(dirs.sharedSkillsDir, "meta-theory.md"),
-          portableSkill,
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${dp.sharedSkills}/meta-theory.md`);
-    }
-    for (const reference of skillReferences) {
+    if (dirs.sharedSkillsDir && dp.sharedSkills) {
       if (
         (
           await writeGeneratedFile(
-            path.join(dirs.sharedSkillsDir, "references", reference.name),
-            reference.content,
+            path.join(dirs.sharedSkillsDir, "meta-theory.md"),
+            portableSkill,
           )
         ).changed
       ) {
-        changedFiles.push(`${dp.sharedSkills}/references/${reference.name}`);
+        changedFiles.push(`${dp.sharedSkills}/meta-theory.md`);
+      }
+      for (const reference of skillReferences) {
+        if (
+          (
+            await writeGeneratedFile(
+              path.join(dirs.sharedSkillsDir, "references", reference.name),
+              reference.content,
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${dp.sharedSkills}/references/${reference.name}`);
+        }
       }
     }
   }
@@ -872,18 +835,24 @@ Examples:
     if (
       (
         await writeGeneratedFile(
-          path.join(dirs.codexLegacySkillsDir, "meta-theory.md"),
+          dirs.codexUsesDirectorySkill
+            ? path.join(dirs.codexSkillRoot, "SKILL.md")
+            : path.join(dirs.codexSkillRoot, "meta-theory.md"),
           portableSkill,
         )
       ).changed
     ) {
-      changedFiles.push(`${dp.codexSkills}/meta-theory.md`);
+      changedFiles.push(
+        dirs.codexUsesDirectorySkill
+          ? `${dp.codexSkills}/SKILL.md`
+          : `${dp.codexSkills}/meta-theory.md`,
+      );
     }
     for (const reference of skillReferences) {
       if (
         (
           await writeGeneratedFile(
-            path.join(dirs.codexLegacySkillsDir, "references", reference.name),
+            path.join(dirs.codexSkillRoot, "references", reference.name),
             reference.content,
           )
         ).changed
@@ -891,50 +860,46 @@ Examples:
         changedFiles.push(`${dp.codexSkills}/references/${reference.name}`);
       }
     }
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(dirs.codexProjectSkillsDir, "meta-theory", "SKILL.md"),
-          portableSkill,
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${dp.codexProjectSkills}/meta-theory/SKILL.md`);
-    }
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(
-            dirs.codexProjectSkillsDir,
-            "meta-theory",
-            "agents",
-            "openai.yaml",
-          ),
-          buildCodexSkillMetadata(),
-        )
-      ).changed
-    ) {
-      changedFiles.push(
-        `${dp.codexProjectSkills}/meta-theory/agents/openai.yaml`,
-      );
-    }
-    for (const reference of skillReferences) {
+    if (dirs.codexProjectSkillRoot && dp.codexProjectSkills) {
       if (
         (
           await writeGeneratedFile(
-            path.join(
-              dirs.codexProjectSkillsDir,
-              "meta-theory",
-              "references",
-              reference.name,
-            ),
-            reference.content,
+            path.join(dirs.codexProjectSkillRoot, "SKILL.md"),
+            portableSkill,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexProjectSkills}/meta-theory/SKILL.md`);
+      }
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexProjectSkillRoot, "agents", "openai.yaml"),
+            buildCodexSkillMetadata(),
           )
         ).changed
       ) {
         changedFiles.push(
-          `${dp.codexProjectSkills}/meta-theory/references/${reference.name}`,
+          `${dp.codexProjectSkills}/meta-theory/agents/openai.yaml`,
         );
+      }
+      for (const reference of skillReferences) {
+        if (
+          (
+            await writeGeneratedFile(
+              path.join(
+                dirs.codexProjectSkillRoot,
+                "references",
+                reference.name,
+              ),
+              reference.content,
+            )
+          ).changed
+        ) {
+          changedFiles.push(
+            `${dp.codexProjectSkills}/meta-theory/references/${reference.name}`,
+          );
+        }
       }
     }
     const codexConfigExample = await fs.readFile(
@@ -1031,85 +996,132 @@ Examples:
     return;
   }
 
-  const byLayer = {
-    "Claude Code/.claude/agents/": changedFiles.filter((f) =>
-      f.startsWith(".claude/agents/"),
+  const normalizeDisplayPath = (value) => String(value ?? "").replace(/\\/g, "/");
+  const hasDisplayPrefix = (targetPath, prefix) => {
+    if (!prefix) {
+      return false;
+    }
+    const normalizedTarget = normalizeDisplayPath(targetPath);
+    const normalizedPrefix = normalizeDisplayPath(prefix);
+    return (
+      normalizedTarget === normalizedPrefix ||
+      normalizedTarget.startsWith(`${normalizedPrefix}/`)
+    );
+  };
+
+  const openclawWorkspacePrefix =
+    scope === "global"
+      ? normalizeDisplayPath(dirs.openclawWorkspaceDir(""))
+      : normalizeDisplayPath(dirs.displayPaths.openclawWorkspaces);
+
+  const layerCounts = {
+    claudeAgents: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.claudeAgents),
     ).length,
-    "Claude Code/.claude/skills/": changedFiles.filter((f) =>
-      f.startsWith(".claude/skills/"),
+    claudeSkill: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.claudeSkill),
     ).length,
-    "Claude Code/.claude/hooks/": changedFiles.filter((f) =>
-      f.startsWith(".claude/hooks/"),
+    claudeHooks: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.claudeHooks),
     ).length,
-    "Claude Code/.claude/settings.json": changedFiles.filter(
-      (f) => f === ".claude/settings.json",
+    claudeSettings: changedFiles.filter(
+      (f) => normalizeDisplayPath(f) === normalizeDisplayPath(dirs.displayPaths.claudeSettings),
     ).length,
-    "Claude Code/.mcp.json": changedFiles.filter((f) => f === ".mcp.json")
-      .length,
-    "Codex/.codex/agents/": changedFiles.filter((f) =>
-      f.startsWith(".codex/agents/"),
+    claudeMcp: changedFiles.filter(
+      (f) =>
+        dirs.displayPaths.claudeMcp &&
+        normalizeDisplayPath(f) === normalizeDisplayPath(dirs.displayPaths.claudeMcp),
     ).length,
-    "Codex/.codex/skills/": changedFiles.filter((f) =>
-      f.startsWith(".codex/skills/"),
+    codexAgents: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.codexAgents),
     ).length,
-    "Codex/.agents/skills/": changedFiles.filter((f) =>
-      f.startsWith(".agents/skills/"),
+    codexSkill: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.codexSkills),
     ).length,
-    "OpenClaw/openclaw/workspaces/": changedFiles.filter((f) =>
-      f.startsWith("openclaw/workspaces/"),
+    codexProjectSkill: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.codexProjectSkills),
     ).length,
-    "OpenClaw/openclaw/skills/": changedFiles.filter((f) =>
-      f.startsWith("openclaw/skills/"),
+    codexConfig: changedFiles.filter(
+      (f) => normalizeDisplayPath(f) === normalizeDisplayPath(dirs.displayPaths.codexConfig),
     ).length,
-    "OpenClaw/shared-skills/": changedFiles.filter((f) =>
-      f.startsWith("shared-skills/"),
+    openclawWorkspace: changedFiles.filter((f) =>
+      normalizeDisplayPath(f).startsWith(openclawWorkspacePrefix),
     ).length,
-    "Cursor/.cursor/agents/": changedFiles.filter((f) =>
-      f.startsWith(".cursor/agents/"),
+    openclawSkill: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.openclawSkills),
     ).length,
-    "Cursor/.cursor/skills/": changedFiles.filter((f) =>
-      f.startsWith(".cursor/skills/"),
+    openclawTemplate: changedFiles.filter(
+      (f) =>
+        normalizeDisplayPath(f) === normalizeDisplayPath(dirs.displayPaths.openclawTemplate),
     ).length,
-    "Cursor/.cursor/mcp.json": changedFiles.filter(
-      (f) => f === ".cursor/mcp.json",
+    sharedSkill: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.sharedSkills),
+    ).length,
+    cursorAgents: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.cursorAgents),
+    ).length,
+    cursorSkill: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.cursorSkill),
+    ).length,
+    cursorMcp: changedFiles.filter(
+      (f) => normalizeDisplayPath(f) === normalizeDisplayPath(dirs.displayPaths.cursorMcp),
     ).length,
   };
 
-  const groups = {
-    "Claude Code": [
-      "Claude Code/.claude/agents/",
-      "Claude Code/.claude/skills/",
-      "Claude Code/.claude/hooks/",
-      "Claude Code/.claude/settings.json",
-      "Claude Code/.mcp.json",
-    ],
-    Codex: [
-      "Codex/.codex/agents/",
-      "Codex/.codex/skills/",
-      "Codex/.agents/skills/",
-    ],
-    OpenClaw: [
-      "OpenClaw/openclaw/workspaces/",
-      "OpenClaw/openclaw/skills/",
-      "OpenClaw/shared-skills/",
-    ],
-    Cursor: [
-      "Cursor/.cursor/agents/",
-      "Cursor/.cursor/skills/",
-      "Cursor/.cursor/mcp.json",
-    ],
-  };
+  const groups = [
+    {
+      name: "Claude Code",
+      entries: [
+        { label: dirs.displayPaths.claudeAgents, count: layerCounts.claudeAgents },
+        { label: dirs.displayPaths.claudeSkill, count: layerCounts.claudeSkill },
+        { label: dirs.displayPaths.claudeHooks, count: layerCounts.claudeHooks },
+        { label: dirs.displayPaths.claudeSettings, count: layerCounts.claudeSettings },
+        { label: dirs.displayPaths.claudeMcp, count: layerCounts.claudeMcp },
+      ],
+    },
+    {
+      name: "Codex",
+      entries: [
+        { label: dirs.displayPaths.codexAgents, count: layerCounts.codexAgents },
+        { label: dirs.displayPaths.codexSkills, count: layerCounts.codexSkill },
+        {
+          label: dirs.displayPaths.codexProjectSkills,
+          count: layerCounts.codexProjectSkill,
+        },
+        { label: dirs.displayPaths.codexConfig, count: layerCounts.codexConfig },
+      ],
+    },
+    {
+      name: "OpenClaw",
+      entries: [
+        { label: dirs.displayPaths.openclawWorkspaces, count: layerCounts.openclawWorkspace },
+        { label: dirs.displayPaths.openclawSkills, count: layerCounts.openclawSkill },
+        { label: dirs.displayPaths.openclawTemplate, count: layerCounts.openclawTemplate },
+        { label: dirs.displayPaths.sharedSkills, count: layerCounts.sharedSkill },
+      ],
+    },
+    {
+      name: "Cursor",
+      entries: [
+        { label: dirs.displayPaths.cursorAgents, count: layerCounts.cursorAgents },
+        { label: dirs.displayPaths.cursorSkill, count: layerCounts.cursorSkill },
+        { label: dirs.displayPaths.cursorMcp, count: layerCounts.cursorMcp },
+      ],
+    },
+  ];
 
-  for (const [group, keys] of Object.entries(groups)) {
-    const groupCount = keys.reduce((sum, key) => sum + (byLayer[key] ?? 0), 0);
-    if (groupCount === 0) continue;
-    console.log(`${group}:`);
-    for (const key of keys) {
-      const count = byLayer[key] ?? 0;
-      const relPath = key.split("/").slice(1).join("/");
-      if (count > 0) {
-        console.log(`  ${relPath} ${count} file${count !== 1 ? "s" : ""}`);
-      }
+  for (const group of groups) {
+    const activeEntries = group.entries.filter(
+      (entry) => entry.label && entry.count > 0,
+    );
+    if (activeEntries.length === 0) {
+      continue;
+    }
+    console.log(`${group.name}:`);
+    for (const entry of activeEntries) {
+      console.log(
+        `  ${entry.label} ${entry.count} file${entry.count !== 1 ? "s" : ""}`,
+      );
     }
   }
 

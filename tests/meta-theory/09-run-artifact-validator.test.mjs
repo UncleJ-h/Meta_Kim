@@ -10,21 +10,33 @@ import { REPO_ROOT } from "./_helpers.mjs";
 const execFileAsync = promisify(execFile);
 
 describe("validate-run-artifact.mjs", () => {
-  const validFixture = path.join(REPO_ROOT, "tests", "fixtures", "run-artifacts", "valid-run.json");
-  const invalidFixture = path.join(REPO_ROOT, "tests", "fixtures", "run-artifacts", "invalid-run-public-ready.json");
+  const validFixture = path.join(
+    REPO_ROOT,
+    "tests",
+    "fixtures",
+    "run-artifacts",
+    "valid-run.json",
+  );
+  const invalidFixture = path.join(
+    REPO_ROOT,
+    "tests",
+    "fixtures",
+    "run-artifacts",
+    "invalid-run-public-ready.json",
+  );
   const invalidCompactionFixture = path.join(
     REPO_ROOT,
     "tests",
     "fixtures",
     "run-artifacts",
-    "invalid-run-compaction-open-findings.json"
+    "invalid-run-compaction-open-findings.json",
   );
 
   async function validateFixture(fixturePath) {
     const { stdout } = await execFileAsync(
       "node",
       ["scripts/validate-run-artifact.mjs", fixturePath],
-      { cwd: REPO_ROOT }
+      { cwd: REPO_ROOT },
     );
     return JSON.parse(stdout);
   }
@@ -51,17 +63,25 @@ describe("validate-run-artifact.mjs", () => {
 
   test("rejects an invalid public-ready run artifact", async () => {
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", invalidFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", invalidFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
   test("rejects compaction packets that drop open findings", async () => {
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", invalidCompactionFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", invalidCompactionFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
@@ -70,7 +90,11 @@ describe("validate-run-artifact.mjs", () => {
       artifact.dispatchEnvelopePacket.ownerAgent = "";
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], { cwd: REPO_ROOT })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        { cwd: REPO_ROOT },
+      ),
     );
   });
 
@@ -82,7 +106,11 @@ describe("validate-run-artifact.mjs", () => {
       ];
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], { cwd: REPO_ROOT })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        { cwd: REPO_ROOT },
+      ),
     );
   });
 
@@ -91,7 +119,11 @@ describe("validate-run-artifact.mjs", () => {
       artifact.dispatchEnvelopePacket.memoryMode = "inherit_random_context";
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], { cwd: REPO_ROOT })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        { cwd: REPO_ROOT },
+      ),
     );
   });
 
@@ -100,9 +132,13 @@ describe("validate-run-artifact.mjs", () => {
       delete artifact.fetchPacket;
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
@@ -118,9 +154,13 @@ describe("validate-run-artifact.mjs", () => {
       ];
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
@@ -129,9 +169,13 @@ describe("validate-run-artifact.mjs", () => {
       delete artifact.reviewPacket.findings[0].sourceProject;
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
@@ -140,7 +184,11 @@ describe("validate-run-artifact.mjs", () => {
       artifact.dispatchEnvelopePacket.reviewOwner = "";
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], { cwd: REPO_ROOT })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        { cwd: REPO_ROOT },
+      ),
     );
   });
 
@@ -149,7 +197,11 @@ describe("validate-run-artifact.mjs", () => {
       artifact.dispatchEnvelopePacket.verificationOwner = "";
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], { cwd: REPO_ROOT })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        { cwd: REPO_ROOT },
+      ),
     );
   });
 
@@ -158,9 +210,13 @@ describe("validate-run-artifact.mjs", () => {
       delete artifact.orchestrationTaskBoardPacket;
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
@@ -173,9 +229,13 @@ describe("validate-run-artifact.mjs", () => {
       delete artifact.capabilityGapPacket;
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 
@@ -189,7 +249,8 @@ describe("validate-run-artifact.mjs", () => {
         gapId: "gap-001",
         requestedCapability: "topic-analysis",
         currentAgentsChecked: ["meta-prism", "meta-artisan"],
-        insufficiencyReason: "No execution agent currently owns this business capability.",
+        insufficiencyReason:
+          "No execution agent currently owns this business capability.",
         resolutionAction: "create_execution_agent",
         requestedBy: "meta-conductor",
         approvedBy: "meta-warden",
@@ -205,9 +266,146 @@ describe("validate-run-artifact.mjs", () => {
       };
     });
     await assert.rejects(
-      execFileAsync("node", ["scripts/validate-run-artifact.mjs", tempFixture], {
-        cwd: REPO_ROOT,
-      })
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
+    );
+  });
+
+  // ── Cross-project flow tests ─────────────────────────────────────────
+
+  test("accepts a valid cross-project run artifact (queryScope=all_projects)", async () => {
+    const crossProjectFixture = path.join(
+      REPO_ROOT,
+      "tests",
+      "fixtures",
+      "run-artifacts",
+      "valid-cross-project-run.json",
+    );
+    const result = await validateFixture(crossProjectFixture);
+    assert.equal(result.ok, true);
+  });
+
+  test("rejects cross-project runs that use project_only route", async () => {
+    const tempFixture = await writeTempFixture((artifact) => {
+      artifact.taskClassification.queryScope = "all_projects";
+      artifact.taskClassification.crossProjectReason =
+        "user_explicit_cross_project_request";
+      artifact.dispatchEnvelopePacket.route = "project_only";
+      artifact.dispatchEnvelopePacket.memoryMode = "cross_project_readonly";
+    });
+    await assert.rejects(
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
+    );
+  });
+
+  test("rejects cross-project runs that use project_only memoryMode", async () => {
+    const tempFixture = await writeTempFixture((artifact) => {
+      artifact.taskClassification.queryScope = "all_projects";
+      artifact.taskClassification.crossProjectReason =
+        "user_explicit_cross_project_request";
+      artifact.dispatchEnvelopePacket.route = "cross_project";
+      artifact.dispatchEnvelopePacket.memoryMode = "project_only";
+    });
+    await assert.rejects(
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
+    );
+  });
+
+  test("rejects current-project runs with cross_project route", async () => {
+    const tempFixture = await writeTempFixture((artifact) => {
+      artifact.dispatchEnvelopePacket.route = "cross_project";
+      artifact.dispatchEnvelopePacket.memoryMode = "cross_project_readonly";
+    });
+    await assert.rejects(
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
+    );
+  });
+
+  // ── Cross-project contamination check tests ──────────────────────────
+
+  test("rejects review with crossProjectContaminationCheck=fail but revisionNeeded=false", async () => {
+    const tempFixture = await writeTempFixture((artifact) => {
+      artifact.reviewPacket.crossProjectContaminationCheck = "fail";
+      artifact.reviewPacket.revisionNeeded = false;
+    });
+    await assert.rejects(
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
+    );
+  });
+
+  test("rejects summaryPacket.sourceProjects missing a review source project", async () => {
+    const tempFixture = await writeTempFixture((artifact) => {
+      artifact.reviewPacket.sourceProjects = [
+        "project-auth-refresh-hardening",
+        "project-other",
+      ];
+      artifact.fetchPacket.projectsChecked = [
+        ...artifact.fetchPacket.projectsChecked,
+        {
+          projectRef: "project-other",
+          checkMode: "global_registry_hit",
+          reason: "cross-project reference",
+        },
+      ];
+      artifact.summaryPacket.sourceProjects = [
+        "project-auth-refresh-hardening",
+      ];
+    });
+    await assert.rejects(
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
+    );
+  });
+
+  test("rejects summaryPacket.sourceProjects referencing unchecked projects", async () => {
+    const tempFixture = await writeTempFixture((artifact) => {
+      artifact.summaryPacket.sourceProjects = [
+        "project-auth-refresh-hardening",
+        "project-never-checked",
+      ];
+    });
+    await assert.rejects(
+      execFileAsync(
+        "node",
+        ["scripts/validate-run-artifact.mjs", tempFixture],
+        {
+          cwd: REPO_ROOT,
+        },
+      ),
     );
   });
 });

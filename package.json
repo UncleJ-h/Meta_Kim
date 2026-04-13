@@ -1,6 +1,6 @@
 {
   "name": "meta-kim",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Governance layer for AI coding: meta agents, workflow contract, meta-theory; canonical in canonical/, with generated Claude/Codex/OpenClaw/Cursor projections.",
   "private": true,
   "type": "module",
@@ -15,8 +15,8 @@
     "query:runs": "node scripts/run-index.mjs query",
     "rebuild:run-index": "node scripts/run-index.mjs rebuild",
     "migrate:meta-kim": "node scripts/migrate-into-meta-kim.mjs",
-    "deps:install": "bash install-deps.sh",
-    "deps:update": "bash install-deps.sh --update",
+    "deps:install": "node scripts/install-global-skills-all-runtimes.mjs --targets claude",
+    "deps:update": "node scripts/install-global-skills-all-runtimes.mjs --update --targets claude",
     "deps:install:all-runtimes": "node scripts/install-global-skills-all-runtimes.mjs",
     "deps:update:all-runtimes": "node scripts/install-global-skills-all-runtimes.mjs --update",
     "deps:install:claude-plugins": "node scripts/install-global-skills-all-runtimes.mjs --plugins-only",
@@ -28,14 +28,15 @@
     "doctor:governance": "node scripts/doctor-governance.mjs",
     "prompt:next-iteration": "node scripts/prompt-next-iteration.mjs",
     "probe:clis": "node scripts/eval-meta-agents.mjs --probe-clis-only",
+    "test:setup": "node --test tests/setup/*.test.mjs",
     "test:meta-theory": "node --test tests/meta-theory/*.test.mjs",
     "graphify:check": "node scripts/graphify-cli.mjs check",
     "graphify:install": "node scripts/graphify-cli.mjs install",
     "graphify:update": "node scripts/graphify-cli.mjs update",
     "validate": "node scripts/validate-project.mjs",
     "check": "npm run check:runtimes && npm run validate",
-    "verify:all": "npm run check && npm run check:global:meta-theory && node scripts/eval-meta-agents.mjs --require-all-runtimes && npm run test:meta-theory",
-    "verify:all:live": "npm run check && npm run check:global:meta-theory && node scripts/eval-meta-agents.mjs --require-all-runtimes --live && npm run test:meta-theory"
+    "verify:all": "npm run check && npm run check:global:meta-theory && node scripts/eval-meta-agents.mjs --require-all-runtimes && npm run test:setup && npm run test:meta-theory",
+    "verify:all:live": "npm run check && npm run check:global:meta-theory && node scripts/eval-meta-agents.mjs --require-all-runtimes --live && npm run test:setup && npm run test:meta-theory"
   },
   "keywords": [
     "claude-code",

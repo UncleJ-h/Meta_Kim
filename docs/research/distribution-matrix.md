@@ -1,0 +1,150 @@
+# Distribution Decision Matrix
+
+Cross-referencing platform capabilities with dependency requirements to determine the correct distribution strategy for each skill across all 4 target runtimes.
+
+## Platform Capability Baseline
+
+| Feature | Claude Code | Codex | OpenClaw | Cursor |
+|---------|------------|-------|----------|--------|
+| Global Skills Path | `~/.claude/skills/` | `~/.codex/skills/` | `~/.openclaw/skills/` | `~/.cursor/skills/` |
+| Project Skills Path | `.claude/skills/` | `.agents/skills/` | `skills/` | `.agents/skills/` |
+| SKILL.md Format | Y | Y | Y | Y |
+| allowed-tools | Y | Y | Y | Y |
+| context:fork | Y | N | N | N |
+| Hooks System | Y | N | N | N |
+| Claude Plugins | Y | N | N | N |
+
+Source: see `platforms/*.md` for detailed per-platform research.
+
+## Per-Skill Distribution Decision
+
+### 1. agent-teams-playbook
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, universal |
+| Codex | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, universal |
+| OpenClaw | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, universal |
+| Cursor | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, universal |
+
+Notes: Contains optional `context: fork` (Claude Code only) but does not affect other platforms.
+
+### 2. findskill
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | subdirTemplate (win32/default) | Platform-specific subdir |
+| Codex | DISTRIBUTE | subdirTemplate (win32/default) | Platform-specific subdir |
+| OpenClaw | DISTRIBUTE | subdirTemplate (win32/default) | Platform-specific subdir |
+| Cursor | DISTRIBUTE | subdirTemplate (win32/default) | Platform-specific subdir |
+
+Notes: Private/restricted repo. `subdirMapping` selects `windows` on win32, `original` otherwise.
+
+### 3. hookprompt
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | `git clone --depth 1` | Uses `.claude/hooks/` + `.claude/settings.json` |
+| Codex | SKIP | N/A | Hooks system not supported |
+| OpenClaw | SKIP | N/A | Hooks system not supported |
+| Cursor | SKIP | N/A | Hooks system not supported |
+
+Notes: Only claude-only dependency. Correctly isolated via `targets: ["claude"]` in skills.json.
+
+### 4. superpowers
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | Claude Plugin (`superpowers@claude-plugins-official`) + git clone | Dual-channel: marketplace plugin + skill dir |
+| Codex | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, explicitly supports Codex |
+| OpenClaw | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, explicitly supports OpenClaw |
+| Cursor | DISTRIBUTE | `git clone --depth 1` | SKILL.md format, explicitly supports Cursor |
+
+Notes: `claudePlugin` field triggers `claude plugin install` for Claude Code. Other platforms get git clone only.
+
+### 5. everything-claude-code
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | sparse checkout `skills/` | Content in subdir, supports Claude Code |
+| Codex | DISTRIBUTE | sparse checkout `skills/` | Explicitly supports Codex |
+| OpenClaw | DISTRIBUTE | sparse checkout `skills/` | Explicitly supports OpenClaw |
+| Cursor | DISTRIBUTE | sparse checkout `skills/` | Explicitly supports Cursor |
+
+Notes: 140K+ stars, 38 agent templates, 156 skills. Content lives in `skills/` subdir of the repo.
+
+### 6. planning-with-files
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | sparse checkout `skills/planning-with-files/` | Content in nested subdir |
+| Codex | DISTRIBUTE | sparse checkout `skills/planning-with-files/` | 16+ platforms supported |
+| OpenClaw | DISTRIBUTE | sparse checkout `skills/planning-with-files/` | 16+ platforms supported |
+| Cursor | DISTRIBUTE | sparse checkout `skills/planning-with-files/` | 16+ platforms supported |
+
+Notes: Has hooks for lifecycle management. Content in `skills/planning-with-files/` subdir.
+
+### 7. cli-anything
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | `git clone --depth 1` | 30K+ stars, universal |
+| Codex | DISTRIBUTE | `git clone --depth 1` | Explicitly supports Codex |
+| OpenClaw | DISTRIBUTE | `git clone --depth 1` | Explicitly supports OpenClaw |
+| Cursor | DISTRIBUTE | `git clone --depth 1` | Has per-platform installers |
+
+Notes: Makes any software agent-native. Has per-platform install scripts.
+
+### 8. gstack
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | `git clone --depth 1` | 23-tool suite by Garry Tan |
+| Codex | DISTRIBUTE | `git clone --depth 1` | Explicitly supports Codex |
+| OpenClaw | DISTRIBUTE | `git clone --depth 1` | Explicitly supports OpenClaw |
+| Cursor | DISTRIBUTE | `git clone --depth 1` | Docs explicitly mention `~/.cursor/skills/gstack-*/` |
+
+Notes: Garry Tan (YC President) 23-tool dev setup. Documentation explicitly lists Cursor as supported target.
+
+### 9. skill-creator
+
+| Platform | Decision | Install Method | Rationale |
+|----------|----------|---------------|-----------|
+| Claude Code | DISTRIBUTE | sparse checkout `skills/skill-creator/` | Anthropic official, universal SKILL.md |
+| Codex | DISTRIBUTE | sparse checkout `skills/skill-creator/` | Agent Skills standard |
+| OpenClaw | DISTRIBUTE | sparse checkout `skills/skill-creator/` | Agent Skills standard |
+| Cursor | DISTRIBUTE | sparse checkout `skills/skill-creator/` | Agent Skills standard |
+
+Notes: From `anthropics/skills` repo. SKILL.md specification reference.
+
+## Code Review Results
+
+### Files Reviewed
+
+| File | Status | Notes |
+|------|--------|-------|
+| `config/skills.json` | CORRECT | All 9 skills have correct targets |
+| `config/sync.json` | CORRECT | cursor in all 3 target lists |
+| `scripts/meta-kim-sync-config.mjs` | MINOR ISSUE | cursor `supportsGlobalDependencyInstall: false` contradicts actual install behavior |
+| `scripts/sync-runtimes.mjs` | CORRECT | Full cursor sync support |
+| `scripts/install-global-skills-all-runtimes.mjs` | CORRECT | cursor in resolveHomes() and main() |
+
+### Issue: supportsGlobalDependencyInstall Flag
+
+**Location**: `scripts/meta-kim-sync-config.mjs:128`
+
+```js
+cursor: {
+  activation: {
+    supportsGlobalDependencyInstall: false,  // <-- contradicts actual behavior
+  }
+}
+```
+
+`install-global-skills-all-runtimes.mjs` does install to `~/.cursor/skills/` globally. The flag should be `true`.
+
+**Impact**: Non-blocking. The install script does not read this flag, but it is semantically incorrect metadata.
+
+## Research Date
+
+2026-04-13

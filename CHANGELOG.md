@@ -4,6 +4,29 @@ All notable changes to Meta_Kim are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 When you tag a release, add a new **`## [version] - YYYY-MM-DD`** section at the top (above older entries) and list changes there.
 
+## [2.0.1] - 2026-04-13
+
+### Added
+
+- **Git retry with skillLabel**: `runGit()` in `install-global-skills-all-runtimes.mjs` auto-retries TLS/proxy failures up to 3 times with increasing delays (2s/4s/6s), and retry messages now identify the exact skill name instead of raw git args.
+- **setup.mjs full i18n migration**: All hardcoded English strings in `setup.mjs` replaced with `t.*()` calls across 4 languages (en, zh-CN, ja-JP, ko-KR) — 19 new i18n keys added.
+- **warnGitRetry i18n key** added to `meta-kim-i18n.mjs` for all 4 languages.
+- **Skill sanitizer script** (`scripts/install-skill-sanitizer.mjs`): detects and quarantines invalid nested `SKILL.md` files inside managed installs.
+- **Research docs** (`docs/research/`): dependency analysis, platform profiles, and distribution matrix for third-party skills.
+- **install-error-classifier** enhancements: `parseGitHubRepoUrl`, `buildGitHubTarballUrl`, expanded TLS/proxy classification.
+
+### Changed
+
+- `resolveRuntimeHomeDir()` extracted from `install-global-skills-all-runtimes.mjs` into `meta-kim-sync-config.mjs` for shared use.
+- Legacy subdir install detection and repair now runs automatically during skill install/update.
+- Archive extraction on Windows uses relative path + `cwd` to avoid tar misinterpreting `C:\path` as a remote host.
+
+### Fixed
+
+- **repoPath undefined crash** in `meta-kim-local-state.mjs`: `ensureProfileState()` used undeclared `repoPath` variable; now correctly uses `repoRoot` constant.
+- **Retry message confusion**: `git -C` showed instead of skill name in retry warnings — all 5 `runGit` call sites now pass explicit `skillLabel`.
+- **Windows tar path bug**: archive fallback extraction failed with `Cannot connect to C: resolve failed` on Windows due to colon in absolute path.
+
 ## [2.0.0] - 2026-04-11
 
 ### Added

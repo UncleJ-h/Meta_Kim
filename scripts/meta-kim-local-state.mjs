@@ -23,14 +23,23 @@ export function resolveProfileName(input = process.env.META_KIM_PROFILE) {
   return typeof input === "string" && input.trim() ? input.trim() : "default";
 }
 
-export function resolveRuntimeFamily(input = process.env.META_KIM_RUNTIME_FAMILY) {
+export function resolveRuntimeFamily(
+  input = process.env.META_KIM_RUNTIME_FAMILY,
+) {
   if (typeof input === "string" && input.trim()) {
     return input.trim();
   }
-  if (process.env.OPENCLAW_HOME || process.argv.some((arg) => arg.includes("openclaw"))) {
+  if (
+    process.env.OPENCLAW_HOME ||
+    process.argv.some((arg) => arg.includes("openclaw"))
+  ) {
     return "openclaw";
   }
-  if (process.env.CODEX_HOME || process.env.CODEX_SANDBOX || process.argv.some((arg) => arg.includes("codex"))) {
+  if (
+    process.env.CODEX_HOME ||
+    process.env.CODEX_SANDBOX ||
+    process.argv.some((arg) => arg.includes("codex"))
+  ) {
     return "codex";
   }
   if (
@@ -43,7 +52,10 @@ export function resolveRuntimeFamily(input = process.env.META_KIM_RUNTIME_FAMILY
   return "shared";
 }
 
-export function buildProfileKey({ repoPath = repoRoot, runtimeFamily = resolveRuntimeFamily() } = {}) {
+export function buildProfileKey({
+  repoPath = repoRoot,
+  runtimeFamily = resolveRuntimeFamily(),
+} = {}) {
   return `${runtimeFamily}-${repoPathHash(repoPath)}`;
 }
 
@@ -101,7 +113,7 @@ export async function ensureProfileState(options = {}) {
     profile: paths.profile,
     profileKey: paths.profileKey,
     repoRoot,
-    repoPathHash: repoPathHash(repoPath),
+    repoPathHash: repoPathHash(),
     runtimeFamily: paths.runtimeFamily,
     host: os.hostname(),
     createdAt: existing?.createdAt ?? now,
@@ -109,13 +121,17 @@ export async function ensureProfileState(options = {}) {
   };
 
   const projectRegistry = await detectProjectRegistryEntry({
-    repoPath,
+    repoPath: repoRoot,
     runtimeFamily: paths.runtimeFamily,
   });
   metadata.projectRef = projectRegistry.projectRef;
   metadata.registryStatus = projectRegistry.registryStatus;
 
-  await fs.writeFile(paths.profileFile, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    paths.profileFile,
+    `${JSON.stringify(metadata, null, 2)}\n`,
+    "utf8",
+  );
   return { ...paths, metadata, projectRegistry };
 }
 

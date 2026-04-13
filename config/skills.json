@@ -9,7 +9,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -23,7 +24,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -40,7 +42,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -50,7 +53,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -60,7 +64,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -69,7 +74,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -78,7 +84,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     },
     {
@@ -88,7 +95,8 @@
       "targets": [
         "claude",
         "codex",
-        "openclaw"
+        "openclaw",
+        "cursor"
       ]
     }
   ],

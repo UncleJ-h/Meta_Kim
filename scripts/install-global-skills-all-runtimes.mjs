@@ -35,8 +35,15 @@ import {
   classifyGitInstallFailure,
   shouldUseArchiveFallback,
 } from "./install-error-classifier.mjs";
+import {
+  detectLegacySubdirInstall,
+  sanitizeInstalledSkillTree,
+} from "./install-skill-sanitizer.mjs";
 import { fileURLToPath } from "node:url";
-import { resolveTargetContext } from "./meta-kim-sync-config.mjs";
+import {
+  resolveTargetContext,
+  resolveRuntimeHomeDir,
+} from "./meta-kim-sync-config.mjs";
 import { t } from "./meta-kim-i18n.mjs";
 
 // ── ANSI colors (matching setup.mjs) ─────────────────────────────────
@@ -67,6 +74,8 @@ const skipPlugins =
 const cliArgs = process.argv.slice(2);
 const installFailures = [];
 const archiveFallbacks = [];
+const repairedInstallRoots = [];
+const sanitizedSkillIssues = [];
 
 /**
  * Load skills manifest from shared config (single source of truth)
@@ -114,25 +123,26 @@ function loadSkillsManifest() {
 const { skillRepos: SKILL_REPOS, claudePluginSpecs: CLAUDE_PLUGIN_SPECS } =
   loadSkillsManifest();
 
-function runtimeDir(envKeys, fallbackName) {
-  for (const key of envKeys) {
-    const v = process.env[key];
-    if (typeof v === "string" && v.trim()) {
-      return path.resolve(v.trim());
-    }
-  }
-  return path.join(os.homedir(), fallbackName);
-}
-
 function resolveHomes() {
   return {
-    claude: runtimeDir(["META_KIM_CLAUDE_HOME", "CLAUDE_HOME"], ".claude"),
-    codex: runtimeDir(["META_KIM_CODEX_HOME", "CODEX_HOME"], ".codex"),
-    openclaw: runtimeDir(
-      ["META_KIM_OPENCLAW_HOME", "OPENCLAW_HOME"],
-      ".openclaw",
-    ),
+    claude: resolveRuntimeHomeDir("claude"),
+    codex: resolveRuntimeHomeDir("codex"),
+    openclaw: resolveRuntimeHomeDir("openclaw"),
+    cursor: resolveRuntimeHomeDir("cursor"),
   };
+}
+
+function resolveCompatibilitySkillRoots(runtimeId, primarySkillsRoot) {
+  if (runtimeId !== "codex") {
+    return [];
+  }
+
+  const legacyCodexSkillsRoot = path.join(os.homedir(), ".agents", "skills");
+  if (path.resolve(legacyCodexSkillsRoot) === path.resolve(primarySkillsRoot)) {
+    return [];
+  }
+
+  return [legacyCodexSkillsRoot];
 }
 
 function assertUnderHome(resolved) {
@@ -152,31 +162,234 @@ async function pathExists(p) {
   }
 }
 
+async function isEmptyDir(dirPath) {
+  try {
+    const entries = await fs.readdir(dirPath);
+    return entries.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function createSiblingStagingDir(targetDir, label = "staged") {
+  const parentDir = path.dirname(targetDir);
+  await fs.mkdir(parentDir, { recursive: true });
+  return fs.mkdtemp(
+    path.join(parentDir, `${path.basename(targetDir)}.${label}-`),
+  );
+}
+
+function isWindowsLockError(error) {
+  const code = error?.code || "";
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES";
+}
+
+async function replaceTargetDir(targetDir, stagedDir) {
+  const parentDir = path.dirname(targetDir);
+  const targetExists = await pathExists(targetDir);
+
+  // No existing target — simple rename, always safe
+  if (!targetExists) {
+    await fs.rename(stagedDir, targetDir);
+    return;
+  }
+
+  // Existing target — try atomic rename via backup
+  const backupDir = path.join(
+    parentDir,
+    `${path.basename(targetDir)}.backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  let oldMoved = false;
+
+  try {
+    await fs.rename(targetDir, backupDir);
+    oldMoved = true;
+  } catch (error) {
+    if (!isWindowsLockError(error)) throw error;
+    // Target directory locked (Windows EPERM/EBUSY) — keep old in place,
+    // fall through to copy-overwrite fallback
+  }
+
+  if (oldMoved) {
+    try {
+      await fs.rename(stagedDir, targetDir);
+      await fs.rm(backupDir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      // Restore old target before falling back
+      if (!(await pathExists(targetDir)) && (await pathExists(backupDir))) {
+        await fs.rename(backupDir, targetDir).catch(() => {});
+      }
+      if (!isWindowsLockError(error)) throw error;
+      // Fall through to copy fallback
+    }
+  }
+
+  // Copy fallback: Windows locks may prevent directory rename but allow
+  // file-level deletes.  Clear the target first so stale old files don't
+  // mix with the new sparse-checkout content.
+  try {
+    const entries = await fs.readdir(targetDir);
+    for (const entry of entries) {
+      await fs
+        .rm(path.join(targetDir, entry), { recursive: true, force: true })
+        .catch(() => {});
+    }
+  } catch {
+    // Best-effort cleanup — locked entries will remain but cp force overwrites
+  }
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.cp(stagedDir, targetDir, { recursive: true, force: true });
+  await fs.rm(stagedDir, { recursive: true, force: true });
+  if (oldMoved) {
+    await fs.rm(backupDir, { recursive: true, force: true });
+  }
+}
+
+async function repairManagedSkillTarget({
+  skillId,
+  targetDir,
+  subdirPath,
+  allowDelete = true,
+}) {
+  if (!(await pathExists(targetDir))) {
+    return { repaired: false };
+  }
+
+  const isLegacySubdirInstall = await detectLegacySubdirInstall(
+    targetDir,
+    subdirPath,
+  );
+  if (!isLegacySubdirInstall) {
+    return { repaired: false };
+  }
+
+  repairedInstallRoots.push({
+    skillId,
+    targetDir,
+    subdirPath,
+    action: allowDelete ? "reinstall" : "sanitize_only",
+  });
+
+  if (!allowDelete) {
+    return { repaired: false, legacyDetected: true };
+  }
+
+  console.warn(
+    `${C.yellow}⚠${C.reset} ${t.warnRepairLegacyLayout(skillId, targetDir)}`,
+  );
+  if (dryRun) {
+    console.log(
+      t.dryRun(`Replace malformed install during reinstall: ${targetDir}`),
+    );
+  }
+  return { repaired: true, legacyDetected: true };
+}
+
+async function sanitizeManagedSkillTarget(skillId, targetDir) {
+  if (!(await pathExists(targetDir))) {
+    return;
+  }
+
+  const result = await sanitizeInstalledSkillTree(targetDir, { dryRun });
+  if (result.quarantined === 0) {
+    return;
+  }
+
+  sanitizedSkillIssues.push({
+    skillId,
+    targetDir,
+    ...result,
+  });
+
+  for (const issue of result.invalidFiles) {
+    const detail = path.relative(targetDir, issue.filePath).replace(/\\/g, "/");
+    if (dryRun) {
+      console.warn(
+        `${C.yellow}⚠${C.reset} ${t.warnQuarantineDryRun(skillId, detail)}`,
+      );
+      continue;
+    }
+
+    console.warn(
+      `${C.yellow}⚠${C.reset} ${t.warnQuarantined(skillId, detail)}`,
+    );
+  }
+}
+
+async function sanitizeCompatibilityRoots(runtimeId, primarySkillsRoot, spec) {
+  const extraRoots = resolveCompatibilitySkillRoots(
+    runtimeId,
+    primarySkillsRoot,
+  );
+  for (const extraRoot of extraRoots) {
+    const targetDir = path.join(extraRoot, spec.id);
+    if (!(await pathExists(targetDir))) {
+      continue;
+    }
+
+    // Detect legacy full-repo clone or stale empty directory
+    const isLegacy =
+      spec.subdir && (await detectLegacySubdirInstall(targetDir, spec.subdir));
+    const targetEmpty = await isEmptyDir(targetDir);
+    if (isLegacy || targetEmpty) {
+      // Reinstall with proper sparse checkout — installGitSkillFromSubdir
+      // handles its own repairManagedSkillTarget + replaceTargetDir logic
+      console.warn(
+        `${C.yellow}⚠${C.reset} ${t.warnRepairLegacySharedRoot(targetDir)}`,
+      );
+      if (spec.subdir) {
+        await installGitSkillFromSubdir(
+          spec.id,
+          targetDir,
+          spec.repo,
+          spec.subdir,
+        );
+      } else {
+        await installGitSkill(spec.id, targetDir, spec.repo);
+      }
+    } else {
+      await sanitizeManagedSkillTarget(spec.id, targetDir);
+    }
+  }
+}
+
 function runGit(args, opts = {}) {
   if (dryRun) {
     console.log(t.dryRun(`git ${args.join(" ")}`));
     return { status: 0, stdout: "", stderr: "" };
   }
-  const result = spawnSync("git", args, {
-    encoding: "utf8",
-    shell: false,
-    stdio: "pipe",
-    ...opts,
-  });
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  if (result.status !== 0) {
+  const maxRetries = opts.retries ?? 3;
+  const skillLabel = opts.skillLabel || args.join(" ");
+  for (let attempt = 1; ; attempt++) {
+    const result = spawnSync("git", args, {
+      encoding: "utf8",
+      shell: false,
+      stdio: "pipe",
+    });
+    if (result.status === 0) {
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      return result;
+    }
     const error = new Error(`git ${args.join(" ")} failed`);
     error.status = result.status;
     error.stdout = result.stdout;
     error.stderr = result.stderr;
-    throw error;
+    const category = classifyGitInstallFailure(error);
+    const isRetryable =
+      category === "tls_transport" || category === "proxy_network";
+    if (!isRetryable || attempt >= maxRetries) {
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      throw error;
+    }
+    const delay = attempt * 2000;
+    console.warn(
+      `${C.yellow}⚠${C.reset} ${t.warnGitRetry(skillLabel, attempt, maxRetries, delay)}`,
+    );
+    spawnSync("sleep", [delay / 1000], { shell: true, stdio: "pipe" });
   }
-  return result;
 }
 
 function recordInstallFailure(details) {
@@ -191,9 +404,16 @@ async function extractArchiveInto(targetDir, archivePath, subdirPath) {
     if (dryRun) {
       console.log(t.dryRun(`tar -xzf ${archivePath} -C ${extractDir}`));
     } else {
-      execFileSync("tar", ["-xzf", archivePath, "-C", extractDir], {
-        stdio: "pipe",
-      });
+      // Use relative archive name + cwd to avoid Windows tar
+      // misinterpreting "C:\path" as a remote host (colon syntax).
+      execFileSync(
+        "tar",
+        ["-xzf", path.basename(archivePath), "-C", extractDir],
+        {
+          cwd: path.dirname(archivePath),
+          stdio: "pipe",
+        },
+      );
     }
 
     const entries = await fs.readdir(extractDir, { withFileTypes: true });
@@ -222,6 +442,7 @@ async function extractArchiveInto(targetDir, archivePath, subdirPath) {
 async function installViaArchiveFallback({
   skillId,
   targetDir,
+  displayTargetDir = targetDir,
   repoUrl,
   subdirPath,
   category,
@@ -255,15 +476,17 @@ async function installViaArchiveFallback({
     const buffer = Buffer.from(await response.arrayBuffer());
     await fs.writeFile(archivePath, buffer);
     await extractArchiveInto(targetDir, archivePath, subdirPath);
-    archiveFallbacks.push({ skillId, targetDir, category });
+    archiveFallbacks.push({ skillId, targetDir: displayTargetDir, category });
     console.warn(
       `${C.yellow}⚠${C.reset} ${t.warnArchiveFallback(skillId, category)}`,
     );
-    console.log(`${C.green}✓${C.reset} ${t.okArchiveInstalled(targetDir)}`);
+    console.log(
+      `${C.green}✓${C.reset} ${t.okArchiveInstalled(displayTargetDir)}`,
+    );
   } catch (error) {
     recordInstallFailure({
       skillId,
-      targetDir,
+      targetDir: displayTargetDir,
       repoUrl,
       category,
       failureText,
@@ -281,6 +504,7 @@ async function installViaArchiveFallback({
 async function handleGitFailure({
   skillId,
   targetDir,
+  displayTargetDir = targetDir,
   repoUrl,
   subdirPath,
   error,
@@ -294,6 +518,7 @@ async function handleGitFailure({
     await installViaArchiveFallback({
       skillId,
       targetDir,
+      displayTargetDir,
       repoUrl,
       subdirPath,
       category,
@@ -304,7 +529,7 @@ async function handleGitFailure({
 
   recordInstallFailure({
     skillId,
-    targetDir,
+    targetDir: displayTargetDir,
     repoUrl,
     category,
     failureText,
@@ -318,28 +543,49 @@ async function handleGitFailure({
 
 async function installGitSkill(skillId, targetDir, repoUrl) {
   assertUnderHome(targetDir);
-  if (await pathExists(targetDir)) {
+  await repairManagedSkillTarget({ skillId, targetDir });
+  const targetExists = await pathExists(targetDir);
+  const targetEmpty = targetExists && (await isEmptyDir(targetDir));
+  if (targetExists && !targetEmpty) {
     if (updateMode) {
       if (dryRun) {
         console.log(t.dryRun(`update ${targetDir}`));
-        return;
-      }
-      try {
-        runGit(["-C", targetDir, "pull", "--ff-only"]);
-        console.log(`${C.green}✓${C.reset} ${t.okUpdated(targetDir)}`);
-      } catch {
-        console.warn(`${C.yellow}⚠${C.reset} ${t.warnPullFailed(targetDir)}`);
-        await fs.rm(targetDir, { recursive: true, force: true });
+      } else {
         try {
-          runGit(["clone", "--depth", "1", repoUrl, targetDir]);
-          console.log(`${C.green}✓${C.reset} ${t.okCloned(targetDir)}`);
-        } catch (error) {
-          await handleGitFailure({
-            skillId,
-            targetDir,
-            repoUrl,
-            error,
+          runGit(["-C", targetDir, "pull", "--ff-only"], {
+            skillLabel: `pull ${skillId}`,
           });
+          console.log(`${C.green}✓${C.reset} ${t.okUpdated(targetDir)}`);
+        } catch {
+          console.warn(`${C.yellow}⚠${C.reset} ${t.warnPullFailed(targetDir)}`);
+          const stagedDir = await createSiblingStagingDir(targetDir);
+          try {
+            try {
+              runGit(["clone", "--depth", "1", repoUrl, stagedDir], {
+                skillLabel: `clone ${skillId}`,
+              });
+            } catch (error) {
+              await handleGitFailure({
+                skillId,
+                targetDir: stagedDir,
+                displayTargetDir: targetDir,
+                repoUrl,
+                error,
+              });
+            }
+
+            if (
+              (await pathExists(stagedDir)) &&
+              !(await isEmptyDir(stagedDir))
+            ) {
+            }
+          } catch (error) {
+            console.warn(
+              `${C.yellow}⚠${C.reset} ${t.warnReplaceFailed(skillId, targetDir, error.message)}`,
+            );
+          } finally {
+            await fs.rm(stagedDir, { recursive: true, force: true });
+          }
         }
       }
     } else {
@@ -347,24 +593,28 @@ async function installGitSkill(skillId, targetDir, repoUrl) {
         `${C.yellow}⊘${C.reset} ${C.dim}${t.skipExists(targetDir)}${C.reset}`,
       );
     }
+    await sanitizeManagedSkillTarget(skillId, targetDir);
     return;
   }
   if (dryRun) {
     console.log(t.dryRun(`clone ${repoUrl} -> ${targetDir}`));
-    return;
+  } else {
+    await fs.mkdir(path.dirname(targetDir), { recursive: true });
+    try {
+      runGit(["clone", "--depth", "1", repoUrl, targetDir], {
+        skillLabel: `clone ${skillId}`,
+      });
+      console.log(`${C.green}✓${C.reset} ${t.okCloned(targetDir)}`);
+    } catch (error) {
+      await handleGitFailure({
+        skillId,
+        targetDir,
+        repoUrl,
+        error,
+      });
+    }
   }
-  await fs.mkdir(path.dirname(targetDir), { recursive: true });
-  try {
-    runGit(["clone", "--depth", "1", repoUrl, targetDir]);
-    console.log(`${C.green}✓${C.reset} ${t.okCloned(targetDir)}`);
-  } catch (error) {
-    await handleGitFailure({
-      skillId,
-      targetDir,
-      repoUrl,
-      error,
-    });
-  }
+  await sanitizeManagedSkillTarget(skillId, targetDir);
 }
 
 async function installGitSkillFromSubdir(
@@ -374,10 +624,21 @@ async function installGitSkillFromSubdir(
   subdirPath,
 ) {
   assertUnderHome(targetDir);
-  if ((await pathExists(targetDir)) && !updateMode) {
+  const repairResult = await repairManagedSkillTarget({
+    skillId,
+    targetDir,
+    subdirPath,
+  });
+  const targetExists = await pathExists(targetDir);
+  const targetEmpty = targetExists && (await isEmptyDir(targetDir));
+  const shouldReplaceExisting =
+    updateMode || repairResult.legacyDetected || targetEmpty;
+
+  if (targetExists && !shouldReplaceExisting) {
     console.log(
       `${C.yellow}⊘${C.reset} ${C.dim}${t.skipExists(targetDir)}${C.reset}`,
     );
+    await sanitizeManagedSkillTarget(skillId, targetDir);
     return;
   }
 
@@ -388,36 +649,36 @@ async function installGitSkillFromSubdir(
     return;
   }
 
-  if ((await pathExists(targetDir)) && updateMode) {
-    await fs.rm(targetDir, { recursive: true, force: true });
-  }
-
+  const stagedTargetDir = await createSiblingStagingDir(targetDir);
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-skill-"));
   try {
     try {
-      runGit([
-        "clone",
-        "--depth",
-        "1",
-        "--filter=blob:none",
-        "--sparse",
-        repoUrl,
-        tmp,
-      ]);
-      runGit(["sparse-checkout", "set", subdirPath], { cwd: tmp });
+      runGit(
+        [
+          "clone",
+          "--depth",
+          "1",
+          "--filter=blob:none",
+          "--sparse",
+          repoUrl,
+          tmp,
+        ],
+        { skillLabel: `clone ${skillId}` },
+      );
+      runGit(["sparse-checkout", "set", subdirPath], {
+        cwd: tmp,
+        skillLabel: `checkout ${skillId}`,
+      });
       const src = path.join(tmp, ...subdirPath.split("/").filter(Boolean));
       if (!(await pathExists(src))) {
         throw new Error(`Sparse checkout path missing after clone: ${src}`);
       }
-      await fs.mkdir(path.dirname(targetDir), { recursive: true });
-      await fs.cp(src, targetDir, { recursive: true, force: true });
-      console.log(
-        `${C.green}✓${C.reset} ${t.okBasename(path.basename(targetDir), targetDir)}`,
-      );
+      await fs.cp(src, stagedTargetDir, { recursive: true, force: true });
     } catch (error) {
       await handleGitFailure({
         skillId,
-        targetDir,
+        targetDir: stagedTargetDir,
+        displayTargetDir: targetDir,
         repoUrl,
         subdirPath,
         error,
@@ -426,59 +687,36 @@ async function installGitSkillFromSubdir(
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+
+  if (
+    (await pathExists(stagedTargetDir)) &&
+    !(await isEmptyDir(stagedTargetDir))
+  ) {
+    await replaceTargetDir(targetDir, stagedTargetDir);
+    console.log(
+      `${C.green}✓${C.reset} ${t.okBasename(path.basename(targetDir), targetDir)}`,
+    );
+  }
+
+  await fs.rm(stagedTargetDir, { recursive: true, force: true });
+  await sanitizeManagedSkillTarget(skillId, targetDir);
 }
 
 async function installSkillCreator(targetBaseSkills) {
   const id = "skill-creator";
   const targetDir = path.join(targetBaseSkills, id);
-  assertUnderHome(targetDir);
-
-  if ((await pathExists(targetDir)) && !updateMode) {
-    console.log(
-      `${C.yellow}⊘${C.reset} ${C.dim}${t.skipExists(targetDir)}${C.reset}`,
-    );
-    return;
-  }
-
-  if (dryRun) {
-    console.log(t.dryRun(`sparse install skill-creator -> ${targetDir}`));
-    return;
-  }
-
-  if ((await pathExists(targetDir)) && updateMode) {
-    await fs.rm(targetDir, { recursive: true, force: true });
-  }
-
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-skill-"));
-  try {
-    runGit(
-      [
-        "clone",
-        "--depth",
-        "1",
-        "--filter=blob:none",
-        "--sparse",
-        "https://github.com/anthropics/skills.git",
-        tmp,
-      ],
-      { cwd: undefined },
-    );
-    runGit(["sparse-checkout", "set", "skills/skill-creator"], { cwd: tmp });
-    await fs.mkdir(targetBaseSkills, { recursive: true });
-    await fs.cp(path.join(tmp, "skills", "skill-creator"), targetDir, {
-      recursive: true,
-      force: true,
-    });
-    console.log(
-      `${C.green}✓${C.reset} ${t.okBasename("skill-creator", targetDir)}`,
-    );
-  } finally {
-    await fs.rm(tmp, { recursive: true, force: true });
-  }
+  await installGitSkillFromSubdir(
+    id,
+    targetDir,
+    "https://github.com/anthropics/skills.git",
+    "skills/skill-creator",
+  );
 }
 
 async function installAllSkillsForRuntime(label, skillsRoot, runtimeId) {
-  console.log(`\n${C.bold}${AMBER}--- ${label}: ${skillsRoot} ---${C.reset}`);
+  console.log(
+    `\n${C.bold}${AMBER}${t.skillsHeader(label, skillsRoot)}${C.reset}`,
+  );
   assertUnderHome(skillsRoot);
   if (!dryRun) {
     await fs.mkdir(skillsRoot, { recursive: true });
@@ -502,6 +740,7 @@ async function installAllSkillsForRuntime(label, skillsRoot, runtimeId) {
     } else {
       await installGitSkill(spec.id, targetDir, spec.repo);
     }
+    await sanitizeCompatibilityRoots(runtimeId, skillsRoot, spec);
   }
   const hasManifestSkillCreator = SKILL_REPOS.some(
     (spec) => spec.id === "skill-creator",
@@ -515,60 +754,46 @@ function installClaudePlugins() {
   if (skipPlugins || CLAUDE_PLUGIN_SPECS.length === 0) {
     return;
   }
-  console.log(
-    `\n${C.bold}${AMBER}--- Claude Code plugins (user scope) ---${C.reset}`,
-  );
+  console.log(`\n${C.bold}${AMBER}${t.pluginsHeader}${C.reset}`);
 
-  // Pre-flight: verify @anthropic-ai/claude-code CLI is resolvable.
-  // On Windows, "npm config get prefix" may return "C:\home\kim\.npm-global"
-  // where the backslash after the drive letter makes Node treat it as a
-  // *relative* path — so existsSync(prefix) passes even when the dir is
-  // missing. Check for cli.js specifically to avoid false positives.
-  try {
-    const raw = execSync("npm config get prefix", { encoding: "utf8" })
-      .toString()
-      .trim();
-    if (raw && raw !== "") {
-      // Normalize to forward slashes so Node.js path handling is predictable
-      // (Windows npm returns backslashes; C:\ is relative on Windows, so
-      // existsSync("C:\home\...") wrongly returns true for non-existent dirs).
-      const prefix = raw.replace(/\\/g, "/");
-      // Build the path with forward slashes only — Node.js on Windows accepts
-      // both / and \ as separators, but mixing them causes confusion.
-      const cliPath = [
-        prefix,
-        "node_modules",
-        "@anthropic-ai",
-        "claude-code",
-        "cli.js",
-      ].join("/");
-      if (!existsSync(cliPath)) {
-        console.warn(`${C.yellow}⚠${C.reset} ${t.warnNpmPrefixBroken}`);
-        console.warn(
-          `${C.dim}  prefix="${raw}" -> "${prefix}" — cli.js not found${C.reset}`,
-        );
-        return;
-      }
-    }
-  } catch {
-    // npm unreadable — skip pre-flight, let plugin install attempt anyway
+  // Probe which claude invocation method works.
+  // Windows edge-case: a broken npm .cmd shim may shadow a working
+  // standalone .exe.  We try direct spawn first (skips .cmd), then
+  // shell spawn (finds .cmd).  Whichever works is reused below.
+  const isWin = os.platform() === "win32";
+  const useShell = shouldUseCliShell(isWin);
+
+  let claudeShellOpt = false;
+  let claudeFound = false;
+
+  // Strategy 1: direct spawn (finds .exe, skips broken .cmd shims on Windows)
+  const direct = spawnSync("claude", ["--version"], { encoding: "utf8" });
+  if (direct.status === 0) {
+    claudeShellOpt = false;
+    claudeFound = true;
   }
 
-  const r = spawnSync("claude", ["--version"], {
-    encoding: "utf8",
-    shell: shouldUseCliShell(os.platform()),
-  });
-  if (r.status !== 0) {
+  // Strategy 2: shell spawn (finds .cmd wrappers for npm installs)
+  if (!claudeFound && useShell) {
+    const viaShell = spawnSync("claude", ["--version"], {
+      encoding: "utf8",
+      shell: true,
+    });
+    if (viaShell.status === 0) {
+      claudeShellOpt = true;
+      claudeFound = true;
+    }
+  }
+
+  if (!claudeFound) {
     console.warn(`${C.yellow}⚠${C.reset} ${t.warnClaNotFound}`);
     return;
   }
 
   // Detect already-installed plugins so we skip re-installing them.
-  // "claude plugin install" always exits 0 (even if already installed),
-  // so we must check the plugin list first.
   const listOut = spawnSync("claude", ["plugins", "list", "--json"], {
     encoding: "utf8",
-    shell: shouldUseCliShell(os.platform()),
+    shell: claudeShellOpt,
   });
   let installedNames = new Set();
   if (listOut.status === 0 && listOut.stdout) {
@@ -576,7 +801,6 @@ function installClaudePlugins() {
       const plugins = JSON.parse(listOut.stdout);
       if (Array.isArray(plugins)) {
         for (const p of plugins) {
-          // Plugin objects may have "name" or "id"; normalize to bare name.
           const name = (p.name || p.id || "").split("@")[0].trim();
           if (name) installedNames.add(name);
         }
@@ -587,7 +811,6 @@ function installClaudePlugins() {
   }
 
   for (const spec of CLAUDE_PLUGIN_SPECS) {
-    // Extract bare name from spec like "superpowers@claude-plugins-official"
     const bareName = spec.split("@")[0];
     if (installedNames.has(bareName)) {
       console.log(
@@ -602,7 +825,7 @@ function installClaudePlugins() {
     console.log(`${C.cyan}→${C.reset} ${t.installingPlugin(spec)}`);
     const p = spawnSync("claude", ["plugin", "install", spec], {
       stdio: "inherit",
-      shell: shouldUseCliShell(os.platform()),
+      shell: claudeShellOpt,
     });
     if (p.status !== 0) {
       console.warn(
@@ -612,9 +835,65 @@ function installClaudePlugins() {
   }
 }
 
+// ── Legacy artifact cleanup ──────────────────────────────────
+
+/**
+ * Detect and remove known legacy directory structures left by older
+ * versions of Meta_Kim install scripts. Runs automatically during
+ * every install/update so all users benefit.
+ *
+ * Known patterns:
+ *   1. Nested runtime dir: ~/.claude/.claude/, ~/.codex/.codex/, etc.
+ *      (caused by old global-sync writing project-level structure into
+ *      the runtime home dir)
+ *   2. Stale meta-kim install: ~/.claude/meta-kim/
+ *      (old install artifact from pre-2.0 setup)
+ */
+async function cleanupLegacyGlobalArtifacts(homes) {
+  const cleaned = [];
+
+  // Pattern 1: nested runtime dir inside its own home
+  // e.g. ~/.claude/.claude/, ~/.codex/.codex/, ~/.openclaw/.openclaw/, ~/.cursor/.cursor/
+  for (const [runtimeId, homeDir] of Object.entries(homes)) {
+    const runtimeDirName = path.basename(homeDir); // e.g. ".claude"
+    const nestedDir = path.join(homeDir, runtimeDirName);
+    if (await pathExists(nestedDir)) {
+      console.warn(`${C.yellow}⚠${C.reset} ${t.warnRemovingObsoleteDir}`);
+      console.warn(
+        `${C.dim}  ${nestedDir}${C.reset} — ${t.warnNestedCopyNotUsed(runtimeId)}`,
+      );
+      if (!dryRun) {
+        await fs.rm(nestedDir, { recursive: true, force: true });
+      }
+      cleaned.push(nestedDir);
+    }
+  }
+
+  // Pattern 2: stale meta-kim install artifact inside Claude home
+  const metaKimLegacy = path.join(homes.claude, "meta-kim");
+  if (await pathExists(metaKimLegacy)) {
+    console.warn(`${C.yellow}⚠${C.reset} ${t.warnRemovingObsoleteDir}`);
+    console.warn(
+      `${C.dim}  ${metaKimLegacy}${C.reset} — ${t.warnPre2Artifact}`,
+    );
+    if (!dryRun) {
+      await fs.rm(metaKimLegacy, { recursive: true, force: true });
+    }
+    cleaned.push(metaKimLegacy);
+  }
+
+  if (cleaned.length > 0) {
+    console.log(`${C.green}✓${C.reset} ${t.okRemovedObsolete(cleaned.length)}`);
+    console.log(`${C.dim}  ${t.noteSettingsNotAffected}${C.reset}`);
+  }
+}
+
 async function main() {
   const { activeTargets } = await resolveTargetContext(cliArgs);
   const homes = resolveHomes();
+
+  // Clean up known legacy artifacts before any install operations
+  await cleanupLegacyGlobalArtifacts(homes);
 
   if (!pluginsOnly) {
     if (activeTargets.includes("claude")) {
@@ -638,6 +917,13 @@ async function main() {
         "openclaw",
       );
     }
+    if (activeTargets.includes("cursor")) {
+      await installAllSkillsForRuntime(
+        "Cursor skills",
+        path.join(homes.cursor, "skills"),
+        "cursor",
+      );
+    }
   }
 
   if (activeTargets.includes("claude")) {
@@ -646,7 +932,7 @@ async function main() {
 
   // Optional: graphify (code knowledge graph)
   if (!pluginsOnly) {
-    console.log(`\n${C.bold}${AMBER}--- Python Tools (optional) ---${C.reset}`);
+    console.log(`\n${C.bold}${AMBER}${t.pythonToolsOptionalHeader}${C.reset}`);
     const python = detectPython310();
 
     if (!python) {
@@ -685,6 +971,50 @@ async function main() {
           console.warn(`${C.yellow}⚠${C.reset} ${t.warnGraphifyPipFailed}`);
         }
       }
+    }
+  }
+
+  // Print failure summary if any skills failed
+  if (installFailures.length > 0) {
+    console.log(
+      `\n${C.yellow}${C.bold}${t.summaryInstallFailures(installFailures.length)}${C.reset}`,
+    );
+    for (const failure of installFailures) {
+      const category = failure.category || "unknown";
+      console.log(
+        `  ${C.red}✗${C.reset} ${failure.skillId} → ${category} (${failure.targetDir})`,
+      );
+    }
+  }
+  if (archiveFallbacks.length > 0) {
+    console.log(
+      `\n${C.yellow}${t.summaryArchiveFallbacks(archiveFallbacks.length)}${C.reset}`,
+    );
+    for (const fb of archiveFallbacks) {
+      console.log(
+        `  ${C.yellow}⚠${C.reset} ${fb.skillId} used archive fallback (${fb.category})`,
+      );
+    }
+  }
+
+  if (repairedInstallRoots.length > 0) {
+    console.log(
+      `\n${C.yellow}${t.summaryRepairedOrFlagged(repairedInstallRoots.length)}${C.reset}`,
+    );
+    for (const repair of repairedInstallRoots) {
+      console.log(
+        `  ${C.yellow}⚠${C.reset} ${repair.skillId} -> ${repair.action} (${repair.targetDir})`,
+      );
+    }
+  }
+  if (sanitizedSkillIssues.length > 0) {
+    console.log(
+      `\n${C.yellow}${t.summaryQuarantined(sanitizedSkillIssues.reduce((sum, item) => sum + item.quarantined, 0))}${C.reset}`,
+    );
+    for (const item of sanitizedSkillIssues) {
+      console.log(
+        `  ${C.yellow}⚠${C.reset} ${item.skillId} -> ${item.quarantined} file(s) in ${item.targetDir}`,
+      );
     }
   }
 

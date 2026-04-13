@@ -6,7 +6,6 @@
 
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -14,6 +13,7 @@ import {
   canonicalRuntimeAssetsDir,
   canonicalSkillRoot,
   resolveTargetContext,
+  resolveRuntimeHomeInfo,
 } from "./meta-kim-sync-config.mjs";
 
 // ANSI colors matching setup.mjs
@@ -39,36 +39,6 @@ const cliArgs = process.argv.slice(2);
 
 const repoHooksDir = path.join(canonicalRuntimeAssetsDir, "claude", "hooks");
 
-const runtimeSpecs = {
-  claude: {
-    label: "Claude Code",
-    envKeys: ["META_KIM_CLAUDE_HOME", "CLAUDE_HOME"],
-    defaultDirName: ".claude",
-    requiredMarkers: ["skills"],
-    preferredMarkers: ["settings.json", "agents"],
-  },
-  openclaw: {
-    label: "OpenClaw",
-    envKeys: ["META_KIM_OPENCLAW_HOME", "OPENCLAW_HOME"],
-    defaultDirName: ".openclaw",
-    requiredMarkers: ["skills"],
-    preferredMarkers: ["openclaw.json", "config.yaml"],
-  },
-  codex: {
-    label: "Codex",
-    envKeys: ["META_KIM_CODEX_HOME", "CODEX_HOME"],
-    defaultDirName: ".codex",
-    requiredMarkers: ["skills"],
-    preferredMarkers: ["config.toml", "commands"],
-  },
-  cursor: {
-    label: "Cursor",
-    envKeys: ["META_KIM_CURSOR_HOME", "CURSOR_HOME"],
-    defaultDirName: ".cursor",
-    requiredMarkers: ["skills"],
-    preferredMarkers: ["mcp.json", "agents"],
-  },
-};
 let runtimeHomes = {};
 let allowedRoots = [];
 let activeTargets = [];
@@ -96,90 +66,13 @@ async function pathExists(targetPath) {
   }
 }
 
-async function hasRequiredMarkers(candidateDir, spec) {
-  const checks = await Promise.all(
-    spec.requiredMarkers.map((marker) =>
-      pathExists(path.join(candidateDir, marker)),
-    ),
-  );
-  return checks.every(Boolean);
-}
-
-async function countPreferredMarkers(candidateDir, spec) {
-  const checks = await Promise.all(
-    spec.preferredMarkers.map((marker) =>
-      pathExists(path.join(candidateDir, marker)),
-    ),
-  );
-  return checks.filter(Boolean).length;
-}
-
-function uniquePaths(paths) {
-  return [...new Set(paths.map((entry) => path.resolve(entry)))];
-}
-
-async function findNestedRuntimeHome(spec) {
-  const homeDir = path.resolve(os.homedir());
-  const candidates = [
-    path.join(homeDir, spec.defaultDirName),
-    path.join(homeDir, ".config", spec.defaultDirName.replace(/^\./, "")),
-    path.join(homeDir, ".config", spec.defaultDirName),
-  ];
-
-  let bestMatch = null;
-
-  for (const candidate of uniquePaths(candidates)) {
-    if (!(await pathExists(candidate))) {
-      continue;
-    }
-    if (!(await hasRequiredMarkers(candidate, spec))) {
-      continue;
-    }
-    const score = await countPreferredMarkers(candidate, spec);
-    if (!bestMatch || score > bestMatch.score) {
-      bestMatch = { dir: candidate, score };
-    }
-  }
-
-  return bestMatch?.dir ?? null;
-}
-
-async function resolveRuntimeHome(spec) {
-  for (const key of spec.envKeys) {
-    const value = process.env[key];
-    if (typeof value === "string" && value.trim()) {
-      return {
-        dir: path.resolve(value.trim()),
-        source: `env:${key}`,
-      };
-    }
-  }
-
-  const discovered = await findNestedRuntimeHome(spec);
-  if (discovered) {
-    return {
-      dir: discovered,
-      source:
-        discovered ===
-        path.join(path.resolve(os.homedir()), spec.defaultDirName)
-          ? "default"
-          : "search",
-    };
-  }
-
-  return {
-    dir: path.join(path.resolve(os.homedir()), spec.defaultDirName),
-    source: "fallback",
-  };
-}
-
 async function resolveTargets() {
   const targetContext = await resolveTargetContext(cliArgs);
   runtimeHomes = {
-    claude: await resolveRuntimeHome(runtimeSpecs.claude),
-    openclaw: await resolveRuntimeHome(runtimeSpecs.openclaw),
-    codex: await resolveRuntimeHome(runtimeSpecs.codex),
-    cursor: await resolveRuntimeHome(runtimeSpecs.cursor),
+    claude: resolveRuntimeHomeInfo("claude"),
+    openclaw: resolveRuntimeHomeInfo("openclaw"),
+    codex: resolveRuntimeHomeInfo("codex"),
+    cursor: resolveRuntimeHomeInfo("cursor"),
   };
 
   selectedTargetIds = [...targetContext.activeTargets];
@@ -190,7 +83,7 @@ async function resolveTargets() {
 
   activeTargets = selectedTargetIds.map((targetId) => ({
     targetId,
-    label: `${runtimeSpecs[targetId].label} global skill`,
+    label: `${targetContext.profiles[targetId]?.label ?? targetId} global skill`,
     dir: path.join(runtimeHomes[targetId].dir, "skills", "meta-theory"),
   }));
 

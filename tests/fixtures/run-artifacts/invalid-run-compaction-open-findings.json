@@ -10,6 +10,10 @@
   "taskClassification": {
     "taskClass": "A",
     "requestClass": "execute",
+    "queryScope": "current_project",
+    "projectRef": "project-auth-refresh-hardening",
+    "registryStatus": "known",
+    "crossProjectReason": "default_current_project_scope",
     "governanceFlow": "complex_dev",
     "triggerReasons": [
       "multi_file",
@@ -23,6 +27,33 @@
     "decisionSource": "classifier-v2",
     "classifierVersion": "v2",
     "complexity": "medium"
+  },
+  "fetchPacket": {
+    "projectsChecked": [
+      {
+        "projectRef": "project-auth-refresh-hardening",
+        "checkMode": "current_project",
+        "reason": "default query scope"
+      }
+    ],
+    "projectLocalSources": [
+      {
+        "projectRef": "project-auth-refresh-hardening",
+        "sourceType": "run_index",
+        "sourceRef": ".meta-kim/state/default/run-index.sqlite"
+      }
+    ],
+    "globalRegistryHits": [],
+    "capabilityMatches": [
+      {
+        "capability": "auth_refresh_hardening",
+        "owner": "meta-conductor",
+        "sourceProject": "project-auth-refresh-hardening"
+      }
+    ],
+    "capabilityGaps": [],
+    "graphSources": [],
+    "knowledgeSources": []
   },
   "intentPacket": {
     "trueUserIntent": "Harden refresh-token handling so secrets never live inline in source; one consolidated deliverable for the auth module.",
@@ -101,11 +132,28 @@
     "blockedCapabilities": [
       "security_policy_override"
     ],
-    "memoryMode": "inherit_summary_only",
+    "route": "project_only",
+    "ownerSelection": "capability_first",
+    "memoryMode": "project_only",
     "workspaceHint": "auth-refresh-hardening",
     "resultSchemaRef": "config/contracts/workflow-contract.json#/protocols/workerResultPacket",
     "reviewOwner": "meta-prism",
     "verificationOwner": "meta-warden"
+  },
+  "orchestrationTaskBoardPacket": {
+    "dispatchBoardId": "dispatch-001",
+    "boardMode": "direct_dispatch",
+    "tasks": [
+      {
+        "taskId": "task-001",
+        "taskKind": "execution",
+        "owner": "meta-conductor",
+        "sequence": 1,
+        "dependsOn": [],
+        "deliverable": "auth-refresh-hardening:token-refresh"
+      }
+    ],
+    "synthesisOwner": "meta-warden"
   },
   "dispatchBoard": {
     "boardId": "dispatch-001",
@@ -149,6 +197,10 @@
     "protocolCompliance": "PASS",
     "qualityGate": "FAIL",
     "revisionNeeded": true,
+    "sourceProjects": [
+      "project-auth-refresh-hardening"
+    ],
+    "crossProjectContaminationCheck": "pass",
     "reviews": [
       {
         "type": "security",
@@ -164,6 +216,7 @@
         "findingId": "finding-001",
         "severity": "high",
         "owner": "meta-sentinel",
+        "sourceProject": "project-auth-refresh-hardening",
         "summary": "inline secret fallback still present",
         "requiredAction": "remove inline secret fallback",
         "fixArtifact": "src/auth/refresh.ts",
@@ -214,6 +267,9 @@
     "deliverableChainClosed": false,
     "consolidatedDeliverablePresent": true,
     "publicReady": false,
+    "sourceProjects": [
+      "project-auth-refresh-hardening"
+    ],
     "deliveryShellsUsed": [
       "shell-review-delta"
     ],
@@ -248,6 +304,14 @@
     "writebackDecision": "none",
     "decisionReason": "verification still failed",
     "writebacks": [],
+    "retain": [
+      {
+        "target": "meta-conductor",
+        "reason": "Owner boundary remains valid."
+      }
+    ],
+    "upgrade": [],
+    "retire": [],
     "scarIds": [],
     "syncRequired": false
   }
