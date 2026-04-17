@@ -88,11 +88,11 @@ For complex development work, Claude Code should behave as the dispatcher first,
 
 This applies to **all meta-theory Type flows**, not just development tasks:
 
-- **Type A (Analysis)**: meta-theory gathers information (Steps 1-2), then dispatches `meta-prism` for quality audit and `meta-warden` for synthesis
-- **Type B (Agent Creation)**: meta-theory plans (Phases 1-2), then dispatches station agents (`meta-genesis`, `meta-artisan`, etc.) via the `Agent` tool for design work
-- **Type C (Development)**: meta-theory handles Stages 1-3 (Critical/Fetch/Thinking), then dispatches specialists via the `Agent` tool for Stages 4-8
-- **Type D (Review)**: meta-theory reads the proposal, then dispatches `meta-prism` + `meta-scout` + `meta-warden` for review execution
-- **Type E (Rhythm)**: meta-theory diagnoses issues (Steps 1-3), then dispatches `meta-conductor` for Card Deck design and `meta-warden` for synthesis
+- **Type A (Analysis)**: meta-theory gathers information (Steps 1-2), then dispatches via Fetch-first capability matching (quality audit → capability="code quality review" / synthesis → capability="coordination and synthesis")
+- **Type B (Agent Creation)**: meta-theory plans (Phases 1-2), then dispatches station agents via capability matching (identity → capability="agent SOUL design" / loadout → capability="skill/tool matching") via the `Agent` tool for design work
+- **Type C (Development)**: meta-theory handles Stages 1-3 (Critical/Fetch/Thinking with mandatory 3-STEP capability discovery), then dispatches specialists via capability-matched `Agent` tool for Stages 4-8
+- **Type D (Review)**: meta-theory reads the proposal, then dispatches via Fetch-first capability matching (quality audit → capability="code quality review" / external claims → capability="external capability discovery" / synthesis → capability="coordination and synthesis")
+- **Type E (Rhythm)**: meta-theory diagnoses issues (Steps 1-3), then dispatches via capability matching (card deck → capability="workflow sequencing and rhythm control" / synthesis → capability="coordination and synthesis")
 
 The core principle is: **meta-theory thinks, agents do.**
 
