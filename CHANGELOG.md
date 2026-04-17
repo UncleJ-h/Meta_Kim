@@ -4,6 +4,18 @@ All notable changes to Meta_Kim are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 When you tag a release, add a new **`## [version] - YYYY-MM-DD`** section at the top (above older entries) and list changes there.
 
+## [2.0.9] - 2026-04-18
+
+### Fixed
+
+- **install-skills: multi-runtime empty sections root cause**: `installSkillsToMultipleRuntimes` Phase 2 called `deployStagedSkill` with an empty `stagedPath` when a skill already existed at the first runtime (stage optimization skipped clone). Since `deployStagedSkill` returns `false` silently on empty path, all skill sections showed headers but no content. Fixed by checking `stagedPath` existence before deploying — falls through to direct install branch so "⊘ 已存在" output is always printed.
+
+- **install-skills: `--skills ""` filtering all skills**: `parseSkillsArg` returned `[]` instead of `null` for `--skills ""` (empty string), causing `applySkillsIdFilter` to filter ALL skills out of `SKILL_REPOS`. Fixed by moving the length check to after `filter(Boolean)`. Also updated `install-global-skills-all-runtimes.mjs` to skip filtering when `skillsArg` is empty.
+
+### Added
+
+- **setup.mjs: `--log-file` tee for debug capture**: Added optional `--log-file <path>` to `install-global-skills-all-runtimes.mjs` — replaces `process.stdout/stderr.write` with a tee that mirrors all output to both terminal and the specified log file. setup.mjs auto-generates `~/.cache/meta-kim-setup/install-YYYYMMDD-HHMMSS.log` (code commented out by default, ready for re-enable during future debug sessions).
+
 ## [2.0.8] - 2026-04-17
 
 ### Fixed
