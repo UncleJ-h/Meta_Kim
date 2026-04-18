@@ -1424,7 +1424,18 @@ Examples:
     },
   ];
 
-  const pathColWidth = 36;
+  // Dynamic path column width: base on the longest active label so short
+  // entries (e.g. ".mcp.json") do not trail a wall of spaces. Bounded below
+  // so single-entry runs still have breathing room, and above so pathological
+  // long paths do not push detail off-screen.
+  const activeLabels = groups.flatMap((g) =>
+    g.entries.filter((e) => e.label && e.count > 0).map((e) => String(e.label)),
+  );
+  const longestLabel = activeLabels.reduce(
+    (max, label) => Math.max(max, label.length),
+    0,
+  );
+  const pathColWidth = Math.max(16, Math.min(longestLabel + 2, 60));
   console.log("");
   console.log(t.syncRuntimesSummaryTitle);
   console.log(t.syncRuntimesSummaryIntro);
@@ -1458,9 +1469,7 @@ Examples:
   if (manifestRecorder) {
     const result = await manifestRecorder.flush();
     if (result.ok) {
-      console.log(
-        `✓ Install manifest: ${result.path} (${result.entries} entries)`,
-      );
+      console.log(`✓ ${t.syncInstallManifestOk(result.path, result.entries)}`);
     }
   }
 }

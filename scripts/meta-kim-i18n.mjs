@@ -83,6 +83,8 @@ const STRINGS = {
     syncDetailFiles: (count) => `${count} file(s) updated`,
     syncScopeLine: (scope, targets) =>
       `Scope: ${scope}  ·  Targets: ${targets}`,
+    syncInstallManifestOk: (path, entries) =>
+      `Install manifest: ${path} (${entries} entries)`,
     syncRuntimesCheckStale: "Generated runtime assets are out of date:",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "Runtime assets are up to date.",
@@ -311,6 +313,8 @@ const STRINGS = {
     syncDetailFiles: (count) => `已更新 ${count} 个文件`,
     syncScopeLine: (scope, targets) =>
       `范围：${scope}  ·  目标工具：${targets}`,
+    syncInstallManifestOk: (path, entries) =>
+      `安装清单：${path}（共 ${entries} 条）`,
     syncRuntimesCheckStale: "生成的运行时资源已过期：",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "运行时资源已是最新。",
@@ -515,6 +519,8 @@ const STRINGS = {
     syncDetailFiles: (count) => `${count} ファイルを更新`,
     syncScopeLine: (scope, targets) =>
       `スコープ: ${scope}  ·  ターゲット: ${targets}`,
+    syncInstallManifestOk: (path, entries) =>
+      `インストールマニフェスト: ${path}（${entries} 件）`,
     syncRuntimesCheckStale: "生成されたランタイム資産が古くなっています:",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "ランタイム資産は最新です。",
@@ -736,6 +742,8 @@ const STRINGS = {
       `${count}/${teamSize}개 워크스페이스 디렉터리에 변경 있음`,
     syncDetailFiles: (count) => `${count}개 파일 업데이트됨`,
     syncScopeLine: (scope, targets) => `범위: ${scope}  ·  대상: ${targets}`,
+    syncInstallManifestOk: (path, entries) =>
+      `설치 매니페스트: ${path} (${entries}개 항목)`,
     syncRuntimesCheckStale: "생성된 런타임 자산이 오래되었습니다:",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "런타임 자산이 최신입니다.",
