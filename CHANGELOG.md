@@ -4,6 +4,34 @@ All notable changes to Meta_Kim are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 When you tag a release, add a new **`## [version] - YYYY-MM-DD`** section at the top (above older entries) and list changes there.
 
+## [2.0.8] - 2026-04-18
+
+### Changed
+
+- **package.json: unify npm script naming**: All npm scripts now use `meta:` prefix (`sync:runtimes` → `meta:sync`, `validate` → `meta:validate`, `check:runtimes` → `meta:check:runtimes`, `index:runs` → `meta:index:runs`, etc.) for consistent discoverability.
+
+- **runtime-capability-matrix.md**: Updated script name references to match new `meta:` prefix.
+
+- **doctor-governance.mjs**: Updated `validate:run` reference to `meta:validate:run`.
+
+- **validate-project.mjs**: Updated script name assertions and added checks for `meta:sync`/`meta:validate` presence.
+
+- **setup.mjs**: Enhanced `npmFailed` and `skillFailed` error messages with actionable troubleshooting hints (network, permission, version mismatch).
+
+- **tests/meta-theory/00-capability-discovery.test.mjs**: Updated test assertions to expect new `meta:` prefixed script names.
+
+- **tests/setup/check-sync.test.mjs**: Updated expected hook count from 8 to 9 (stop-compaction guard added).
+
+### Added
+
+- **install-global-skills-all-runtimes.mjs: GitHub API plugin version detection**: Added `fetchLatestPluginVersion()` that reads `.claude-plugin/marketplace.json` from GitHub to detect the latest plugin version. Compares against `installed_plugins.json` (v2 format under `plugins/` subdirectory) and only reinstalls when a newer version is available. Falls back to parsing `installPath` directory name when GitHub is unreachable.
+
+- **meta-kim-i18n.mjs**: Added three new i18n keys: `labelUpToDate`, `labelCannotCheckGitHub`, `labelUsingLocalRecord` (EN/ZH/JP/KR).
+
+- **docs/QUICKSTART.md**: Chinese quickstart guide for new users.
+
+- **scripts/doctor-interactive.mjs**: Interactive doctor menu providing unified entry point for health checks.
+
 ## [2.0.9] - 2026-04-18
 
 ### Fixed
