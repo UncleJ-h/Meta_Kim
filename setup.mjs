@@ -3007,7 +3007,9 @@ async function downloadAndInstallPython() {
     const wingetCheck = spawnSync("winget", ["--version"], {
       encoding: "utf8",
     });
-    if (wingetCheck.status === 0) {
+    const wingetAvailable = wingetCheck.status === 0;
+
+    if (wingetAvailable) {
       info(t.pythonInstallWinget);
       console.log(`${C.dim}  ${t.pythonInstallWingetHint}${C.reset}`);
       const result = spawnSync(
@@ -3021,14 +3023,31 @@ async function downloadAndInstallPython() {
         ],
         { stdio: "inherit", shell: true },
       );
-      if (result.status === 0) {
-        ok(t.pythonInstallSuccess);
-        // Refresh PATH and re-detect
-        const newPython = detectPython310();
-        if (newPython) return newPython;
+      // winget returns non-zero for "package already installed, no upgrade
+      // available" and for genuine failures alike — re-run detection either
+      // way so an already-installed Python (that just isn't on PATH) is not
+      // reported as "winget unavailable".
+      const newPython = detectPython310();
+      if (newPython) {
+        if (result.status === 0) ok(t.pythonInstallSuccess);
+        return newPython;
       }
+      // Python still not found. Differentiate "winget ran but PATH needs
+      // refresh" from "winget could not install".
+      if (result.status === 0) {
+        warn(
+          t.pythonInstallNotSupported(
+            "Windows (restart shell to pick up PATH)",
+          ),
+        );
+      } else {
+        warn(t.pythonInstallNotSupported("Windows (winget install failed)"));
+      }
+      info(t.pythonHint);
+      return null;
     }
-    // winget not available or failed — show manual instructions
+
+    // winget not available at all
     warn(t.pythonInstallNotSupported("Windows (winget unavailable)"));
     info(t.pythonHint);
     return null;
