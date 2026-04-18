@@ -226,3 +226,133 @@ export function safeStat(p) {
     return null;
   }
 }
+
+/**
+ * Open a recorder that buffers entries in-memory and writes the manifest
+ * on `flush()`. Designed to slot into existing sync scripts without
+ * fighting their control flow: open once, call recordXxx() at every
+ * write point, flush at the end.
+ *
+ * Failures are non-fatal — the recorder never throws. Sync scripts must
+ * not break just because a manifest entry could not be recorded.
+ *
+ *   const rec = openRecorder({ scope: "global", metaKimVersion: "2.0.13" });
+ *   rec.recordFile("/home/kim/.claude/hooks/meta-kim/block-dangerous-bash.mjs",
+ *     { source: "sync-global-meta-theory",
+ *       purpose: "claude-global-hook",
+ *       category: CATEGORIES.B });
+ *   rec.recordSettingsMerge("/home/kim/.claude/settings.json",
+ *     ["node \"...block-dangerous-bash.mjs\""],
+ *     { source: "claude-settings-merge",
+ *       purpose: "claude-global-settings-merge",
+ *       category: CATEGORIES.C });
+ *   await rec.flush();
+ */
+export function openRecorder({ scope, repoRoot, metaKimVersion, verbose }) {
+  let manifest;
+  try {
+    manifest =
+      readManifest(manifestPathFor(scope, repoRoot)) ??
+      createEmpty({ scope, repoRoot, metaKimVersion });
+    if (metaKimVersion && manifest.metaKimVersion !== metaKimVersion) {
+      manifest = { ...manifest, metaKimVersion };
+    }
+  } catch {
+    manifest = createEmpty({ scope, repoRoot, metaKimVersion });
+  }
+
+  const safeRecord = (entry) => {
+    try {
+      manifest = record(manifest, entry);
+    } catch (e) {
+      if (verbose) console.error(`[manifest] record failed: ${e?.message}`);
+    }
+  };
+
+  return {
+    recordFile(
+      filePath,
+      { source, purpose, category, kind = "file", size, sha256 } = {},
+    ) {
+      if (!filePath || !category) return;
+      safeRecord({
+        path: filePath,
+        category,
+        source: source ?? "unknown",
+        purpose: purpose ?? null,
+        kind,
+        size,
+        sha256,
+      });
+    },
+    recordDir(dirPath, { source, purpose, category } = {}) {
+      if (!dirPath || !category) return;
+      safeRecord({
+        path: dirPath,
+        category,
+        source: source ?? "unknown",
+        purpose: purpose ?? null,
+        kind: "dir",
+      });
+    },
+    recordSettingsMerge(
+      settingsPath,
+      managedCommands,
+      { source, purpose, category, mergedSettingsKeys } = {},
+    ) {
+      if (!settingsPath || !category) return;
+      safeRecord({
+        path: settingsPath,
+        category,
+        source: source ?? "unknown",
+        purpose: purpose ?? "settings-merge",
+        kind: "settings-merge",
+        mergedHookCommands: managedCommands ?? [],
+        mergedSettingsKeys: mergedSettingsKeys ?? [],
+      });
+    },
+    recordMcpServer(mcpPath, name, { source, purpose, category } = {}) {
+      if (!mcpPath || !name || !category) return;
+      safeRecord({
+        path: mcpPath,
+        category,
+        source: source ?? "unknown",
+        purpose: purpose ?? `mcp-server:${name}`,
+        kind: "mcp-server",
+        mcpServerName: name,
+      });
+    },
+    recordPipPackage(name, version, { source } = {}) {
+      if (!name) return;
+      safeRecord({
+        path: `pip:${name}`,
+        category: CATEGORIES.I,
+        source: source ?? "unknown",
+        purpose: `pip-package:${name}`,
+        kind: "pip-package",
+        pipPackageName: name,
+        pipPackageVersion: version ?? null,
+      });
+    },
+    forget(targetPath, purpose) {
+      try {
+        manifest = removeByPath(manifest, targetPath, purpose);
+      } catch {
+        /* ignore */
+      }
+    },
+    snapshot() {
+      return manifest;
+    },
+    async flush() {
+      try {
+        const target = manifestPathFor(scope, repoRoot);
+        writeManifest(target, manifest);
+        return { ok: true, path: target, entries: manifest.entries.length };
+      } catch (e) {
+        if (verbose) console.error(`[manifest] flush failed: ${e?.message}`);
+        return { ok: false, error: e?.message ?? String(e) };
+      }
+    },
+  };
+}

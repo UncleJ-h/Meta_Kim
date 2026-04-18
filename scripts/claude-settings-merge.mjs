@@ -7,17 +7,40 @@ import path from "node:path";
 
 // ── Global ~/.claude/hooks/meta-kim/ (sync-global-meta-theory) ──────────
 
+/**
+ * Normalize a hook command string so single- and double-backslash forms
+ * compare identically. Older versions of `hookCommandNode` produced
+ * double-JSON-escaped Windows paths (e.g. `C:\\\\Users\\\\...` on disk,
+ * `C:\\Users\\...` after parse), which the original single-backslash
+ * matchers missed. Callers should compare against the normalized form.
+ */
+function normalizeHookCommand(command) {
+  if (typeof command !== "string") return "";
+  return command.replace(/\\\\/g, "\\");
+}
+
 export function isGlobalMetaKimManagedHookCommand(command) {
   if (typeof command !== "string") {
     return false;
   }
-  return (
-    command.includes("hooks/meta-kim/") || command.includes("hooks\\meta-kim\\")
-  );
+  const n = normalizeHookCommand(command);
+  return n.includes("hooks/meta-kim/") || n.includes("hooks\\meta-kim\\");
 }
 
+/**
+ * Render a `node <path>` hook command.
+ *
+ * Historical note: prior implementation was
+ *   return `node ${JSON.stringify(absScriptPath)}`;
+ * That produced a string containing literal `\\` byte sequences for
+ * Windows paths, which were then JSON.stringify'd a second time when the
+ * enclosing settings object was serialized — yielding `\\\\` on disk and
+ * breaking identifier matching on cleanup. The fix inlines the quoted
+ * path directly; `JSON.stringify` applied at settings-write time handles
+ * escaping once, correctly.
+ */
 export function hookCommandNode(absScriptPath) {
-  return `node ${JSON.stringify(absScriptPath)}`;
+  return `node "${absScriptPath}"`;
 }
 
 /** Hook blocks matching Meta_Kim canonical runtime (absolute paths under meta-kim/). */
@@ -95,7 +118,7 @@ export function isRepoMetaKimHookCommand(command) {
   if (typeof command !== "string") {
     return false;
   }
-  const norm = command.replace(/\\/g, "/");
+  const norm = normalizeHookCommand(command).replace(/\\/g, "/");
   if (!norm.includes(".claude/hooks/")) {
     return false;
   }
