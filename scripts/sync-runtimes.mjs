@@ -110,9 +110,7 @@ async function tryReadCanonical(filePath) {
   try {
     return await fs.readFile(filePath, "utf8");
   } catch {
-    console.warn(
-      `[sync-runtimes] Skipping missing canonical file: ${filePath}`,
-    );
+    console.warn(t.canonicalMissingWarn(filePath));
     return null;
   }
 }

@@ -69,6 +69,8 @@ const STRINGS = {
     proxyStrippedHint:
       "Loopback proxy env stripped. Use --proxy <url> or set META_KIM_GIT_PROXY to configure proxy.",
     // sync-runtimes.mjs — incremental summary + --check
+    canonicalMissingWarn: (filePath) =>
+      `[sync-runtimes] Skipping missing canonical file: ${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync (incremental write summary) ──",
     syncRuntimesSummaryIntro:
       "Listed counts are paths that changed this run; unchanged paths are omitted.",
@@ -299,6 +301,8 @@ const STRINGS = {
       `为 git 配置代理：${url}（来源：${source}）`,
     proxyStrippedHint:
       "已移除回环代理环境变量。使用 --proxy <url> 或设置 META_KIM_GIT_PROXY 环境变量来配置代理。",
+    canonicalMissingWarn: (filePath) =>
+      `[sync-runtimes] 跳过缺失的 canonical 源文件：${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync（本轮增量写入摘要）──",
     syncRuntimesSummaryIntro:
       "下列数量为本次运行中有变更的路径；未列出的路径表示已与 canonical 一致。",
@@ -505,6 +509,8 @@ const STRINGS = {
       `git プロキシ設定: ${url}（来源: ${source}）`,
     proxyStrippedHint:
       "ループバックプロキシ環境変数を削除しました。--proxy <url> または META_KIM_GIT_PROXY 環境変数でプロキシを設定してください。",
+    canonicalMissingWarn: (filePath) =>
+      `[sync-runtimes] 欠落している canonical ファイルをスキップ: ${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync（増分書き込み要約）──",
     syncRuntimesSummaryIntro:
       "表示件数は今回変更されたパスのみです。変更のないパスは省略されます。",
@@ -729,6 +735,8 @@ const STRINGS = {
       `git 프록시 설정: ${url}（출처: ${source}）`,
     proxyStrippedHint:
       "루프백 프록시 환경변수가 제거되었습니다. --proxy <url> 또는 META_KIM_GIT_PROXY 환경변수로 프록시를 설정하세요.",
+    canonicalMissingWarn: (filePath) =>
+      `[sync-runtimes] 누락된 canonical 파일을 건너뜁니다: ${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync（증분 쓰기 요약）──",
     syncRuntimesSummaryIntro:
       "표시된 개수는 이번 실행에서 변경된 경로입니다. 변경이 없으면 생략됩니다.",
