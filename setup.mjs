@@ -312,7 +312,7 @@ ${r ? `Raw error: ${r}` : ""}
     layer2Note: "automatic after graphify install (pip install graphifyy)",
     layer3Label: "Layer 3 (SQL / MCP Memory Service)",
     layer3Note:
-      "requires server startup: python -m mcp_memory_service (then http://localhost:8888)",
+      "requires server startup: python -m mcp_memory_service (then http://localhost:8000)",
     postInstallNotesReminder: "Reminder:",
     postInstallNotesReminderText:
       "Run node setup.mjs --check to verify your installation at any time.",
@@ -451,6 +451,11 @@ Possible causes:
     mcpMemorySkipped: "MCP Memory Service skipped",
     mcpMemoryServerStartHint:
       "MCP Memory Service installed — start with: python -m mcp_memory_service  (or: uv run memory server -s hybrid)",
+    mcpMemoryHookInstalling:
+      "Installing Claude Code SessionStart hook for memory service...",
+    mcpMemoryHookInstalled: "SessionStart hook installed",
+    mcpMemoryHookWarnings:
+      "Hook installation reported warnings (non-blocking) — underlying stderr shown below:",
     updateHeading: "Update Mode",
     updateNpm: "Reinstalling npm dependencies...",
     updateSkills: "Updating all skills...",
@@ -717,7 +722,7 @@ ${r ? `原始错误：${r}` : ""}
     layer2Note: "安装 graphifyy 后自动激活（pip install graphifyy）",
     layer3Label: "第三层（SQL / MCP Memory Service）",
     layer3Note:
-      "需手动启动服务器：python -m mcp_memory_service（然后访问 http://localhost:8888）",
+      "需手动启动服务器：python -m mcp_memory_service（然后访问 http://localhost:8000）",
     postInstallNotesReminder: "提醒：",
     postInstallNotesReminderText:
       "随时可运行 node setup.mjs --check 验证安装状态。",
@@ -843,6 +848,11 @@ ${r ? `原始错误：${r}` : ""}
     mcpMemorySkipped: "MCP Memory Service 已跳过",
     mcpMemoryServerStartHint:
       "MCP Memory Service 已安装——启动方式：python -m mcp_memory_service  （或：uv run memory server -s hybrid）",
+    mcpMemoryHookInstalling:
+      "正在安装 Claude Code SessionStart 钩子（供记忆服务使用）...",
+    mcpMemoryHookInstalled: "SessionStart 钩子已安装",
+    mcpMemoryHookWarnings:
+      "钩子安装产生警告（不影响后续流程）——以下是子进程 stderr 原文：",
     updateHeading: "更新模式",
     updateNpm: "正在重新安装 npm 依赖...",
     updateSkills: "正在更新所有技能...",
@@ -1111,7 +1121,7 @@ ${r ? `生エラー：${r}` : ""}
     layer2Note: "graphifyy インストール後は自動有効（pip install graphifyy）",
     layer3Label: "第3層（SQL / MCP Memory Service）",
     layer3Note:
-      "サーバー手動起動が必要：python -m mcp_memory_service（次に http://localhost:8888 にアクセス）",
+      "サーバー手動起動が必要：python -m mcp_memory_service（次に http://localhost:8000 にアクセス）",
     postInstallNotesReminder: "補足：",
     postInstallNotesReminderText:
       "node setup.mjs --check でいつでも導入状態を確認できます。",
@@ -1253,6 +1263,11 @@ ${r ? `生エラー：${r}` : ""}
     mcpMemorySkipped: "MCP Memory Service をスキップしました",
     mcpMemoryServerStartHint:
       "MCP Memory Service がインストールされました——起動方法：python -m mcp_memory_service  （または：uv run memory server -s hybrid）",
+    mcpMemoryHookInstalling:
+      "メモリサービス用の Claude Code SessionStart フックをインストール中...",
+    mcpMemoryHookInstalled: "SessionStart フックをインストールしました",
+    mcpMemoryHookWarnings:
+      "フックのインストール中に警告が発生しました（非ブロッキング）——子プロセスの stderr を以下に表示します:",
     updateHeading: "アップデートモード",
     updateNpm: "npm依存関係を再インストール中...",
     updateSkills: "すべてのスキルを更新中...",
@@ -1528,7 +1543,7 @@ ${r ? `원본 오류：${r}` : ""}
     layer2Note: "graphifyy 설치 후 자동 활성화 (pip install graphifyy)",
     layer3Label: "제3층 (SQL / MCP Memory Service)",
     layer3Note:
-      "서버 수동 시작 필요: python -m mcp_memory_service (그러면 http://localhost:8888 에 접속)",
+      "서버 수동 시작 필요: python -m mcp_memory_service (그러면 http://localhost:8000 에 접속)",
     postInstallNotesReminder: "참고:",
     postInstallNotesReminderText:
       "node setup.mjs --check로 언제든지 설치 상태를 확인할 수 있습니다.",
@@ -1661,6 +1676,11 @@ ${r ? `원본 오류：${r}` : ""}
     mcpMemorySkipped: "MCP Memory Service 건너뜀",
     mcpMemoryServerStartHint:
       "MCP Memory Service 설치 완료——시작 방법: python -m mcp_memory_service  (또는: uv run memory server -s hybrid)",
+    mcpMemoryHookInstalling:
+      "메모리 서비스용 Claude Code SessionStart 훅 설치 중...",
+    mcpMemoryHookInstalled: "SessionStart 훅 설치 완료",
+    mcpMemoryHookWarnings:
+      "훅 설치에서 경고가 발생했습니다 (비차단) — 하위 프로세스의 stderr 원문은 아래와 같습니다:",
     updateHeading: "업데이트 모드",
     updateNpm: "npm 의존성 재설치 중...",
     updateSkills: "모든 스킬 업데이트 중...",
@@ -3332,7 +3352,7 @@ function resolvePythonForMemoryService(detectedPython) {
   return { python: venvLauncher, venvCreated: true, venvDir };
 }
 
-function runMcpMemoryHookInstaller() {
+async function runMcpMemoryHookInstaller() {
   const hookScript = join(
     PROJECT_DIR,
     "scripts",
@@ -3343,21 +3363,28 @@ function runMcpMemoryHookInstaller() {
     return;
   }
 
-  info("Installing Claude Code SessionStart hook for memory service...");
   const spawnDesc = buildNodeScriptSpawn(
     process.execPath,
     PROJECT_DIR,
     "scripts/install-mcp-memory-hooks.mjs",
   );
-  const result = spawnSync(spawnDesc.command, spawnDesc.args, {
-    ...spawnDesc.options,
-    stdio: "inherit",
+  let result;
+  await withProgress(t.mcpMemoryHookInstalling, async () => {
+    result = spawnSync(spawnDesc.command, spawnDesc.args, {
+      ...spawnDesc.options,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    });
   });
 
   if (result.status === 0) {
-    ok("SessionStart hook installed");
+    ok(t.mcpMemoryHookInstalled);
   } else {
-    warn("Hook installation reported warnings (non-blocking)");
+    warn(t.mcpMemoryHookWarnings);
+    const stderrText = (result.stderr || "").trim();
+    if (stderrText) {
+      console.log(`${C.dim}${stderrText}${C.reset}`);
+    }
   }
 }
 
@@ -3498,7 +3525,7 @@ async function installMcpMemoryServiceStep(inUpdateMode = false) {
   // Step 4.7 — auto-install the Claude Code SessionStart hook so the full
   // pipeline (pip package → .mcp.json → hook file → SessionStart registration
   // → health check) runs from a single `node setup.mjs` invocation.
-  runMcpMemoryHookInstaller();
+  await runMcpMemoryHookInstaller();
 }
 
 function ensureNetworkxCompatibility(python) {
