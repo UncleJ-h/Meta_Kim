@@ -6,6 +6,25 @@ All notable changes to Meta_Kim are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 When you tag a release, add a new **`## [version] - YYYY-MM-DD`** section at the top (above older entries) and list changes there.
 
+## [2.0.15] - 2026-04-20
+
+### Added
+
+- **`mirror` as the 11th business workflow phase** — `config/contracts/workflow-contract.json` already declared `mirror` (Mirror Publish / 镜像发布) as a terminal phase appended after `evolve`; this release closes the gap by syncing every dependent test and doc to the 11-phase contract. Post-sync state: `phases.length = 11`, `terminalPhases.length = 7`, `labels.{zh-CN,en-US}` each have 11 entries, and `tests/meta-theory/07-contract-compliance.test.mjs` + `tests/meta-theory/12-ten-step-workflow.test.mjs` pass without flakiness.
+
+### Fixed
+
+- **`install-plugin-bundles` dry-run flakiness** — `scripts/install-global-skills-all-runtimes.mjs` (line 1576–1583) was short-circuiting the "already exists" branch even under `--dry-run`, so the sparse-checkout preview for plugin-bundle specs like `obra/superpowers` would never print on machines that had the target directory cached. Added a single-line `!dryRun &&` guard so dry-run always prints the intended command (the idempotent skip still applies to real installs). Restores 3 previously-failing tests in `tests/setup/install-plugin-bundles.test.mjs` (`Codex .codex/`, `Cursor .cursor/`, `OpenClaw skills/`).
+
+### Changed
+
+- **11-phase contract synced across tests + top-level docs**: `tests/meta-theory/07-contract-compliance.test.mjs`, `tests/meta-theory/12-ten-step-workflow.test.mjs`, `AGENTS.md`, `CLAUDE.md`, `canonical/agents/meta-conductor.md`, `canonical/skills/meta-theory/references/dev-governance.md`, `canonical/skills/meta-theory/references/ten-step-governance.md`. Counts updated (`10 → 11`, `6 → 7` terminal), phase lists append `mirror`, zh-CN/en-US labels extended with `镜像发布` / `Mirror Publish`.
+
+### Known Issues
+
+- `README.md` / `README.zh-CN.md` / `README.ja-JP.md` / `README.ko-KR.md` still describe the pre-`mirror` 10-stage workflow in prose and Mermaid diagrams; a multi-language README sync is deferred to a follow-up release.
+- Callers that first-run `meta:verify:all` on a fresh clone must run `npm run meta:sync:global` beforehand, otherwise `meta:check:global` hard-fails on the missing `~/.codex/skills/meta-theory/` (and `.cursor` / `.openclaw`) directories. Documenting this as a Getting Started prerequisite is queued.
+
 ## [2.0.14] - 2026-04-20
 
 ### Added
