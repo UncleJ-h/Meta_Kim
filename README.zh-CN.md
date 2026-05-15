@@ -51,7 +51,7 @@ node setup.mjs
 
 > 💡 **安装之后**：`setup.mjs` 结尾会打印产物位置。任何时候想再看一眼（或对比上次安装），在安装目录里跑 `npm run meta:status` 即可。
 
-如果你准备维护仓库，优先改 `canonical/` 和 `config/contracts/workflow-contract.json`，然后执行（需 Node.js >= 22.13.0）：
+如果你准备维护仓库，优先改主源：`canonical/agents/`、`canonical/skills/meta-theory/`、`config/contracts/`、`config/capability-index/`，然后执行（需 Node.js >= 22.13.0）：
 
 ```bash
 npm run meta:sync
@@ -63,6 +63,18 @@ npm run meta:validate
 1. 本文件 `README.zh-CN.md`
 2. `AGENTS.md`
 3. `docs/runtime-capability-matrix.md`
+
+### 使用路径
+
+全局安装后（`node setup.mjs` 或 `npx`），各场景下什么自动生效、什么需要手动触发：
+
+| 你在哪里 | 自动生效的部分 | 需要显式触发 |
+|---|---|---|
+| Meta_Kim 仓库 + Claude Code | 完整治理（CLAUDE.md 提供 8-stage spine、门、分发规则） | — |
+| 任意其他项目 + Claude Code | Hooks（安全拦截、格式化、记忆保存）+ `/meta-theory` skill | 说"run meta theory"或输入 `/meta-theory` |
+| Codex | AGENTS.md 规则 + 8 个自定义 agent + `/meta-theory` 命令 | 输入"run meta theory"或 `/meta-theory` |
+| OpenClaw | Workspace agent + Plugin SDK hooks（28 个事件） | 需要配置 `auth.json` |
+| Cursor | Agent 投影 + skill 镜像 + hooks | 最轻量；适合阅读和轻量操作 |
 
 ---
 
@@ -109,7 +121,7 @@ Meta_Kim 的方法论基础来自本项目维护者（KimYx0207）撰写的"基�
 | --- | --- | --- |
 | **隐形骨架** | 表层流程下面必然存在的后台框架节点 | 一张先天写死的职责清单 |
 | **8 大流程** | 隐形骨架在执行层露出的人可读主链 | 全部治理逻辑本身 |
-| **10 大流程** | 复杂 run 被判断后叠加的更复杂递进方式 | 8 大流程的替代物 |
+| **11 阶段业务工作流** | 复杂 run 被判断后叠加的 run 包装递进方式 | 8 大流程的替代物 |
 | **发牌** | 围绕 8 大流程和 agent 单元做动态管控 | 简单派任务 |
 | **门** | 放行条件 | 阶段本身 |
 | **协议** | 节点必须交出的结构化东西 | 口号或抽象价值观 |
@@ -150,7 +162,7 @@ flowchart LR
 
 **Fetch — 先找已有能力，而不是上来就自己发明**
 
-搜索现有 agent、skill、工具、MCP 能不能覆盖这个需求。这一步的核心理念是**能力优先**——先定义需要什么能力，再搜索谁声明了这个能力，最后派给最匹配的 owner，而不是一开始就写死一个 agent 名字。
+搜索现有 agent、skill、工具、MCP 能不能覆盖这个需求。这一步的核心理念是**能力优先**——先定义需要什么能力，再搜索谁声明了这个能力，最后派给最匹配的 owner。能力索引查找顺序是 `config/capability-index/` → runtime mirror → local inventory → fallback，而不是一开始就写死一个 agent 名字。
 
 **Thinking — 定义边界、owner、顺序、交付物、风险和停机条件**
 
@@ -182,18 +194,18 @@ flowchart LR
 
 为什么是"相对"固定？因为有些阶段在简单场景下可以跳过——但系统会显式记录跳过的原因，不是偷偷跳过。
 
-### 10 大流程 = 骨架之上的递进工作流
+### 11 阶段业务工作流 = 骨架之上的递进工作流
 
-如果 8 大流程是骨架，那 10 大流程就是在这个骨架上长出来的**更复杂的递进方式**：
+如果 8 大流程是骨架，那 11 阶段业务工作流就是在这个骨架上长出来的 **run 包装递进方式**：
 
 ```
-direction → planning → execution → review → meta_review → revision → verify → summary → feedback → evolve
+direction → planning → execution → review → meta_review → revision → verify → summary → feedback → evolve → mirror
 ```
 
 它不是另起一套，而是从 8 大流程**派生**出来的。区别在于：
 
 - **8 大流程**偏向执行逻辑——"按什么顺序干活"
-- **10 大流程**偏向业务治理——"每个阶段要交付什么、怎么算完成、交付物怎么流转"
+- **11 阶段**偏向业务治理——"每个阶段要交付什么、怎么算完成、交付物怎么流转、镜像何时刷新"
 
 ```mermaid
 flowchart TB
@@ -202,9 +214,9 @@ flowchart TB
         C1[Critical] --> F1[Fetch] --> T1[Thinking] --> E1[Execution] --> R1[Review] --> MR1[Meta-Review] --> V1[Verification] --> EV1[Evolution]
     end
 
-    subgraph workflow["10 大流程（递进工作流）"]
+    subgraph workflow["11 阶段业务工作流"]
         direction LR
-        D2[direction] --> P2[planning] --> EX2[execution] --> RE2[review] --> MET2[meta_review] --> REV2[revision] --> VER2[verify] --> SUM2[summary] --> FB2[feedback] --> EVO2[evolve]
+        D2[direction] --> P2[planning] --> EX2[execution] --> RE2[review] --> MET2[meta_review] --> REV2[revision] --> VER2[verify] --> SUM2[summary] --> FB2[feedback] --> EVO2[evolve] --> MIR2[mirror]
     end
 
     C1 -.-> D2
@@ -220,7 +232,7 @@ flowchart TB
     style workflow fill:#14532d,stroke:#22c55e,color:#dcfce7
 ```
 
-10 大流程额外多了 `revision`（修订）、`summary`（总结）、`feedback`（反馈）这些环节，让整个流程不仅仅是"做完"，还要"做好"和"做对"。
+11 阶段业务工作流额外多了 `revision`（修订）、`summary`（总结）、`feedback`（反馈）、`mirror`（镜像）这些环节，让整个流程不仅仅是"做完"，还要"做好"、"做对"，并把运行时投影同步到位。
 
 ### 协议 = 每个节点必须交出什么
 
@@ -472,11 +484,11 @@ Meta_Kim 当前已经映射了 4 个平台：
 | **OpenClaw** | 完整支持 | `openclaw/` 目录结构 + workspaces + hooks |
 | **Cursor** | 完整支持 | `.cursor/agents/*.md` + skills + hooks + MCP |
 
-核心逻辑是同一套（`canonical/` 目录），只是通过同步脚本（`npm run meta:sync`）投影到不同平台的文件结构。
+主源层由 `canonical/agents/`、`canonical/skills/meta-theory/`、`config/contracts/`、`config/capability-index/` 组成，再通过同步脚本（`npm run meta:sync`）镜像 / 投影到不同平台的文件结构。
 
 ```mermaid
 flowchart TB
-    CANONICAL["canonical/<br/>（统一源码层）"]
+    CANONICAL["canonical/ + config/<br/>（统一主源层）"]
 
     CANONICAL --> |npm run meta:sync| CLAUDE[".claude/<br/>Claude Code<br/>agents + skills + hooks"]
     CANONICAL --> |npm run meta:sync| CODEX[".codex/<br/>Codex<br/>agents.toml + skills + hooks"]
@@ -511,8 +523,8 @@ flowchart TB
 
 | 层 | 位置 | 作用 |
 | --- | --- | --- |
-| **canonical 主源** | `canonical/`、`config/contracts/workflow-contract.json` | 长期维护优先改这里 |
-| **运行时投影** | `.claude/`、`.codex/`、`openclaw/`、`.cursor/` | 同一能力投到不同运行时 |
+| **canonical 主源** | `canonical/agents/`、`canonical/skills/meta-theory/`、`config/contracts/`、`config/capability-index/` | 长期维护优先改这里 |
+| **运行时投影** | `.claude/`、`.codex/`、`openclaw/`、`.cursor/` | 同一能力在不同运行时的镜像 |
 | **本地状态** | `.meta-kim/state/{profile}/`、`.meta-kim/local.overrides.json` | profile 级状态、run index、continuity |
 | **脚本与校验** | `scripts/`、`npm run *` | 同步、校验、发现、验收 |
 
@@ -522,7 +534,7 @@ flowchart TB
 
 | 层级 | 承载位置 | 决定什么 |
 | --- | --- | --- |
-| **项目级** | 当前仓库的 `canonical/`、contracts、runtime projections、文档、脚本 | 这个项目自己定义了什么 |
+| **项目级** | 当前仓库的 `canonical/`、`config/contracts/`、`config/capability-index/`、runtime projections、文档、脚本 | 这个项目自己定义了什么 |
 | **全局级** | `~/.claude/`、`~/.codex/`、`~/.openclaw/`、`~/.cursor/`、`~/.meta-kim/global/` | 这台机器上还能发现什么 |
 | **本地级** | `.meta-kim/state/{profile}/run-index.sqlite`、`compaction/`、`profile.json` | 这次 run 在这个 profile 下留下了什么 |
 
@@ -741,7 +753,7 @@ flowchart TB
 | `npm run meta:validate:run -- <file.json>` | 校验治理 run 产物 |
 | `npm run meta:eval:agents` | 轻量 runtime smoke 测试 |
 | `npm run meta:eval:agents:live` | 带实时 prompt 的验收 |
-| `npm run probe:clis` | 探测本机 CLI 工具 |
+| `npm run meta:probe:clis` | 探测本机 CLI 工具 |
 | `npm run meta:test:mcp` | MCP 自测 |
 | `npm run meta:index:runs -- <dir>` | 索引已验证的 run 产物 |
 | `npm run meta:query:runs -- --owner <agent>` | 查询 run 索引 |
@@ -769,9 +781,9 @@ Meta_Kim 把产物写到 3 个地方：
 
 **不需要。** Meta_Kim 解决的是跨文件、跨模块、需要多能力协作的复杂任务。如果你只是改一个文件里的一个函数，直接用 Claude Code 就够了。别用大炮打蚊子。
 
-### Q：8 大流程和 10 大流程是什么关系？
+### Q：8 大流程和 11 阶段业务工作流是什么关系？
 
-8 大流程是**执行骨架**（Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution），相对固定。10 大流程是从骨架**派生出来的业务工作流**（direction → planning → execution → review → meta_review → revision → verify → summary → feedback → evolve），更注重交付物流转和闭环。10 大流程不是推翻 8 大流程，而是在它之上增加了递进治理的复杂度。
+8 大流程是**执行骨架**（Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution），相对固定。11 阶段业务工作流定义在 `config/contracts/workflow-contract.json` 中（direction → planning → execution → review → meta_review → revision → verify → summary → feedback → evolve → mirror），更注重 run 包装、交付物流转、闭环与运行时镜像。它不是推翻 8 大流程，而是在它之上增加治理纪律。
 
 ### Q：动态发牌是什么意思？
 

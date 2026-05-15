@@ -229,10 +229,10 @@ async function main() {
     ...analysis.topics.slice(0, 3),
   ].filter(Boolean);
 
-  await postMemory(endpoint, {
+  const result = await postMemory(endpoint, {
     content,
     tags,
-    memory_type: "session-summary",
+    memory_type: "observation",
     metadata: {
       generated_by: "meta-kim-stop-memory-save",
       project_dir: cwd,
@@ -240,6 +240,11 @@ async function main() {
       decisions_count: analysis.decisions.length,
     },
   });
+  if (result?.success) {
+    process.stderr.write(
+      `[meta-kim] Session memory saved (${content.length} chars, ${tags.length} tags)\n`,
+    );
+  }
 }
 
 main().catch(() => {});

@@ -20,6 +20,7 @@ import {
 } from "./meta-kim-sync-config.mjs";
 import { t } from "./meta-kim-i18n.mjs";
 import { CATEGORIES, openRecorder } from "./install-manifest.mjs";
+import { validateSkillFrontmatter } from "./install-skill-sanitizer.mjs";
 
 const cliArgs = process.argv.slice(2);
 const checkOnly = process.argv.includes("--check");
@@ -511,7 +512,7 @@ Generated from \`${agent.sourceFile}\`. Edit the canonical source first, then ru
 - \`AGENTS.md\` only lists the Meta_Kim team, not the full OpenClaw registry.
 - When the user asks which agents exist, how many agents exist, or who can collaborate right now, query the live runtime registry first through \`agents_list\`. If that tool is unavailable, fall back to an explicit runtime command and state the result source.
 - Stay inside your own responsibility boundary unless the user explicitly asks you to coordinate broader work.
-- An optional local research note may exist at \`docs/meta.md\`, but public runtime behavior must not depend on it.
+- The theory source is \`canonical/skills/meta-theory/references/meta-theory.md\`; public runtime behavior must not depend on local narrative notes.
 
 ${agent.body}
 `;
@@ -578,6 +579,15 @@ async function loadSkillReferences() {
   );
 }
 
+function assertPortableSkillFrontmatter(raw, filePath) {
+  const validation = validateSkillFrontmatter(raw);
+  if (!validation.ok) {
+    throw new Error(
+      `Invalid canonical skill frontmatter in ${filePath}: ${validation.message}`,
+    );
+  }
+}
+
 function escapeTomlBasicMultiline(value) {
   return value.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
 }
@@ -642,6 +652,18 @@ ${agent.body}
 }
 
 async function writeGeneratedFile(filePath, nextContent) {
+  const recordGeneratedFile = () => {
+    const category = inferProjectCategory(filePath);
+    if (!category) return;
+    recordSafe((rec) =>
+      rec.recordFile(filePath, {
+        source: "sync-runtimes",
+        purpose: inferProjectPurpose(category),
+        category,
+      }),
+    );
+  };
+
   let currentContent = null;
   try {
     currentContent = await fs.readFile(filePath, "utf8");
@@ -652,6 +674,9 @@ async function writeGeneratedFile(filePath, nextContent) {
   }
 
   if (currentContent === nextContent) {
+    if (!checkOnly) {
+      recordGeneratedFile();
+    }
     return { changed: false };
   }
 
@@ -666,16 +691,7 @@ async function writeGeneratedFile(filePath, nextContent) {
 
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, nextContent, "utf8");
-  const category = inferProjectCategory(filePath);
-  if (category) {
-    recordSafe((rec) =>
-      rec.recordFile(filePath, {
-        source: "sync-runtimes",
-        purpose: inferProjectPurpose(category),
-        category,
-      }),
-    );
-  }
+  recordGeneratedFile();
   return { changed: true };
 }
 
@@ -866,7 +882,12 @@ function commandToken(value) {
 }
 
 function nodeHookCommand(scriptPath, args = []) {
-  const nodePath = process.execPath;
+  // Hook command strings are interpreted by the host runtime's shell.
+  // A quoted absolute Windows Node path like
+  // "C:\Program Files\nodejs\node.exe" script.mjs works in cmd.exe but
+  // fails in PowerShell unless prefixed with `&`. The portable contract is:
+  // require `node` on PATH, and quote only arguments that need quoting.
+  const nodePath = "node";
   return [nodePath, scriptPath, ...args].map(commandToken).join(" ");
 }
 
@@ -1075,11 +1096,29 @@ async function syncClaudeProjection(
   ) {
     changedFiles.push(displayPaths.claudeSettings);
   }
-  if (
-    claudeMcpProjectionPath &&
-    (await writeGeneratedFile(claudeMcpProjectionPath, mcpContent)).changed
-  ) {
-    changedFiles.push(displayPaths.claudeMcp);
+  if (claudeMcpProjectionPath) {
+    // Only write meta-kim-runtime MCP config when inside the Meta_Kim repo.
+    // The MCP server script (scripts/mcp/meta-runtime-server.mjs) only exists
+    // inside this repo — writing it to external projects breaks MCP startup.
+    if (inRepoRoot) {
+      if (
+        (await writeGeneratedFile(claudeMcpProjectionPath, mcpContent)).changed
+      ) {
+        changedFiles.push(displayPaths.claudeMcp);
+      }
+    } else {
+      const stripped = { mcpServers: {} };
+      if (
+        (
+          await writeGeneratedFile(
+            claudeMcpProjectionPath,
+            `${JSON.stringify(stripped, null, 2)}\n`,
+          )
+        ).changed
+      ) {
+        changedFiles.push(displayPaths.claudeMcp);
+      }
+    }
   }
 }
 
@@ -1117,6 +1156,7 @@ Examples:
   const teamDirectory = buildWorkspaceDirectory(agents);
   const portableSkill = await tryReadCanonical(canonicalSkillPath);
   if (!portableSkill) return [];
+  assertPortableSkillFrontmatter(portableSkill, canonicalSkillPath);
   const skillReferences = await loadSkillReferences();
   const changedFiles = [];
 
@@ -1136,6 +1176,7 @@ Examples:
       scope: "project",
       repoRoot,
       metaKimVersion: process.env.META_KIM_VERSION ?? null,
+      replaceSources: ["sync-runtimes"],
     });
   }
 

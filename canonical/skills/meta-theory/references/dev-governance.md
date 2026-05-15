@@ -2,7 +2,7 @@
 
 > Detailed operating spec for Type C (Development Governance Flow).
 > The Type C section in `SKILL.md` is the entry summary; this file contains the full procedure.
-> For extended long-form narrative (including historical Chinese material), see `docs/meta.md`.
+> For the theory source, see `canonical/skills/meta-theory/references/meta-theory.md`.
 > Read this file when executing Type C — Development Governance Flow.
 
 ## 1. AGENT INVOCATION PRINCIPLE (Non-Negotiable)
@@ -17,7 +17,7 @@ Need an agent for X → Search who declares "Own X" → Call the best match
 
 | Step | Action |
 |------|--------|
-| 1. Search | `Glob: .claude/agents/*.md` + read meta-kim-capabilities.json (compat: global-capabilities.json) |
+| 1. Search | Read `config/capability-index/meta-kim-capabilities.json`, then the runtime mirror, then `.meta-kim/state/{profile}/capability-index/global-capabilities.json` |
 | 2. Match | Score each agent's "Own" boundary against needed capability (3=perfect / 1-2=partial / 0=none) |
 | 3. Invoke | 3 → invoke directly / 1-2 → invoke + note gaps / 0 → capability gap detected |
 
@@ -83,17 +83,17 @@ If `taskClassification.upgradeReasons` includes `owner_creation_required`, the a
 
 ## 1B. Multi-iteration closure (until gates pass)
 
-When work is not done after one pass (open review findings, `verificationPacket.verified !== true`, or `npm run validate:run` fails), treat the run like a **Ralph-style loop** without inventing new stage names:
+When work is not done after one pass (open review findings, `verificationPacket.verified !== true`, or `npm run meta:validate:run` fails), treat the run like a **Ralph-style loop** without inventing new stage names:
 
 1. **Execution / Revision** — address the highest-severity open findings; update code or docs as needed.
 2. **Review** — refresh `reviewPacket` and finding `closeState` transitions (`open` → `fixed_pending_verify` as appropriate).
 3. **Verification** — refresh `revisionResponses`, `verificationResults`, and `closeFindings` until every finding is `verified_closed` or `accepted_risk`.
 4. **Summary** — align `summaryPacket` with `config/contracts/workflow-contract.json` `runDiscipline.publicDisplayRequires` before setting `publicReady=true`.
-5. **Validate** — run `npm run validate:run -- <artifact.json>`; if it fails, run `npm run prompt:next-iteration -- <artifact.json>` and feed the printed checklist back into the orchestrator.
+5. **Validate** — run `npm run meta:validate:run -- <artifact.json>`; if it fails, run `npm run prompt:next-iteration -- <artifact.json>` and feed the printed checklist back into the orchestrator.
 
 Stop when `validate:run` passes **or** the user explicitly accepts risk with documented `accepted_risk` and honest `publicReady=false`.
 
-**Session recovery (API / compact / tool failure):** Check `.meta-kim/state/{profile}/run-index.sqlite` first for the latest validated governed run, then load the governed artifact as the source of truth. After an interrupted session, reload at minimum: `runHeader`, `taskClassification`, `intentPacket`, `intentGatePacket` (when required), `cardPlanPacket`, `dispatchEnvelopePacket`, `orchestrationTaskBoardPacket`, `capabilityGapPacket` / `executionAgentCard` (when applicable), `dispatchBoard`, `workerTaskPackets` / `workerResultPackets`, `reviewPacket`, `verificationPacket`, `summaryPacket`, `evolutionWritebackPacket`. If a local `compactionPacket` exists, use it only as continuity aid; it never replaces the governed artifact. Re-run `npm run validate:run -- <artifact.json>` before claiming closure. The same packet list is printed by `npm run prompt:next-iteration -- <artifact.json>` under **Minimal context reload**.
+**Session recovery (API / compact / tool failure):** Check `.meta-kim/state/{profile}/run-index.sqlite` first for the latest validated governed run, then load the governed artifact as the source of truth. After an interrupted session, reload at minimum: `runHeader`, `taskClassification`, `intentPacket`, `intentGatePacket` (when required), `cardPlanPacket`, `dispatchEnvelopePacket`, `orchestrationTaskBoardPacket`, `capabilityGapPacket` / `executionAgentCard` (when applicable), `dispatchBoard`, `workerTaskPackets` / `workerResultPackets`, `reviewPacket`, `verificationPacket`, `summaryPacket`, `evolutionWritebackPacket`. If a local `compactionPacket` exists, use it only as continuity aid; it never replaces the governed artifact. Re-run `npm run meta:validate:run -- <artifact.json>` before claiming closure. The same packet list is printed by `npm run prompt:next-iteration -- <artifact.json>` under **Minimal context reload**.
 
 Optional **soft todo gate** (off by default): set `META_KIM_SOFT_PUBLIC_READY_GATES=1` when running `validate:run`. If `summaryPacket.publicReady` is true, no `workerTaskPacket` may have `taskTodoState: "open"`. Omit `taskTodoState` if not tracking todos. See `config/contracts/workflow-contract.json` → `runDiscipline.runArtifactValidation.softPublicReadyTodoGate`.
 
@@ -101,7 +101,7 @@ Optional **soft comment-review gate**: set `META_KIM_SOFT_COMMENT_REVIEW=1` when
 
 Optional Claude **Stop hook** (project default off): `META_KIM_STOP_COMPLETION_GUARD=hint` logs a stderr reminder when the last assistant message claims completion without governance cues; `=block` returns `{"decision":"block",...}` so the model continues. See `.claude/hooks/stop-completion-guard.mjs`.
 
-**Governance doctor:** `npm run doctor:governance` checks contract readability, Claude hook command set, `npm run check:runtimes`, and `validate:run` on the sample fixture — use before release or when mirrors drift.
+**Governance doctor:** `npm run meta:doctor:governance` checks contract readability, Claude hook command set, `npm run meta:check:runtimes`, and `meta:validate:run` on the sample fixture — use before release or when mirrors drift.
 
 ---
 
@@ -334,6 +334,14 @@ On receiving an escalation signal: re-enter Fetch (Stage 2) to find a more capab
 - Round 2: Ask about **priorities** — "If time is tight, which parts can be cut?"
 - Early Exit: Round 1 already specifies file paths OR ≥2 deliverables → skip Round 2
 
+### Simplicity Push-Back Rule
+
+Before proceeding from Critical to Fetch, check:
+
+- If a simpler approach exists than what the user described, **state it explicitly and recommend it** — do not silently execute a complex plan when a simple one would do.
+- No abstractions for single-use code, no error handling for impossible scenarios, no "flexibility" that wasn't requested.
+- Self-test: "Would a senior engineer say this is overcomplicated?" If yes, simplify before dispatching.
+
 ### Complexity Routing
 
 | File Changes | Complexity | Executed Path | Upgrade to 10-Step? |
@@ -397,6 +405,30 @@ Extract each agent's "Own / Do Not Touch" boundaries
 Score match: does "Own" cover the needed capability?
 ```
 
+**Step 1.5 — Global capability search** (fast keyword match via search index):
+```
+IF capability not found in local scan:
+  Grep the capability-search-index.tsv in .meta-kim/state/{profile}/capability-index/
+  Search by keyword (e.g., "review|audit", "debug|error", "frontend|ui")
+  TSV format: type <tab> key <tab> name <tab> description <tab> trigger <tab> section_headings
+  Each matching line identifies a candidate agent/skill with its platform and ID
+  Score match from description and keywords
+```
+
+**Step 1.6 — Skill co-discovery** (run alongside agent search, NOT deferred to Evolution):
+```
+Using the SAME capability keywords from Step 1–1.5:
+  Grep capability-search-index.tsv filtering for type=skills
+  Collect matching skill IDs and descriptions
+  Record in fetchPacket.recommendedSkills per sub-task:
+    { "subTaskId": "task-001", "skills": ["coding-standards", "code-security"], "source": "search-index" }
+  ALSO check matched agent's YAML frontmatter for recommended_skills field
+    (pre-populated by previous Evolution runs — gives faster lookup without re-searching)
+  Merge both sources: search-index discovery + agent's recommended_skills
+```
+
+**Why Step 1.6 runs during Fetch, not Evolution**: The first run must already know which skills to use. Evolution only caches the discovery for faster future runs. Skill ignorance on first run = agent does worse work for no reason.
+
 **Step 0.5 — Project Graph Context** (auto-detection, runs before Step 1):
 ```
 CHECK: Does graphify-out/graph.json exist in the target project root?
@@ -407,26 +439,23 @@ CHECK: Does graphify-out/graph.json exist in the target project root?
     - Quality gate: if AMBIGUOUS nodes > 30% OR total nodes < 10 → mark as low-quality, agents use direct Read as primary
     - Record graphContext in Fetch output for downstream stages
   IF NO →
-    - Check auto-generation conditions (all must be true):
-        a) Source files > 20 (excluding node_modules/ .git/ dist/)
-        b) Python 3.10+ available (python --version)
-        c) graphify installed (graphify --version)
-        d) Current project is NOT Meta_Kim itself
-    - If all conditions met → run `graphify` and wait for completion
-    - If conditions not met → proceed without graph, no error
+    - For Meta_Kim itself: fail the governance run and require `npm run meta:graphify:check` / graph rebuild before execution.
+    - For external target projects: record graph absence in Fetch output and decide whether graph generation is required for the task.
 ```
 
 **Step 2 — Capability index search** (if no perfect local match):
 ```
-IF .claude/capability-index/meta-kim-capabilities.json is missing OR stale for the current machine
+IF config/capability-index/meta-kim-capabilities.json is missing OR stale
   → run npm run discover:global first
 
 IF discover:global lists few skills/agents but the task needs Meta_Kim third-party skills (install-deps list)
   AND ~/.codex/skills or ~/.openclaw/skills are empty on this machine
   → operator should run npm run meta:deps:install:all-runtimes (or npm run meta:deps:install for Claude-only), then npm run discover:global again
 
-Read .claude/capability-index/meta-kim-capabilities.json
-Search for agents declaring the needed capability
+Read config/capability-index/meta-kim-capabilities.json first
+Then read the current runtime mirror
+Then read .meta-kim/state/{profile}/capability-index/global-capabilities.json
+Search for agents/skills declaring the needed capability
 Score match
 
 IF globalProjectRegistry is available (~/.meta-kim/global/project-registry.sqlite)
@@ -451,13 +480,42 @@ Search known specialist ecosystems already integrated by Meta_Kim:
 ```
 
 **Step 5 — Owner resolution branch** (if no match found):
+
+**Step 5a — Output `capabilityGapPacket` (mandatory):**
+```json
+{
+  "capabilityGapPacket": {
+    "gapCapability": "[capability description]",
+    "gapType": "durable | recurring | project-specific | one-off",
+    "searchedSources": ["local-agents", "capability-index", "global-registry", "findskill", "specialist-ecosystem"],
+    "bestPartialMatch": null,
+    "resolutionAction": "pending_user_confirmation",
+    "userConfirmationRequired": true
+  }
+}
 ```
-Mark capabilityGap: "no agent declares Own [capability]"
+
+**Step 5b — User confirmation gate:**
+```
 IF gap is durable / recurring / project-specific
-  → trigger Type B creation pipeline before execution
-ELSE
-  → invoke Agent(subagent_type="generalPurpose") as a TEMPORARY owner
+  → ASK user: "Capability gap detected: {gapCapability}. Trigger Type B creation pipeline? (yes/no)"
+  → IF user approves → trigger Type B creation pipeline before execution
+  → IF user declines → generalPurpose fallback + Evolution follow-up required
+ELSE (gap is one-off / emergency)
+  → invoke Agent(subagent_type="generalPurpose") or Codex default subagent as a TEMPORARY owner
   → record justification + require Evolution follow-up
+```
+
+**Step 5c — Record gap resolution in `fetchPacket`:**
+```json
+{
+  "gapResolution": {
+    "userAsked": true,
+    "userResponse": "approved | declined | one-off-auto",
+    "resolutionPath": "type-b | generalPurpose-fallback",
+    "evolutionFollowUpRequired": true
+  }
+}
 ```
 
 ### Match Scoring
@@ -586,11 +644,14 @@ Break Stage 1's task into independent sub-tasks:
       "mergeOwner": "agent responsible for consolidation",
       "taskPacketId": "task-001",
       "fileScope": ["file-or-module-a", "file-or-module-b"],
-      "constraints": ["boundary1", "dependency1"]
+      "constraints": ["boundary1", "dependency1"],
+      "recommendedSkills": ["skill-id-1", "skill-id-2"]
     }
   ]
 }
 ```
+
+`recommendedSkills` comes from Fetch Step 1.6 — skills discovered via search index + agent's own `recommended_skills` YAML field (cached by previous Evolution runs). During Execution, include these skill references in the agent's dispatch prompt so the agent invokes them during work.
 
 ### Step 3.5: Protocol-First Dispatch Artifacts
 
@@ -687,7 +748,8 @@ Thinking must lock down the execution protocol before any `Agent` tool invocatio
       "dependsOn": [],
       "parallelGroup": "group-a",
       "mergeOwner": "agent name",
-      "deliverableLink": "how this packet connects back to the primary deliverable"
+      "deliverableLink": "how this packet connects back to the primary deliverable",
+      "recommendedSkills": ["skill-id-1", "skill-id-2"]
     }
   ],
   "resultMergePlan": {
@@ -698,6 +760,62 @@ Thinking must lock down the execution protocol before any `Agent` tool invocatio
 ```
 
 Independent work that can be parallelized must be marked with the same `parallelGroup`. Any task that has no declared `owner`, `dependsOn`, and `mergeOwner` is not ready for Execution.
+
+### Step 3.6: Decomposition Acceptance Gate
+
+Before proceeding to Step 4, the plan must pass this gate:
+
+| Check | Condition | Fail Action |
+|-------|-----------|-------------|
+| **Multi-file / multi-capability** | Task spans >1 file OR >1 capability dimension | MUST produce >= 2 `workerTaskPackets` |
+| **Single-Packet Anti-Pattern** | Only 1 packet produced for a multi-file / multi-capability task | REJECT — re-decompose or justify why a single packet is genuinely sufficient (single-file, single-capability, pure logic change) |
+| **Packet completeness** | Every packet has non-empty `owner`, `dependsOn` (or explicit `[]`), `parallelGroup`, `mergeOwner` | REJECT — fill missing fields |
+
+Single-packet justification is only valid when ALL of: (1) exactly 1 file, (2) exactly 1 capability dimension, (3) no cross-module impact, (4) no durable artifact handoff.
+
+Output:
+```json
+{
+  "decompositionGate": {
+    "packetCount": 2,
+    "multiFileOrMultiCapability": true,
+    "singlePacketJustification": null,
+    "gateResult": "PASS"
+  }
+}
+```
+
+### Step 3.7: Planning Files Supplement (Mandatory)
+
+**This step is SUPPLEMENT, not replacement.** It does NOT replace any protocol artifacts from Steps 3–3.6. It creates persistent planning files alongside the dispatch protocol for human visibility and cross-session continuity.
+
+When `planning-with-files` skill is installed, invoke it first (`/planning-with-files` via Skill tool) and let its templates drive file creation. When not installed, create files manually using the templates below.
+
+**Files to create** (in project root, NOT in skill directory):
+
+| File | Purpose | Source Data |
+|------|---------|-------------|
+| `task_plan.md` | Phase roadmap, decisions, errors | Stages 1–3 scope, decomposition, protocol artifacts |
+| `findings.md` | Research, discoveries, technical decisions | Fetch results, capability matches, skill discoveries |
+| `progress.md` | Session log, test results, error log | All stage actions as they complete |
+
+**Creation rules:**
+
+1. `task_plan.md` — Populate Goal from Stage 1 scope; Phases from Step 3 decomposition (each `workerTaskPacket` = one phase); Key Questions from Clarity Gate; Decisions from option exploration.
+2. `findings.md` — Populate Requirements from user request; Research Findings from Fetch Stage 2 results; Technical Decisions from Step 3 option exploration; Resources from capability index matches.
+3. `progress.md` — Create session header; log Stages 1–3 actions as Phase 1 entries.
+
+**Update rules (supplement throughout the run):**
+
+- After Stage 4 (Execution): update `progress.md` with agent outputs, files created/modified, test results.
+- After Stage 5 (Review): update `progress.md` with review findings; update `findings.md` with issues discovered.
+- After Stage 6 (Meta-Review): update `task_plan.md` phase statuses.
+- After Stage 7 (Verification): update `progress.md` with verification results.
+- After Stage 8 (Evolution): mark all phases complete in `task_plan.md`; log evolution writebacks in `findings.md`.
+
+**Conductor is the sole writer.** No other agent writes planning files. Sub-agents return results; Conductor (or the dispatcher thread acting as Conductor) persists them.
+
+**Skip condition:** Only skip when `queryBypass: true` (pure query, no file modifications). For all Type A/B/C/D/E runs with execution, this step is MANDATORY.
 
 ### Step 4: `cardDeck` (stage-card rhythm) + delivery plan
 
@@ -806,6 +924,15 @@ Execution must respect the Stage 3 **`cardDeck`** (stage-card sequence / control
 - Any conflicts to resolve
 - Any sub-task failures → handle via fault protocol
 - Every result returns through a `WorkerResultPacket`, not free-form orphan output
+
+### Surgical Change Hygiene (Karpathy-inspired)
+
+Every execution agent must obey these constraints:
+
+- **Touch only what you must.** Don't "improve" adjacent code, comments, or formatting. Don't refactor things that aren't broken. Match existing style, even if you'd do it differently.
+- **Clean up only your own mess.** If your changes make imports/variables/functions unused, remove them. Do NOT remove pre-existing dead code unless explicitly asked — mention it instead.
+- **Traceability test:** Every changed line must trace directly to the user's request. If a line cannot be traced, it should not be in the diff.
+- **Push back when warranted:** If a simpler approach exists than the one planned, say so before executing.
 
 ---
 
@@ -1061,6 +1188,19 @@ Use the **5+1 evolution model** after every task: the canonical 5 structural dim
 | Capability coverage | Any new gaps discovered? | Trigger Scout or Type B |
 | **Scars codification** | Skip-Level/Boundary Violation/Process Gap? | Record structured Scar → prevention rule |
 
+### Agent Self-Test ("The Test" Pattern)
+
+Every agent (governance meta-agent and execution agent) should include a **self-test** in its SOUL definition — a concise, checkable statement that defines when the agent is working correctly:
+
+```markdown
+## The Test
+[this agent] is working correctly when:
+- [specific, observable condition 1]
+- [specific, observable condition 2]
+```
+
+Review (Stage 5) and Meta-Review (Stage 6) use each agent's self-test as an explicit verification checklist, replacing subjective "looks OK" judgments with structured pass/fail criteria. This pattern is inspired by Karpathy's Goal-Driven Execution principle — transforming qualitative standards into declarative, verifiable goals.
+
 ### Amplification Operations
 
 | Dimension | Detection | Action |
@@ -1116,13 +1256,32 @@ scar:
 - `writebackDecision = "writeback"` with concrete targets, or
 - `writebackDecision = "none"` with a concrete `decisionReason`
 
+### Evolution Writeback Checklist (mandatory before marking Evolution complete)
+
+Before marking Evolution complete, walk through this checklist and record the result for every item:
+
+```json
+{
+  "evolutionWritebackChecklist": {
+    "agentBoundaryEdit": { "needed": false, "targets": [], "reason": "no boundary issues found" },
+    "skillCreateOrUpdate": { "needed": false, "targets": [], "reason": "no reusable pattern discovered" },
+    "capabilityIndexUpdate": { "needed": false, "targets": [], "reason": "no coverage gap found" },
+    "contractRefinement": { "needed": false, "targets": [], "reason": "no gate or protocol refinement needed" },
+    "scarRecord": { "needed": false, "scarIds": [], "reason": "no violation detected" },
+    "syncRequired": { "needed": false, "reason": "no canonical files modified" }
+  }
+}
+```
+
+Each item must be explicitly addressed — omitting an item is equivalent to an unstated assumption, which violates the Explicitness design principle.
+
 ### Evolution Artifacts Storage
 
 Evolution outputs must be persisted to specific locations — not left floating in conversation context:
 
 | Artifact Type | Storage Location | Lifecycle |
 |--------------|-----------------|-----------|
-| **Agent Boundary / CT / DR Adjustments** | `canonical/agents/{agent}.md` (direct edit) | Immediate; primary evolution target — triggers `npm run sync:runtimes` |
+| **Agent Boundary / CT / DR Adjustments** | `canonical/agents/{agent}.md` (direct edit) | Immediate; primary evolution target — triggers `npm run meta:sync` |
 | **New Skills** (extracted) | `.claude/skills/{skill-name}/SKILL.md` | Permanent; created via skill-creator, validated via Type D Review |
 | **Rhythm Optimizations** | Recorded in `config/contracts/workflow-contract.json` or Conductor's card-deck defaults | Immediate; affects next run's dispatch board |
 | **Capability Gap Records** | `canonical/capability-gaps.md` | Until resolved; Scout monitors and closes when filled |
@@ -1162,7 +1321,7 @@ If any one of these is false, the run may produce internal notes, but it must no
 | Iteration | Acceptance not closed within agreed rounds | Loop with explicit gate; max 3 iterations, then escalate to Warden |
 | **Rollback** | Risk exceeded original scope OR impact scope expanded beyond acceptance | Revert to last stable state; re-enter Stage 3 Thinking to re-decompose |
 
-**Card naming note**: English names are canonical in this repository. `docs/meta.md` uses Chinese labels for the same cards; align wording with your audience and locale.
+**Card naming note**: English names are canonical in this repository. Use `canonical/skills/meta-theory/references/meta-theory.md` as the theory source and align wording with your audience and locale.
 
 Spine coverage reference (what each stage is for — not separate “card” names):
 
