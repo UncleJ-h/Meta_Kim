@@ -31,7 +31,7 @@ Before doing ANY substantive work after this skill is activated:
 
 When running inside Codex, this skill is an execution protocol, not just a discussion style:
 
-- `Agent(...)` maps to Codex `spawn_agent`; treat `/meta-theory` as first-tier authorization for read-only capability discovery and parallel agent work
+- `Agent(...)` maps to Codex `spawn_agent`. A user invocation of `/meta-theory`, `meta-theory`, `meta theory`, `元理论`, or a `[$meta-theory](...)` skill mention is itself an explicit user request for subagents/delegation/parallel agent work; do not require the user to additionally say "use subagents" or "allow spawn_agent".
 - Apply `agent-teams-playbook` from the first available skill root before substantive work; convert its blueprint into capability-matched `spawn_agent` calls
 - Output a **Preflight block** before analysis: loaded skills, Type, scenario/mode, read/write scope, authorization tier, capability lookup path, planned agents or blocked reason
 - Keep main Codex thread limited to clarification, routing, verification, and synthesis
@@ -50,6 +50,23 @@ Distinguish early: **Meta Architecture** (agent governance, collaboration relati
 Track ambiguity on **Scope**, **Goal**, **Constraints**, and **Architecture type**:
 - **≥2 dimensions ambiguous** → ask before dispatching
 - **Exactly 1 ambiguous** → state your assumption explicitly, then proceed
+
+## User Language and Native Choice Surfaces
+
+Protocol stage labels stay canonical English: `Critical`, `Fetch`, `Thinking`, `Execution`, `Review`, `Meta-Review`, `Verification`, `Evolution`.
+
+User-facing text must follow the user's latest language or explicit language preference. Do not hardcode Chinese, English, or any single human language for clarification prompts, option labels, confirmation text, or explanations. If the user changes language mid-run, subsequent user-visible cards and summaries follow the newer preference while preserving canonical stage labels.
+
+For `clarify`, `option_select`, and `confirm_execution` cards, prefer the current platform's native choice surface when it exists:
+
+| Runtime | Primary native surface | Fallback |
+|---|---|---|
+| Claude Code | native hook / prompt surface | localized conversation fallback |
+| Codex | native choice input when exposed by the active mode | localized conversation fallback |
+| OpenClaw | native agent / workspace choice mechanism when available | localized conversation fallback |
+| Cursor | native custom modes / mode picker | localized conversation fallback |
+
+When a native surface is unavailable, do not pretend it exists. Emit the localized fallback card, record `nativeChoiceSurface`, and wait for explicit user selection before Execution.
 
 ## Dynamic Flow Selection
 
@@ -130,7 +147,7 @@ Execution Plan:
 - Files to modify: [list]
 - Waiting for your confirmation.
 ```
-Execute only after user says "go", "do it", or equivalent.
+Execute only after the user confirms in their current language (for example "go", "do it", "按这个执行", or equivalent). The accepted confirmation words are examples, not a hardcoded language list.
 
 ## Fetch-first Pattern (Search → Match → Invoke)
 
@@ -166,6 +183,40 @@ DEFAULT → state the core capability need explicitly
 **Hardcoded agent names are FORBIDDEN.** Always go through 3-step discovery.
 
 Capability index layers: (1) repo canonical (2) runtime mirrors (3) local global inventory. Codex fallback: `spawn_agent` with `agent_type: "default"` + discovered profile prompt as degradation.
+
+**DRY conflict detection**: during Fetch, check whether multiple agents, skills, tools, or commands claim the same capability boundary. Record overlap detection before dispatch. Reject duplicate routing unless one owner has a clearly stronger boundary match; prefer the smallest owner that fully covers the task.
+
+**Skill ROI filter**: when several skills could apply, score them with `ROI = (Task Coverage x Usage Frequency) / (Context Cost + Learning Curve)`. Choose the highest useful ROI skill set, not the largest skill set. Low-ROI skills stay out of the prompt unless Fetch finds a specific capability gap they cover.
+
+### Fetch Record Gate (mandatory before advancing to Thinking)
+
+After completing Fetch Steps 1–3, update the spine state with a `fetchRecord` field:
+
+```json
+"fetchRecord": {
+  "capabilitySearchPerformed": true,
+  "capabilityMatches": [{ "name": "...", "score": 3, "matchReason": "..." }],
+  "researchRequired": true,
+  "researchValidationPerformed": true,
+  "researchSourceCount": 5,
+  "researchSources": [
+    { "category": "official-docs", "summary": "...", "confidence": "high" },
+    { "category": "community-qa", "summary": "...", "confidence": "medium" }
+  ]
+}
+```
+
+**Research Validation** — required when the task involves external claims, library behavior, best practices, or factual analysis requiring verification:
+
+1. Identify the capability needed (e.g., "web search", "content retrieval", "documentation lookup")
+2. Discover available tools in the current runtime that match these capability descriptors — tool names differ across runtimes and user configurations, so discover them dynamically rather than hardcoding specific tool names
+3. Search across ≥5 distinct source categories: official docs, community knowledge, source repos, technical articles, standards/specs
+4. Record evidence in `fetchRecord.researchSources` with category, summary, and confidence level
+5. Cross-reference key claims against ≥2 independent sources; flag contradictions
+
+**Gate**: The enforcement hook blocks Thinking stage execution if `fetchRecord` is missing, or if `researchRequired=true` but `researchValidationPerformed=false`.
+
+**Skip condition**: Research validation is NOT required when `governanceFlow = query`, task scope is entirely within local project files, or user explicitly says "skip research" / "local only".
 
 ## Available Agents
 
