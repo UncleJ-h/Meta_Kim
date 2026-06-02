@@ -46,6 +46,8 @@ import { resolveManifestSkillSubdir } from "./scripts/install-platform-config.mj
 import { buildNodeScriptSpawn } from "./scripts/node-spawn-config.mjs";
 import {
   CLAUDE_HOOK_FILES,
+  CODEX_BUSINESS_ROLE_AGENT_IDS,
+  CODEX_RUNTIME_ADAPTER_AGENT_IDS,
   META_AGENTS,
   OPENCLAW_WORKSPACE_MD,
   expectedAgentProjectionFiles,
@@ -300,6 +302,7 @@ ${r ? `Raw error: ${r}` : ""}
     cmdCheck: "Check environment",
     cmdDoctor: "Diagnose Meta_Kim health",
     cmdVerify: "Full verification",
+    cmdDiscover: "Scan global capabilities (agents/skills)",
     // Post-install notes
     postInstallNotesHeading: "Post-install notes:",
     postInstallNotesIntro:
@@ -384,18 +387,19 @@ ${r ? `Raw error: ${r}` : ""}
     depSummarySome: (ok, total) =>
       `Only ${ok}/${total} dependencies verified — re-run with --update`,
     syncHeading: "Cross-Runtime Sync Check",
-    syncClaudeAgents: (n) => `Claude Code agents: ${n}/8 .md files`,
+    syncClaudeAgents: (n) => `Claude Code agents: ${n}/${META_AGENTS.length} .md files`,
     syncClaudeSkills: "Claude Code skills/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code hooks: ${n} scripts`,
     syncClaudeSettings: "Claude Code .claude/settings.json",
     syncClaudeMcp: "Claude Code .mcp.json",
-    syncCodexAgents: (n) => `Codex agents: ${n}/8 .toml files`,
-    syncCodexSkills: "Codex skills/meta-theory/SKILL.md",
+    syncCodexAgents: (n, total = META_AGENTS.length) =>
+      `Codex agents: ${n}/${total} .toml files`,
+    syncCodexSkills: "Codex .agents/skills/meta-theory/SKILL.md",
     syncOpenclawWorkspaces: (n) =>
-      `OpenClaw workspaces: ${n}/8 agents — each folder has the 9 required .md files (BOOT, SOUL, …)`,
+      `OpenClaw workspaces: ${n}/${META_AGENTS.length} agents — each folder has the 9 required .md files (BOOT, SOUL, …)`,
     syncOpenclawSkill: "OpenClaw shared meta-theory",
     syncSharedSkills: "Shared skills/meta-theory/SKILL.md",
-    syncCursorAgents: (n) => `Cursor agents: ${n}/8 .md files`,
+    syncCursorAgents: (n) => `Cursor agents: ${n}/${META_AGENTS.length} .md files`,
     syncCursorSkills: "Cursor skills/meta-theory/SKILL.md",
     syncCursorMcp: "Cursor .cursor/mcp.json",
     mcpRuntimeProjectOnly: (p) =>
@@ -765,6 +769,7 @@ ${r ? `原始错误：${r}` : ""}
     cmdCheck: "检查环境",
     cmdDoctor: "诊断 Meta_Kim 健康状态",
     cmdVerify: "完整验证",
+    cmdDiscover: "扫描全局能力（agents/skills）",
     // 安装后注意事项
     postInstallNotesHeading: "安装后注意事项：",
     postInstallNotesIntro: "安装完成后，各层能力的使用方式如下：",
@@ -841,18 +846,19 @@ ${r ? `原始错误：${r}` : ""}
     depSummarySome: (ok, total) =>
       `仅 ${ok}/${total} 个依赖验证通过 — 请使用 --update 重新安装`,
     syncHeading: "同步状态检查",
-    syncClaudeAgents: (n) => `Claude Code 智能体: ${n}/8 .md 文件`,
+    syncClaudeAgents: (n) => `Claude Code 智能体: ${n}/${META_AGENTS.length} .md 文件`,
     syncClaudeSkills: "Claude Code 技能/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code 钩子: ${n} 个脚本`,
     syncClaudeSettings: "Claude Code .claude/settings.json",
     syncClaudeMcp: "Claude Code .mcp.json",
-    syncCodexAgents: (n) => `Codex 智能体: ${n}/8 .toml 文件`,
-    syncCodexSkills: "Codex 技能/meta-theory/SKILL.md",
+    syncCodexAgents: (n, total = META_AGENTS.length) =>
+      `Codex 智能体: ${n}/${total} .toml 文件`,
+    syncCodexSkills: "Codex .agents/skills/meta-theory/SKILL.md",
     syncOpenclawWorkspaces: (n) =>
-      `OpenClaw 工作区：${n}/8 个智能体，各目录 9 个必备 Markdown 已齐（含 BOOT、SOUL 等；不含子文件夹里的额外文件）`,
+      `OpenClaw 工作区：${n}/${META_AGENTS.length} 个智能体，各目录 9 个必备 Markdown 已齐（含 BOOT、SOUL 等；不含子文件夹里的额外文件）`,
     syncOpenclawSkill: "OpenClaw 共享 meta-theory",
     syncSharedSkills: "共享技能/meta-theory/SKILL.md",
-    syncCursorAgents: (n) => `Cursor 智能体: ${n}/8 .md 文件`,
+    syncCursorAgents: (n) => `Cursor 智能体: ${n}/${META_AGENTS.length} .md 文件`,
     syncCursorSkills: "Cursor 技能/meta-theory/SKILL.md",
     syncCursorMcp: "Cursor .cursor/mcp.json",
     mcpRuntimeProjectOnly: (p) =>
@@ -1217,6 +1223,7 @@ ${r ? `生エラー：${r}` : ""}
     cmdCheck: "環境をチェック",
     cmdDoctor: "Meta_Kim の健全性を診断",
     cmdVerify: "フル検証",
+    cmdDiscover: "グローバル機能をスキャン（agents/skills）",
     // インストール後の注意事項
     postInstallNotesHeading: "インストール後の注意事項：",
     postInstallNotesIntro: "インストール完了後、各層の使い方は以下の通りです：",
@@ -1300,18 +1307,19 @@ ${r ? `生エラー：${r}` : ""}
     depSummarySome: (ok, total) =>
       `${ok}/${total} の依存関係のみ検証 — --update で再インストールしてください`,
     syncHeading: "同期状態チェック",
-    syncClaudeAgents: (n) => `Claude Code エージェント: ${n}/8 .md ファイル`,
+    syncClaudeAgents: (n) => `Claude Code エージェント: ${n}/${META_AGENTS.length} .md ファイル`,
     syncClaudeSkills: "Claude Code スキル/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code フック: ${n} スクリプト`,
     syncClaudeSettings: "Claude Code .claude/settings.json",
     syncClaudeMcp: "Claude Code .mcp.json",
-    syncCodexAgents: (n) => `Codex エージェント: ${n}/8 .toml ファイル`,
-    syncCodexSkills: "Codex スキル/meta-theory/SKILL.md",
+    syncCodexAgents: (n, total = META_AGENTS.length) =>
+      `Codex エージェント: ${n}/${total} .toml ファイル`,
+    syncCodexSkills: "Codex .agents/skills/meta-theory/SKILL.md",
     syncOpenclawWorkspaces: (n) =>
-      `OpenClaw ワークスペース: ${n}/8 エージェント — 各フォルダに必須の .md 9 件（BOOT、SOUL など）`,
+      `OpenClaw ワークスペース: ${n}/${META_AGENTS.length} エージェント — 各フォルダに必須の .md 9 件（BOOT、SOUL など）`,
     syncOpenclawSkill: "OpenClaw 共有 meta-theory",
     syncSharedSkills: "共有スキル/meta-theory/SKILL.md",
-    syncCursorAgents: (n) => `Cursor エージェント: ${n}/8 .md ファイル`,
+    syncCursorAgents: (n) => `Cursor エージェント: ${n}/${META_AGENTS.length} .md ファイル`,
     syncCursorSkills: "Cursor スキル/meta-theory/SKILL.md",
     syncCursorMcp: "Cursor .cursor/mcp.json",
     mcpRuntimeProjectOnly: (p) =>
@@ -1697,6 +1705,7 @@ ${r ? `원본 오류：${r}` : ""}
     cmdCheck: "환경 확인",
     cmdDoctor: "Meta_Kim 상태 진단",
     cmdVerify: "전체 검증",
+    cmdDiscover: "전역 기능 스캔（agents/skills）",
     // 설치 후 주의사항
     postInstallNotesHeading: "설치 후 주의사항:",
     postInstallNotesIntro: "설치 완료 후 각 층의 사용 방식은 다음과 같습니다:",
@@ -1775,18 +1784,19 @@ ${r ? `원본 오류：${r}` : ""}
     depSummarySome: (ok, total) =>
       `${ok}/${total}개 의존성만 확인 — --update로 재설치하세요`,
     syncHeading: "동기화 상태 확인",
-    syncClaudeAgents: (n) => `Claude Code 에이전트: ${n}/8 .md 파일`,
+    syncClaudeAgents: (n) => `Claude Code 에이전트: ${n}/${META_AGENTS.length} .md 파일`,
     syncClaudeSkills: "Claude Code 스킬/meta-theory/SKILL.md",
     syncClaudeHooks: (n) => `Claude Code 훅: ${n} 스크립트`,
     syncClaudeSettings: "Claude Code .claude/settings.json",
     syncClaudeMcp: "Claude Code .mcp.json",
-    syncCodexAgents: (n) => `Codex 에이전트: ${n}/8 .toml 파일`,
-    syncCodexSkills: "Codex 스킬/meta-theory/SKILL.md",
+    syncCodexAgents: (n, total = META_AGENTS.length) =>
+      `Codex 에이전트: ${n}/${total} .toml 파일`,
+    syncCodexSkills: "Codex .agents/skills/meta-theory/SKILL.md",
     syncOpenclawWorkspaces: (n) =>
-      `OpenClaw 워크스페이스: ${n}/8 에이전트 — 각 폴더에 필수 .md 9개(BOOT, SOUL 등)`,
+      `OpenClaw 워크스페이스: ${n}/${META_AGENTS.length} 에이전트 — 각 폴더에 필수 .md 9개(BOOT, SOUL 등)`,
     syncOpenclawSkill: "OpenClaw 공유 meta-theory",
     syncSharedSkills: "공유 스킬/meta-theory/SKILL.md",
-    syncCursorAgents: (n) => `Cursor 에이전트: ${n}/8 .md 파일`,
+    syncCursorAgents: (n) => `Cursor 에이전트: ${n}/${META_AGENTS.length} .md 파일`,
     syncCursorSkills: "Cursor 스킬/meta-theory/SKILL.md",
     syncCursorMcp: "Cursor .cursor/mcp.json",
     mcpRuntimeProjectOnly: (p) =>
@@ -2255,6 +2265,8 @@ function printMultiMenu(question, choices, focused, selected) {
 }
 
 async function keyboardSelect(question, options) {
+  if (silentMode) return 0;
+
   if (!process.stdin.isTTY) {
     printSelectMenu(question, options, 0);
     const answer = await ask(t.choose(options.length));
@@ -2284,6 +2296,8 @@ async function keyboardSelect(question, options) {
 }
 
 async function keyboardMultiSelect(question, choices, defaultIds, hintText) {
+  if (silentMode) return defaultIds;
+
   if (!process.stdin.isTTY) {
     printMultiMenu(question, choices, 0, new Set(defaultIds));
     const answer = await ask(
@@ -2704,6 +2718,10 @@ function deployPlatformFiles(platformId, targetDir) {
 async function askDeployDirectory() {
   console.log("");
 
+  if (silentMode) {
+    return null;
+  }
+
   const choiceIdx = await askSelect(t.npxQuickAskDeploy, [
     t.npxQuickDeployYes,
     t.npxQuickDeployNo,
@@ -2816,10 +2834,10 @@ async function runQuickDeploy() {
 
   await withProgress(t.progressSyncMeta, () => {
     const targets = platformId === "all" ? "claude" : platformId;
-    const syncResult = runNodeScript("scripts/sync-global-meta-theory.mjs", [
-      "--targets",
-      targets,
-    ]);
+    const syncResult = runNodeScript(
+      "scripts/sync-global-meta-theory.mjs",
+      metaTheoryGlobalSyncArgs(targets),
+    );
     return syncResult.status === 0;
   });
 
@@ -3059,18 +3077,23 @@ function checkSync(
   if (repoTargets.includes("codex")) {
     console.log("");
     const codexAgentsDir = join(PROJECT_DIR, ".codex", "agents");
+    const expectedCodexAgentFiles = expectedAgentProjectionFiles(".toml", [
+      ...META_AGENTS,
+      ...CODEX_RUNTIME_ADAPTER_AGENT_IDS,
+      ...CODEX_BUSINESS_ROLE_AGENT_IDS,
+    ]);
     if (existsSync(codexAgentsDir)) {
       const summary = summarizeExpectedFiles(
         readdirSync(codexAgentsDir).filter((f) => f.endsWith(".toml")),
-        expectedAgentProjectionFiles(".toml"),
+        expectedCodexAgentFiles,
       );
       if (summary.missing.length === 0)
-        ok(t.syncCodexAgents(summary.presentCount));
+        ok(t.syncCodexAgents(summary.presentCount, expectedCodexAgentFiles.length));
       else {
         warn(
           t.syncPartial(
             "Codex agents",
-            `${summary.presentCount}/${META_AGENTS.length}`,
+            `${summary.presentCount}/${expectedCodexAgentFiles.length}`,
             `missing: ${summary.missing.join(", ")}`,
           ),
         );
@@ -3083,14 +3106,14 @@ function checkSync(
 
     const codexSkillPath = join(
       PROJECT_DIR,
-      ".codex",
+      ".agents",
       "skills",
       "meta-theory",
       "SKILL.md",
     );
     if (existsSync(codexSkillPath)) ok(t.syncCodexSkills);
     else {
-      fail(t.syncMissing(".codex/skills/meta-theory/SKILL.md"));
+      fail(t.syncMissing(".agents/skills/meta-theory/SKILL.md"));
       allOk = false;
     }
   }
@@ -3358,6 +3381,15 @@ function runNodeScript(scriptRelative, extraArgs = [], envOverrides = {}) {
   return spawnSync(spawnConfig.command, spawnConfig.args, mergedOptions);
 }
 
+function metaTheoryGlobalSyncArgs(targets) {
+  const targetList = Array.isArray(targets) ? targets.join(",") : String(targets);
+  const syncArgs = ["--targets", targetList];
+  if (targetList.split(",").includes("claude")) {
+    syncArgs.push("--with-global-hooks");
+  }
+  return syncArgs;
+}
+
 // ── Legacy skill file cleanup ────────────────────────────
 // Precise removal of old single-file skill format that was replaced
 // by directory format (meta-theory.md → meta-theory/SKILL.md).
@@ -3575,6 +3607,26 @@ const GRAPHIFY_PLATFORM_MAP = {
   cursor: "cursor",
 };
 
+const GRAPHIFY_GUIDE_TARGETS = {
+  claude: "CLAUDE.md",
+  codex: "AGENTS.md",
+  claw: "AGENTS.md",
+  opencode: "AGENTS.md",
+  aider: "AGENTS.md",
+  droid: "AGENTS.md",
+  trae: "AGENTS.md",
+  "trae-cn": "AGENTS.md",
+};
+
+function guideAlreadyHasGraphifySection(platform) {
+  const target = GRAPHIFY_GUIDE_TARGETS[platform];
+  if (!target) return false;
+  const filePath = join(PROJECT_DIR, target);
+  if (!existsSync(filePath)) return false;
+  const content = readFileSync(filePath, "utf8");
+  return /^##\s+graphify\b/im.test(content);
+}
+
 /**
  * Attempt to auto-download and install Python 3.10+.
  * Returns the Python object on success, null on failure or user decline.
@@ -3752,6 +3804,12 @@ async function installPythonTools(activeTargets, inUpdateMode = false) {
   for (const target of activeTargets) {
     const platform = GRAPHIFY_PLATFORM_MAP[target];
     if (!platform) continue;
+    if (guideAlreadyHasGraphifySection(platform)) {
+      skip(
+        `${C.dim}graphify ${platform} install skipped (guide already has Graphify section)${C.reset}`,
+      );
+      continue;
+    }
     info(t.graphifySkillRegistering(platform));
     const skillResult = runPythonModule(
       python,
@@ -3763,6 +3821,22 @@ async function installPythonTools(activeTargets, inUpdateMode = false) {
       ok(t.graphifySkillRegistered(platform));
     } else {
       warn(t.graphifySkillFailed(platform));
+    }
+  }
+
+  const rebuildResult = runPythonModule(
+    python,
+    ["-m", "graphify", "update", "."],
+    undefined,
+    { cwd: PROJECT_DIR, stdio: "pipe" },
+  );
+  if (rebuildResult.status === 0) {
+    ok("graphify code graph generated");
+  } else {
+    warn("graphify code graph generation failed (non-blocking)");
+    const rebuildOutput = readProcessText(rebuildResult);
+    if (rebuildOutput) {
+      console.log(`${C.dim}${rebuildOutput}${C.reset}`);
     }
   }
 }
@@ -3919,7 +3993,7 @@ function resolvePythonForMemoryService(detectedPython) {
   return { python: venvLauncher, venvCreated: true, venvDir };
 }
 
-async function runMcpMemoryHookInstaller() {
+async function runMcpMemoryHookInstaller(activeTargets = DEFAULT_TARGETS.map((target) => target.id)) {
   const hookScript = join(
     PROJECT_DIR,
     "scripts",
@@ -3934,6 +4008,7 @@ async function runMcpMemoryHookInstaller() {
     process.execPath,
     PROJECT_DIR,
     "scripts/install-mcp-memory-hooks.mjs",
+    ["--targets", activeTargets.join(",")],
   );
   let result;
   await withProgress(t.mcpMemoryHookInstalling, async () => {
@@ -4342,7 +4417,7 @@ function configureBootAutoStart(memoryBin) {
   }
 }
 
-async function installMcpMemoryServiceStep(inUpdateMode = false) {
+async function installMcpMemoryServiceStep(inUpdateMode = false, activeTargets = DEFAULT_TARGETS.map((target) => target.id)) {
   heading(t.stepMcpMemory);
 
   // Detect Python — reuse same detection as graphify for consistency
@@ -4475,7 +4550,7 @@ async function installMcpMemoryServiceStep(inUpdateMode = false) {
   // Step 4.7 — auto-install runtime memory hooks so the full pipeline
   // (pip package → .mcp.json → hook files → runtime registration →
   // health check) runs from a single `node setup.mjs` invocation.
-  await runMcpMemoryHookInstaller();
+  await runMcpMemoryHookInstaller(activeTargets);
 
   // Step 4.8 — start the HTTP server in background and configure boot auto-start
   await startMcpMemoryServiceBackground(resolved);
@@ -4534,6 +4609,7 @@ async function validate() {
     process.execPath,
     PROJECT_DIR,
     "scripts/validate-project.mjs",
+    ["--context", "install"],
   );
   const validateResult = spawnSync(
     validateSpawn.command,
@@ -4605,6 +4681,9 @@ function showNextSteps(runtimes) {
     );
     console.log(
       `${C.dim}node setup.mjs --check           # ${t.cmdCheck}${C.reset}`,
+    );
+    console.log(
+      `${C.dim}npm run discover:global          # ${t.cmdDiscover}${C.reset}`,
     );
     console.log(
       `${C.dim}npm run meta:doctor:governance    # ${t.cmdDoctor}${C.reset}`,
@@ -4897,13 +4976,13 @@ async function main() {
     process.exit(0);
   }
 
-  if (silentMode) {
-    await runInstall();
+  if (updateMode) {
+    await runUpdate();
     process.exit(0);
   }
 
-  if (updateMode) {
-    await runUpdate();
+  if (silentMode) {
+    await runInstall();
     process.exit(0);
   }
 
@@ -5049,10 +5128,10 @@ async function runInstall() {
     // 同步全局 meta-theory
     stepNum++;
     await withProgress(t.stepLabel(stepNum, t.progressSyncMeta), () => {
-      const syncResult = runNodeScript("scripts/sync-global-meta-theory.mjs", [
-        "--targets",
-        activeTargets.join(","),
-      ]);
+      const syncResult = runNodeScript(
+        "scripts/sync-global-meta-theory.mjs",
+        metaTheoryGlobalSyncArgs(activeTargets),
+      );
       if (syncResult.status !== 0) {
         warn(t.warnMetaTheorySyncFailed);
       }
@@ -5079,7 +5158,7 @@ async function runInstall() {
   await withProgress(
     t.stepLabel(stepNum, t.progressInstallMcpMemory),
     async () => {
-      await installMcpMemoryServiceStep();
+      await installMcpMemoryServiceStep(false, activeTargets);
     },
   );
 
@@ -5141,7 +5220,7 @@ async function runUpdate() {
 
   // ── 2.5 [Optional] MCP Memory Service (Layer 3) ─────────────────
   console.log("");
-  await installMcpMemoryServiceStep(true);
+  await installMcpMemoryServiceStep(true, activeTargets);
 
   // ── 2.8. Clean up legacy skill files ───────────────────────────────
   const legacyCount = cleanupLegacySkills(updateScope);
@@ -5200,7 +5279,7 @@ async function runUpdate() {
   if (wantMetaTheory) {
     const updateSyncResult = runNodeScript(
       "scripts/sync-global-meta-theory.mjs",
-      ["--targets", activeTargets.join(",")],
+      metaTheoryGlobalSyncArgs(activeTargets),
     );
     if (updateSyncResult.status === 0) ok(t.updateMetaTheoryDone);
     else warn(t.warnMetaTheoryUpdateFailed);

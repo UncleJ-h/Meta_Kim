@@ -1,5 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile as readFsFile } from "node:fs/promises";
 import {
   readJson,
   readFile,
@@ -134,7 +135,7 @@ describe("workflow-contract.json — schema compliance", async () => {
     );
   });
 
-  test("protocols has all 16 governed packet types", () => {
+  test("protocols has all 26 governed packet types", () => {
     const expected = [
       "runHeader",
       "taskClassification",
@@ -142,6 +143,16 @@ describe("workflow-contract.json — schema compliance", async () => {
       "cardPlanPacket",
       "dispatchEnvelopePacket",
       "orchestrationTaskBoardPacket",
+      "businessFlowBlueprintPacket",
+      "productCompletenessPacket",
+      "experienceQualityPacket",
+      "testStrategyPacket",
+      "structureHygienePacket",
+      "permissionMatrixPacket",
+      "sideEffectLedgerPacket",
+      "rollbackPlanPacket",
+      "interfaceIntegrationContractPacket",
+      "agentBlueprintPacket",
       "capabilityGapPacket",
       "executionAgentCard",
       "dispatchBoard",
@@ -157,7 +168,7 @@ describe("workflow-contract.json — schema compliance", async () => {
     for (const packet of expected) {
       assert.ok(keys.includes(packet), `missing protocol packet: ${packet}`);
     }
-    assert.equal(expected.length, 16);
+    assert.equal(expected.length, 26);
   });
 
   test("publicDisplayRequires has all 5 conditions", () => {
@@ -217,11 +228,235 @@ describe("workflow-contract.json — schema compliance", async () => {
     assert.ok(classification.triggerReasonEnum.includes("multi_file"));
     assert.ok(classification.triggerReasonEnum.includes("owner_missing"));
     assert.ok(
+      classification.triggerReasonEnum.includes("internal_interface_boundary"),
+    );
+    assert.ok(
+      classification.triggerReasonEnum.includes("third_party_integration"),
+    );
+    assert.ok(
       classification.upgradeReasonEnum.includes("owner_creation_required"),
     );
     assert.ok(classification.bypassReasonEnum.includes("pure_query"));
     assert.equal(classification.ownerRequiredByDefault, true);
     assert.equal(classification.onlyQueryMayBypassOwner, true);
+  });
+
+  test("interface integration contract policy is evidence-backed and gate-driven", () => {
+    const policy = contract.runDiscipline?.integrationContractPolicy ?? {};
+    const protocol =
+      contract.protocols?.interfaceIntegrationContractPacket ?? {};
+
+    assert.equal(policy.enabled, true);
+    assert.ok(
+      policy.requiredWhenDeliverableTypes?.includes("internal_api_integration"),
+    );
+    assert.ok(
+      policy.requiredWhenDeliverableTypes?.includes("third_party_integration"),
+    );
+    assert.ok(policy.blockingUnknownStatuses?.includes("blocking_unknown"));
+    assert.ok(policy.evidenceSourceEnum?.includes("official_docs"));
+    assert.ok(policy.evidenceSourceEnum?.includes("sandbox_response"));
+    assert.ok(policy.fieldClassEnum?.includes("outbound_provider_field"));
+    assert.ok(policy.fieldClassEnum?.includes("view_binding_field"));
+
+    for (const gate of [
+      "source_of_truth",
+      "contract_diff",
+      "signature_auth",
+      "idempotency",
+      "callback_webhook",
+      "error_model",
+      "state_machine",
+      "sandbox_contract_test",
+      "security_secrets",
+      "human_owner_approval",
+    ]) {
+      assert.ok(policy.requiredReviewGates?.includes(gate));
+      assert.ok(protocol.reviewGateEnum?.includes(gate));
+    }
+
+    for (const field of [
+      "integrationKind",
+      "interfaceInventory",
+      "fieldLedger",
+      "unknowns",
+      "evidence",
+      "reviewGates",
+      "testMatrix",
+      "ownerApprovals",
+    ]) {
+      assert.ok(protocol.requiredFields?.includes(field));
+    }
+  });
+
+  test("product design gates are contract-backed packets", () => {
+    const productGatePolicy =
+      contract.runDiscipline?.productDeliverableGatePolicy ?? {};
+    assert.equal(productGatePolicy.enabled, true);
+    assert.equal(productGatePolicy.requiredForNonQuery, true);
+    const validation = contract.runDiscipline?.runArtifactValidation ?? {};
+    const publicReadyPolicy =
+      validation.productGatePublicReadyStatusPolicy ?? {};
+    assert.equal(publicReadyPolicy.enabled, true);
+    assert.ok(
+      Array.isArray(publicReadyPolicy.packetStatusFields),
+      "product gate public-ready policy must list packet status fields",
+    );
+
+    for (const packet of [
+      "productCompletenessPacket",
+      "experienceQualityPacket",
+      "testStrategyPacket",
+      "structureHygienePacket",
+    ]) {
+      assert.ok(
+        productGatePolicy.requiredPackets?.includes(packet),
+        `product gate policy missing ${packet}`,
+      );
+      assert.ok(contract.protocols?.[packet], `missing protocol ${packet}`);
+      assert.ok(
+        contract.runDiscipline?.protocolFirst?.requiredPackets?.includes(
+          packet,
+        ),
+        `protocolFirst.requiredPackets missing ${packet}`,
+      );
+      assert.ok(
+        publicReadyPolicy.packetStatusFields.some(
+          (entry) => entry.packet === packet,
+        ),
+        `product gate public-ready policy missing ${packet}`,
+      );
+    }
+
+    for (const packet of [
+      "permissionMatrixPacket",
+      "sideEffectLedgerPacket",
+      "rollbackPlanPacket",
+    ]) {
+      assert.ok(
+        productGatePolicy.requiredSideEffectPackets?.includes(packet),
+        `side-effect gate policy missing ${packet}`,
+      );
+      assert.ok(contract.protocols?.[packet], `missing protocol ${packet}`);
+      assert.ok(
+        contract.runDiscipline?.protocolFirst?.requiredPackets?.includes(
+          packet,
+        ),
+        `protocolFirst.requiredPackets missing ${packet}`,
+      );
+      assert.ok(
+        publicReadyPolicy.packetStatusFields.some(
+          (entry) => entry.packet === packet,
+        ),
+        `product gate public-ready policy missing ${packet}`,
+      );
+    }
+  });
+
+  test("agent blueprint supports generalized capability bindings", () => {
+    const protocol = contract.protocols?.agentBlueprintPacket ?? {};
+    assert.ok(
+      protocol.compatibilityFields?.includes("matchedSkills"),
+      "matchedSkills must remain a compatibility field",
+    );
+    assert.ok(
+      protocol.capabilityMatchFields?.includes("matchedCapabilities"),
+      "matchedCapabilities must be a supported capability match field",
+    );
+    assert.ok(
+      protocol.capabilityMatchFields?.includes("capabilityBindings"),
+      "capabilityBindings must be a supported capability match field",
+    );
+
+    for (const bindingType of [
+      "agent",
+      "skill",
+      "command",
+      "mcp_tool",
+      "runtime_tool",
+      "file_set",
+      "capability_index_query",
+      "contract_ref",
+      "graph_node_set",
+    ]) {
+      assert.ok(
+        protocol.capabilityBindingTypeEnum?.includes(bindingType),
+        `capabilityBindingTypeEnum missing ${bindingType}`,
+      );
+    }
+  });
+
+  test("dependency contract is producer/consumer generic", () => {
+    const dependency = contract.protocols?.dependencyContract ?? {};
+    const integration = dependency.interfaceIntegrationContract ?? {};
+    assert.ok(integration.producerContract);
+    assert.ok(integration.consumerContract);
+    assert.ok(
+      integration.producerContract.requiredFields?.includes("producerRole"),
+    );
+    assert.ok(
+      integration.consumerContract.requiredFields?.includes("consumerRole"),
+    );
+    assert.equal(integration.producerContract.minInterfacePaths, "task_defined");
+    assert.doesNotMatch(JSON.stringify(integration), /frontend_agent/);
+    assert.doesNotMatch(JSON.stringify(integration), /backend_agent/);
+    assert.doesNotMatch(JSON.stringify(integration), /"minPaths":3/);
+    assert.equal(integration.consumerContract.onTimeout, "block");
+  });
+
+  test("production correctness policy is source-first and no-quota", () => {
+    const policy = contract.runDiscipline?.qualityFirstPolicy ?? {};
+    assert.equal(policy.clarificationPolicy?.questionCountPolicy, "no_quota_ask_only_outcome_branching");
+    assert.equal(policy.clarificationPolicy?.evaluateAgainstIntentFrameBeforeAssumption, true);
+    assert.equal("maxBlockingQuestions" in (policy.clarificationPolicy ?? {}), false);
+    assert.equal(policy.readBeforeEditPolicy?.requiredBeforeMutation, true);
+    assert.ok(policy.readBeforeEditPolicy?.allowedDuringCriticalFetch?.includes("git_status"));
+    assert.ok(policy.stageRequiredOutputs?.critical?.includes("realIntent"));
+    assert.ok(policy.stageRequiredOutputs?.critical?.includes("intentFrameAssessment"));
+    assert.ok(policy.stageRequiredOutputs?.fetch?.includes("decisionImpactMap"));
+    assert.ok(policy.stageRequiredOutputs?.thinking?.includes("workerTaskPackets"));
+    assert.ok(policy.dependencyPolicy?.criticalDependencyFailureActions?.includes("return_to_stage"));
+    assert.ok(policy.dependencyPolicy?.forbiddenActions?.includes("use_fallback"));
+  });
+
+  test("Critical clarification is framework-based instead of mind-reading", () => {
+    const policy = contract.runDiscipline?.qualityFirstPolicy ?? {};
+    const frame = policy.intentCompletenessFramework ?? {};
+
+    assert.equal(frame.required, true);
+    assert.equal(frame.judgmentTarget, "user_expression_completeness_not_true_human_intent");
+    assert.equal(frame.outputPacket, "intentFrameAssessment");
+    assert.equal(frame.onBlockingMissingDimension, "critical_clarification_allowed");
+
+    for (const dimension of [
+      "desiredOutcome",
+      "targetAudienceOrUserValue",
+      "successCriteria",
+      "scopeBoundary",
+      "constraintsPermissionsSafety",
+      "evidenceFreshnessNeeds",
+      "outputFormatOrDeliverySurface",
+    ]) {
+      assert.ok(
+        frame.requiredDimensions?.includes(dimension),
+        `intentCompletenessFramework missing ${dimension}`,
+      );
+    }
+
+    const assessment = frame.intentFrameAssessment ?? {};
+    for (const field of [
+      "dimension",
+      "status",
+      "evidenceFromUserText",
+      "defaultAssumption",
+      "wouldChangeExecution",
+      "clarificationQuestion",
+    ]) {
+      assert.ok(
+        assessment.requiredFields?.includes(field),
+        `intentFrameAssessment missing ${field}`,
+      );
+    }
   });
 
   test("card governance model is explicit", () => {
@@ -269,12 +504,13 @@ describe("workflow-contract.json — schema compliance", async () => {
     assert.equal(language.stageLabelsRemainCanonicalEnglish, true);
     assert.equal(
       language.userFacingTextLanguageSource,
-      "latest_user_message_or_explicit_preference",
+      "runtime_tool_selected_output_language_else_explicit_output_language_choice_else_latest_user_input_language",
     );
     assert.ok(language.fallbackLocale, "userLanguagePolicy.fallbackLocale");
 
     const cardGovernance = contract.runDiscipline?.cardGovernance ?? {};
     for (const surface of [
+      "request_user_input",
       "native_choice",
       "native_mode_picker",
       "native_hook_prompt",
@@ -302,6 +538,28 @@ describe("workflow-contract.json — schema compliance", async () => {
         `${runtime}.triggerDescription must be a string`,
       );
     }
+  });
+
+  test("OpenClaw remains declarative-only for tool-call enforcement", async () => {
+    const mapping = await readFsFile("scripts/runtime-hook-mapping.mjs", "utf8");
+    const template = await readJson(
+      "canonical/runtime-assets/openclaw/openclaw.template.json",
+    );
+    const agentsGuide = await readFile("AGENTS.md");
+    const heartbeatTemplate = await readFile(
+      "canonical/runtime-assets/openclaw/HEARTBEAT.template.md",
+    );
+
+    assert.match(mapping, /openclaw:[\s\S]*command:new/);
+    assert.doesNotMatch(mapping, /openclaw:[\s\S]*before_tool_call/);
+    assert.equal(
+      template.hooks?.tool?.before_tool_call,
+      undefined,
+      "OpenClaw template must not claim an installed before_tool_call gate",
+    );
+    assert.match(agentsGuide, /OpenClaw[\s\S]*declarative/i);
+    assert.match(heartbeatTemplate, /typed plugin adapter for tool-call denial/i);
+    assert.match(heartbeatTemplate, /not a hard sandbox/i);
   });
 
   test("silence / skip / interrupt / shell policies are explicit", () => {
@@ -547,6 +805,56 @@ describe("workflow-contract.json — schema compliance", async () => {
         `executionAgentCard missing ${field}`,
       );
     }
+
+    const abstractionPolicy =
+      contract.protocols?.executionAgentCard?.abstractionPolicy ?? {};
+    assert.equal(
+      abstractionPolicy.concreteWorkOrderFieldsForbidden,
+      true,
+      "executionAgentCard must forbid work-order fields in durable identity",
+    );
+    assert.equal(
+      abstractionPolicy.pathLikeBindingsForbidden,
+      true,
+      "executionAgentCard must forbid path-like durable bindings",
+    );
+    assert.equal(
+      abstractionPolicy.providerFirstAgentLast,
+      true,
+      "executionAgentCard must require provider-first, agent-last creation",
+    );
+    for (const field of ["todayTask", "scopeFiles", "deliverableLink", "verifySteps"]) {
+      assert.ok(
+        abstractionPolicy.forbiddenDurableFields?.includes(field),
+        `executionAgentCard abstraction policy must forbid ${field}`,
+      );
+    }
+  });
+
+  test("capability discovery uses cached global inventory plus project light scan", () => {
+    const policy =
+      contract.runDiscipline?.executionOwnership?.capabilityDiscoveryRuntimePolicy ?? {};
+    assert.equal(
+      policy.defaultMode,
+      "cached_global_inventory_plus_project_light_scan",
+    );
+    for (const trigger of [
+      "install",
+      "update",
+      "explicit_user_refresh",
+      "stale_cache",
+      "scheduled_refresh_older_than_14_days",
+      "high_risk_provider_route",
+    ]) {
+      assert.ok(policy.fullScanWhen?.includes(trigger), `missing ${trigger}`);
+    }
+    assert.equal(policy.staleAfterMinutes, 20160);
+    assert.equal(policy.staleAfterDays, 14);
+    assert.match(policy.perRunBehavior ?? "", /must not run a full global filesystem scan on every dispatch/i);
+    assert.match(policy.perRunBehavior ?? "", /older than 14 days/i);
+    assert.match(policy.userPromptPolicy ?? "", /2 weeks/i);
+    assert.match(policy.userPromptPolicy ?? "", /update first/i);
+    assert.match(policy.tokenPolicy ?? "", /must not dump full provider definitions/i);
   });
 
   test("local state + compaction policy are explicit", () => {
@@ -625,23 +933,27 @@ describe("workflow-contract.json — schema compliance", async () => {
     ]) {
       assert.ok(fields.includes(field), `intentGatePacket missing ${field}`);
     }
-    const soft =
-      contract.runDiscipline?.runArtifactValidation?.softPublicReadyTodoGate;
+    const publicReadyGate =
+      contract.runDiscipline?.runArtifactValidation?.publicReadyTodoGate;
     assert.ok(
-      soft?.environmentVariable,
-      "softPublicReadyTodoGate.environmentVariable",
+      publicReadyGate?.environmentVariable,
+      "publicReadyTodoGate.environmentVariable",
     );
-    assert.equal(soft?.environmentValue, "1");
+    assert.doesNotMatch(publicReadyGate.environmentVariable, /SOFT/);
+    assert.equal(publicReadyGate?.environmentValue, "1");
+    assert.equal(publicReadyGate?.defaultMode, "hard");
     const comment =
-      contract.runDiscipline?.runArtifactValidation?.softCommentReviewGate;
+      contract.runDiscipline?.runArtifactValidation?.commentReviewGate;
     assert.ok(
       comment?.environmentVariable,
-      "softCommentReviewGate.environmentVariable",
+      "commentReviewGate.environmentVariable",
     );
+    assert.doesNotMatch(comment.environmentVariable, /SOFT/);
     assert.equal(comment?.environmentValue, "1");
+    assert.equal(comment?.defaultMode, "hard");
     assert.ok(
       comment?.summaryBooleanField,
-      "softCommentReviewGate.summaryBooleanField",
+      "commentReviewGate.summaryBooleanField",
     );
   });
 
@@ -882,6 +1194,69 @@ describe("workflow-contract.json — schema compliance", async () => {
       assert.ok(
         evolutionFields.includes(field),
         `evolutionWritebackPacket missing ${field}`,
+      );
+    }
+  });
+
+  test("quality policy requires ten-x path reasoning and user-facing closure rationale", () => {
+    const quality = contract.runDiscipline?.qualityFirstPolicy ?? {};
+    const thinkingOutputs = quality.stageRequiredOutputs?.thinking ?? [];
+    for (const field of [
+      "minimalFixPath",
+      "tenXPathShift",
+      "chosenRationale",
+      "omittedTenXWithReason",
+    ]) {
+      assert.ok(
+        thinkingOutputs.includes(field),
+        `Thinking required outputs missing ${field}`,
+      );
+    }
+
+    const summary = quality.userFacingSummaryContract ?? {};
+    assert.equal(summary.required, true);
+    for (const field of [
+      "whyChanged",
+      "whatChanged",
+      "userImpact",
+      "verificationEvidence",
+      "remainingLimits",
+    ]) {
+      assert.ok(
+        summary.requiredFields?.includes(field),
+        `userFacingSummaryContract missing ${field}`,
+      );
+    }
+  });
+
+  test("quality policy requires compact user-facing stage feedback", () => {
+    const feedback = contract.runDiscipline?.qualityFirstPolicy?.userFacingStageFeedbackContract ?? {};
+    assert.equal(feedback.required, true);
+    assert.equal(feedback.maxBulletsPerStage, 3);
+    assert.equal(feedback.hideProtocolIdsByDefault, true);
+    assert.equal(feedback.debugOnlyFullPackets, true);
+    assert.equal(feedback.hideInternalFieldNamesByDefault, false);
+    assert.equal(feedback.internalFieldNamesRequireHumanLabels, true);
+    assert.equal(feedback.localizedStagePurposeRequired, true);
+
+    for (const stage of ["Critical", "Fetch", "Thinking", "Review"]) {
+      assert.ok(
+        feedback.requiredStages?.includes(stage),
+        `userFacingStageFeedbackContract missing ${stage}`,
+      );
+    }
+
+    for (const field of ["stage", "plainVerdict", "decisionImpact", "nextAction"]) {
+      assert.ok(
+        feedback.requiredFields?.includes(field),
+        `userFacingStageFeedbackContract missing ${field}`,
+      );
+    }
+
+    for (const field of ["surfaceRequest", "realIntent", "workerTaskPackets"]) {
+      assert.ok(
+        feedback.humanLabeledInternalFieldExamples?.includes(field),
+        `userFacingStageFeedbackContract must require human labels for ${field}`,
       );
     }
   });

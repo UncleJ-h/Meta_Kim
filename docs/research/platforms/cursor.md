@@ -3,6 +3,7 @@
 ## Official Documentation
 
 - Primary site: https://docs.cursor.com
+- Rules reference: https://docs.cursor.com/en/context/rules
 - Agent Skills support confirmed via Skills CLI reference
 - Cursor IDE by Anysphere
 
@@ -34,12 +35,12 @@ Note: `.agents/skills/` may exist as a portable AgentSkills mirror for other run
 | Basic SKILL.md | Y | Full AgentSkills support |
 | `allowed-tools` | Y | Tool restriction per skill |
 | `context: fork` | N | Not supported |
-| Hooks | Y | `.cursor/hooks.json` (userPromptSubmit, preToolUse, postToolUse, stop); some bugs reported |
+| Hooks | Y | `.cursor/hooks.json` / `~/.cursor/hooks.json` lowerCamel lifecycle events |
 | Plugins | Y | Reuses Claude Code marketplace infrastructure (`~/.cursor/plugins/`) |
 
 ### Agent Format
 
-Cursor agents use Markdown files with YAML frontmatter:
+Cursor agents use Markdown files with YAML frontmatter in Meta_Kim's projection layer:
 
 ```markdown
 ---
@@ -51,6 +52,8 @@ You are a code reviewer...
 ```
 
 This matches Cursor's built-in `create-subagent` guidance. It differs from Codex's TOML custom-agent format.
+
+Cursor's official context system also relies heavily on project rules (`.cursor/rules/*.mdc`) and repository `AGENTS.md` context. Do not add Codex `nickname_candidates` to Cursor files.
 
 ### Evidence of Cursor Skill Support
 
@@ -71,7 +74,7 @@ Cursor supports plugins via Claude Code marketplace infrastructure:
 
 ### Differences from Claude Code
 
-- Hooks system via `.cursor/hooks.json` (userPromptSubmit, preToolUse, postToolUse, stop)
+- Hooks use Cursor's lowerCamel schema (`beforeSubmitPrompt`, `preToolUse`, `postToolUse`, `sessionStart`, `stop`) and are not schema-compatible with Claude/Codex.
 - No context:fork capability
 - Plugin system reuses Claude Code marketplace (not a separate ecosystem)
 - Agent format is Markdown with YAML frontmatter

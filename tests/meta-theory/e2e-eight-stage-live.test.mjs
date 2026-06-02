@@ -8,7 +8,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readJson, readFile } from "./_helpers.mjs";
+import { loadMetaTheoryCorpus, readJson, readFile } from "./_helpers.mjs";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 数据加载（在async describe块中一次性加载，避免await问题）
@@ -19,7 +19,7 @@ const [
   dispatchScenarios,
   cardDeckScenarios,
   evolutionScenarios,
-  skillContent,
+  corpus,
   capabilityReport,
   devGov,
   conductor,
@@ -31,7 +31,7 @@ const [
   readJson("tests/meta-theory/scenarios/dispatch-scenarios.json"),
   readJson("tests/meta-theory/scenarios/card-deck-scenarios.json"),
   readJson("tests/meta-theory/scenarios/evolution-scenarios.json"),
-  readFile("canonical/skills/meta-theory/SKILL.md"),
+  loadMetaTheoryCorpus(),
   readFile("canonical/skills/meta-theory/references/meta-theory.md"),
   readFile("canonical/skills/meta-theory/references/dev-governance.md"),
   readFile("canonical/agents/meta-conductor.md"),
@@ -40,12 +40,14 @@ const [
   readJson("config/contracts/workflow-contract.json"),
 ]);
 
+const skillContent = corpus.combined;
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Stage 1: Critical — Clarity Gate
+// Stage 1: Critical — Blocking Clarification
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-describe("Stage 1: Critical — Clarity Gate", () => {
-  test("E2E-01: 模糊输入触发≥2个追问问题", () => {
+describe("Stage 1: Critical — Blocking Clarification", () => {
+  test("E2E-01: 模糊输入可触发早期澄清", () => {
     const scenario = clarityScenarios.find((s) => s.id === "CG-01");
     assert.ok(scenario, "CG-01 must exist");
     const dims = scenario.ambiguousDims || [];
@@ -58,7 +60,7 @@ describe("Stage 1: Critical — Clarity Gate", () => {
     assert.ok(
       scenario.expectedBehavior?.toLowerCase().includes("ask") ||
         scenario.expectedBehavior?.toLowerCase().includes("must"),
-      "Must ask, not suggest",
+      "Ambiguous input must support clarification",
     );
   });
 
@@ -74,7 +76,7 @@ describe("Stage 1: Critical — Clarity Gate", () => {
     );
   });
 
-  test("Critical阶段定义了4个澄清维度", () => {
+  test("Critical阶段保留澄清维度用于阻断性问题", () => {
     const allDims = new Set();
     for (const s of clarityScenarios) {
       for (const d of s.ambiguousDims || []) {
@@ -109,6 +111,32 @@ describe("Stage 1: Critical — Clarity Gate", () => {
         `Scenario ${s.id} must have PASS criteria`,
       );
     }
+  });
+});
+
+describe("Thinking → Execution: Unified Confirmation", () => {
+  test("Execution前一次性确认，且不是每个阶段都弹确认", () => {
+    assert.match(skillContent, /Fetch\/content evidence.*Thinking\/pre-decision option framing/s);
+    assert.match(skillContent, /After Thinking completes, BEFORE any Execution/);
+    assert.match(skillContent, /DO NOT.*Critical\/Fetch\/Thinking\/Review/s);
+  });
+
+  test("确认卡只包含会改变结果分叉的产品化问题", () => {
+    const block = skillContent.slice(
+      skillContent.indexOf("Possible question dimensions:"),
+      skillContent.indexOf("Wait for user response before proceeding to Execution."),
+    );
+    const questions = [...block.matchAll(/^\d+\.\s+.+Confirmation - ask only when.+$/gm)];
+    assert.ok(questions.length >= 1, "Need outcome-branching question examples");
+    assert.match(skillContent, /no question quota/i);
+    assert.match(skillContent, /Each visible question must change an execution branch/i);
+    for (let i = 0; i < questions.length; i++) {
+      const start = questions[i].index ?? 0;
+      const end = i + 1 < questions.length ? (questions[i + 1].index ?? block.length) : block.length;
+      const options = [...block.slice(start, end).matchAll(/^\s+- Option [A-D]:/gm)];
+      assert.ok(options.length >= 2);
+    }
+    assert.match(skillContent, /understandable to non-technical users/i);
   });
 });
 
@@ -182,6 +210,22 @@ describe("Stage 2: Fetch — Capability Discovery", () => {
       ),
       "fetchPacket must have capability matching fields",
     );
+  });
+
+  test("Fetch阶段要求研究能力发现基于实际工具证据", () => {
+    const packet = contract.protocols?.contentEvidencePacket;
+    assert.ok(packet?.requiredFields?.includes("researchCapabilityDiscovery"));
+
+    const discovery = packet.researchCapabilityDiscovery;
+    assert.ok(discovery?.requiredFields?.includes("toolInventorySources"));
+    assert.ok(discovery?.requiredFields?.includes("availableRetrievalCapabilities"));
+    assert.ok(discovery?.requiredFields?.includes("selectedResearchPath"));
+    assert.ok(discovery?.forbiddenFields?.includes("platformSurface"));
+
+    const policyText = JSON.stringify(discovery);
+    assert.match(policyText, /proof/i);
+    assert.match(policyText, /active_tools|deferred_tools|mcp|plugins|skills|commands/);
+    assert.doesNotMatch(policyText, /desktop \| cli \| web \| ide/i);
   });
 });
 
@@ -540,9 +584,9 @@ describe("End-to-End: Complete 8-Stage Spine Integration", () => {
       );
     }
     // 验证stage spine中Critical在Evolution前面（检查stage序列模式）
-    // SKILL.md line 17: Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution
+    // SKILL.md keeps the compact ASCII spine while references may render it differently.
     const spinePattern =
-      /Critical.*→.*Fetch.*→.*Thinking.*→.*Execution.*→.*Review.*→.*Meta-Review.*→.*Verification.*→.*Evolution/i;
+      /Critical.*(?:→|->).*Fetch.*(?:→|->).*Thinking.*(?:→|->).*Execution.*(?:→|->).*Review.*(?:→|->).*Meta-Review.*(?:→|->).*Verification.*(?:→|->).*Evolution/i;
     assert.ok(
       spinePattern.test(skillContent),
       "SKILL.md must contain the full 8-stage spine sequence with Critical before Evolution",
@@ -593,6 +637,8 @@ describe("End-to-End: Complete 8-Stage Spine Integration", () => {
       "cardPlanPacket",
       "dispatchEnvelopePacket",
       "orchestrationTaskBoardPacket",
+      "businessFlowBlueprintPacket",
+      "agentBlueprintPacket",
       "workerTaskPackets",
       "reviewPacket",
       "verificationPacket",

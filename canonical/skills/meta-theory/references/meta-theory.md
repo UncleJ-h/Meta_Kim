@@ -33,7 +33,7 @@ Intent amplification (deliver) ← Output: structured outcomes under rhythm cont
 
 - Rhythm → `references/rhythm-orchestration.md`
 - Intent amplification → `references/intent-amplification.md`
-- Ten-step governance → `references/ten-step-governance.md`
+- 11-phase business workflow → `references/ten-step-governance.md` (legacy file name kept as a compatibility alias)
 
 ---
 
@@ -117,6 +117,27 @@ Heuristics:
 > **Some metas do not “do tasks”; they build capability.**
 
 Execution metas fight on the front line. Orchestration metas run the battle map. Infrastructure metas build airfields, roads, ammo, and rules.
+
+### Skill binding model
+
+Skill capability follows the same meta rule: durable identity owns a responsibility class; runtime selection owns the concrete method.
+
+Long-term agent identity may inherit only:
+
+- abstract capability slots, for example `planning discipline`, `test generation`, `browser QA`, or `security review`
+- meta-skill package providers, for example `superpowers` or `ecc`
+- provider compatibility constraints, such as runtime, permission class, or artifact format
+
+Long-term agent identity must not inherit:
+
+- concrete sub-skill IDs selected for one run
+- shell commands selected for one run
+- plugin sub-capabilities selected for one run
+- a provider's tactic as the agent's permanent way of thinking
+
+`superpowers` and `ecc` are capability providers / meta-skill package providers, not fixed playbooks. `findskill` is a runtime-local search entrypoint for Fetch, not a durable binding. The concrete choice belongs in current-run artifacts such as `capabilitySearchResult`, `selectedSkill`, and `workerTaskPacket`.
+
+Agent creation and iteration must obey this split: Genesis writes the durable responsibility boundary; Artisan writes abstract capability slots and provider compatibility; Fetch writes the concrete run-scoped selection.
 
 ---
 
@@ -318,9 +339,9 @@ Four dimensions for shell choice:
 
 ---
 
-## Ten-step governance (summary)
+## 11-phase business workflow (summary)
 
-| Step | Meaning | Owner | Key question |
+| Phase | Meaning | Owner | Key question |
 |------|---------|-------|--------------|
 | 1. Direction | Requirements | Warden / user | What is the intent? |
 | 2. Planning | Decomposition | Conductor | How do metas split? |
@@ -332,19 +353,20 @@ Four dimensions for shell choice:
 | 8. Summary | Synthesize | Warden | What did we learn? |
 | 9. Feedback | User sign-off | User / exec | Satisfied? |
 | 10. Evolution | Five dimensions | Everyone | How to be stronger next time? |
+| 11. Mirror | Projection / release mirror | Conductor / runtime owners | Did canonical changes reach the right runtime surfaces? |
 
-> Steps 1–3 = “it moves.” 4–10 = “it matures.”
+> Phases 1–3 = “it moves.” 4–11 = “it matures.”
 > No review → blind rush. No verification → theater. No evolution → repeat mistakes.
 
 ### Complexity routing
 
-| Complexity | Rule | Steps |
+| Complexity | Rule | Business phases |
 |------------|------|-------|
 | Simple | <2 files | 1→3→4→7→9 (skip meta-review) |
 | Medium | 2–5 files | 1→2→3→4→5→6→7→9 |
-| Complex | >5 files / multi-module | All 10 |
+| Complex | >5 files / multi-module | All 11 |
 
-> Detail: `references/ten-step-governance.md`
+> Detail: `references/ten-step-governance.md` (legacy file name, current 11-phase content)
 
 ---
 
@@ -379,3 +401,64 @@ Four dimensions for shell choice:
 | Missing specificity | No file/function/data citations | Fail |
 | Interchangeability | Swap agent name with a competitor; still “works”? | Shallow |
 | List stuffing | 5+ bullets each <2 sentences | Superficial |
+
+
+## Use when
+
+Use when theory background used only when it changes execution rules affects route, owner, risk, acceptance, verification, public-ready, or evolution writeback.
+
+## Required inputs
+
+- Latest user request and `intentPacket`
+- `fetchPacket` evidence that changes decision
+- runtime and OS targets when tools or dependencies are involved
+- relevant config, registry, script, or artifact path
+
+## Do
+
+- Assign an owner for each action.
+- Produce a checkable packet or artifact.
+- Bind pass/fail to evidence, threshold, or command output.
+- Preserve existing foundational and native runtime capabilities.
+
+## Do not
+
+- Do not delete skills, dependencies, web/browser/research, shell, filesystem, apply_patch, MCP, memory, graph, hooks, scripts, runtime tools, or native platform abilities.
+- Do not use vague advice without trigger, output, evidence, and writeback.
+- Do not route reference-only or unknown dependencies into execution.
+
+## Required packet
+
+`referenceContractPacket`: `referenceId`, `trigger`, `requiredInputs`, `actions`, `outputs`, `passCriteria`, `failCriteria`, `blockConditions`, `returnStage`, `verification`, `writebackTarget`.
+
+## Pass
+
+- At least one action has owner, input, output, and verification.
+- Pass criteria include numeric threshold, required field list, command, artifact, or human acceptance record.
+- Unsupported, unknown, or partial capability is marked rather than removed.
+
+## Fail
+
+- Instruction is only theory or roleplay.
+- No block condition exists for missing evidence, unsupported runtime/OS, fake owner, or missing verification.
+- Public-ready can be claimed without userGoalDone and evidence.
+
+## Block
+
+Block Execution when owner, weapon, dependency eligibility, runtime support, OS support, verification owner, or rollback boundary is missing. Block public-ready when verification evidence, intent acceptance, writebackDecision, or high/critical closure is missing.
+
+## Return to stage
+
+Return to Critical for intent gaps, Fetch for evidence/support gaps, Thinking for route gaps, Execution for missing artifact, Review for open findings, Verification for missing proof, and Evolution for missing writeback.
+
+## Verification
+
+Run the most specific validator for this reference plus `npm run meta:prompt:validate`. Use command/log/artifact/human acceptance evidence, not a narrative claim.
+
+## Writeback
+
+Write durable improvements to canonical references, governance configs, capability indexes, validators, tests, or scars. If no durable change exists, record `none-with-reason`.
+
+## Preserve
+
+Preserve Skills, WebSearch/browser/research, filesystem, shell, apply_patch, MCP, memory, Graphify, graph, hooks, commands, rules, agents, subagents, approval, sandbox, runtime tools, package scripts, setup, sync, install, uninstall, status, doctor, validators, and runtime projections.

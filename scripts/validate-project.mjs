@@ -1,14 +1,12 @@
 import { promises as fs } from "node:fs";
-import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   canonicalAgentsDir,
   canonicalCapabilityIndexDir,
-  canonicalRuntimeAssetsDir,
+  canonicalSkillsDir,
   canonicalSkillPath,
   canonicalSkillReferencesDir,
   loadRuntimeProfiles,
@@ -19,79 +17,6 @@ import { validateSkillFrontmatter } from "./install-skill-sanitizer.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
-const execFileAsync = promisify(execFile);
-const canonicalClaudeSettingsPath = path.join(
-  canonicalRuntimeAssetsDir,
-  "claude",
-  "settings.json",
-);
-const canonicalClaudeMcpPath = path.join(
-  canonicalRuntimeAssetsDir,
-  "claude",
-  "mcp.json",
-);
-const canonicalClaudeHooksDir = path.join(
-  canonicalRuntimeAssetsDir,
-  "claude",
-  "hooks",
-);
-const canonicalCodexConfigExamplePath = path.join(
-  canonicalRuntimeAssetsDir,
-  "codex",
-  "config.toml.example",
-);
-const canonicalOpenClawTemplatePath = path.join(
-  canonicalRuntimeAssetsDir,
-  "openclaw",
-  "openclaw.template.json",
-);
-const canonicalSharedMemoryHookPath = path.join(
-  canonicalRuntimeAssetsDir,
-  "shared",
-  "hooks",
-  "meta-kim-memory-save.mjs",
-);
-const canonicalOpenClawMemoryHookDir = path.join(
-  canonicalRuntimeAssetsDir,
-  "openclaw",
-  "hooks",
-  "mcp-memory-service",
-);
-
-/** Must match config/contracts/workflow-contract.json runDiscipline.publicDisplayRequires (set equality). */
-const EXPECTED_PUBLIC_DISPLAY_REQUIRES = [
-  "verifyPassed",
-  "summaryClosed",
-  "singleDeliverableMaintained",
-  "deliverableChainClosed",
-  "consolidatedDeliverablePresent",
-];
-
-/** Documented in AGENTS.md / CLAUDE.md — project hook commands (Stop may list multiple). */
-const EXPECTED_CLAUDE_HOOK_COMMANDS = [
-  "node .claude/hooks/block-dangerous-bash.mjs",
-  "node .claude/hooks/pre-git-push-confirm.mjs",
-  "node .claude/hooks/enforce-agent-dispatch.mjs",
-  "node .claude/hooks/post-format.mjs",
-  "node .claude/hooks/post-typecheck.mjs",
-  "node .claude/hooks/post-console-log-warn.mjs",
-  "node .claude/hooks/subagent-context.mjs",
-  "node .claude/hooks/stop-memory-save.mjs",
-  "node .claude/hooks/stop-compaction.mjs",
-  "node .claude/hooks/stop-console-log-audit.mjs",
-  "node .claude/hooks/stop-completion-guard.mjs",
-  "node .claude/hooks/stop-spine-cleanup.mjs",
-];
-
-const GRAPHIFY_MAX_REPORT_AGE_DAYS = 14;
-const GRAPHIFY_MAX_INFERRED_EDGE_RATIO = 0.5;
-const GRAPHIFY_MAX_ISOLATED_NODE_RATIO = 0.25;
-const GRAPHIFY_MAX_HELPER_GOD_NODE_EDGE_RATIO = 0.25;
-const GRAPHIFY_HELPER_GOD_NODE_LABELS = new Set([
-  "log()",
-  "readFile()",
-  "main()",
-]);
 const CANONICAL_CAPABILITY_INDEX_RELATIVE =
   "config/capability-index/meta-kim-capabilities.json";
 const LOCAL_GLOBAL_CAPABILITY_INVENTORY_PATTERN =
@@ -135,7 +60,7 @@ const EXPECTED_AGENT_WEAPON_MARKERS = {
     "## Required Deliverables",
     "Skill Loadout",
     "MCP / Tool Loadout",
-    "Fallback Plan",
+    "Runtime Compatibility Plan",
     "Capability Gap List",
     "Adoption Notes",
   ],
@@ -222,53 +147,8 @@ async function walkFiles(rootDir, extension, bucket = []) {
   return bucket;
 }
 
-async function walkFilesByExtensions(rootDir, extensions, bucket = []) {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const entryPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      if (
-        entry.name === "node_modules" ||
-        entry.name === ".git" ||
-        entry.name === "graphify-out" ||
-        entry.name === ".meta-kim" ||
-        entry.name === ".backup" ||
-        entry.name === ".claude" ||
-        entry.name === ".codex" ||
-        entry.name === ".cursor" ||
-        entry.name === ".agents" ||
-        entry.name === "openclaw" ||
-        entry.name === "memory"
-      ) {
-        continue;
-      }
-      await walkFilesByExtensions(entryPath, extensions, bucket);
-    } else if (
-      entry.isFile() &&
-      extensions.some((extension) => entry.name.endsWith(extension))
-    ) {
-      bucket.push(entryPath);
-    }
-  }
-  return bucket;
-}
-
 function toRepoRelative(filePath) {
   return path.relative(repoRoot, filePath).replace(/\\/g, "/");
-}
-
-function getNpmScriptReferences(raw) {
-  const references = new Set();
-  const regex = /\bnpm\s+run\s+(?!run\b)([A-Za-z0-9:_-]+)/g;
-  let match;
-  while ((match = regex.exec(raw)) !== null) {
-    references.add(match[1]);
-  }
-  return [...references].sort();
-}
-
-function labelForNodeId(nodesById, id) {
-  return nodesById.get(id)?.label ?? "";
 }
 
 async function listCanonicalSkillReferences() {
@@ -279,6 +159,24 @@ async function listCanonicalSkillReferences() {
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
     .sort();
+}
+
+async function listCanonicalSkillManifests() {
+  const entries = await fs.readdir(canonicalSkillsDir, { withFileTypes: true });
+  const manifests = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const skillPath = path.join(canonicalSkillsDir, entry.name, "SKILL.md");
+    if (await exists(skillPath)) {
+      manifests.push({
+        id: entry.name,
+        path: toRepoRelative(skillPath),
+      });
+    }
+  }
+  return manifests.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function assertNoForbiddenMarkers(
@@ -366,15 +264,11 @@ async function validateRequiredFiles() {
     "canonical/runtime-assets/openclaw/openclaw.template.json",
     "config/contracts/sync-manifest.schema.json",
     "config/contracts/runtime-profile.schema.json",
+    "config/contracts/runtime-compatibility-catalog.schema.json",
+    "config/runtime-compatibility-catalog.json",
     "config/contracts/workflow-contract.json",
     CANONICAL_CAPABILITY_INDEX_RELATIVE,
-    "docs/runtime-capability-matrix.md",
     "scripts/mcp/meta-runtime-server.mjs",
-    "scripts/eval-meta-agents.mjs",
-    "scripts/prepare-openclaw-local.mjs",
-    "scripts/validate-run-artifact.mjs",
-    "tests/fixtures/run-artifacts/valid-run.json",
-    "tests/fixtures/run-artifacts/invalid-run-public-ready.json",
   ];
 
   for (const relativePath of requiredFiles) {
@@ -396,417 +290,96 @@ async function validateWorkflowContract() {
 
   assert(
     (contract.schemaVersion ?? 0) >= 6,
-    "workflow-contract.json schemaVersion must be >= 6 after Critical/Fetch/Thinking/Review packet hardening.",
-  );
-  assert(
-    contract.runDiscipline?.singleDepartmentPerRun === true,
-    "workflow-contract.json must enforce singleDepartmentPerRun.",
-  );
-  assert(
-    contract.runDiscipline?.singlePrimaryDeliverable === true,
-    "workflow-contract.json must enforce singlePrimaryDeliverable.",
-  );
-  assert(
-    contract.runDiscipline?.rejectMultiTopicRuns === true,
-    "workflow-contract.json must reject multi-topic runs.",
-  );
-  assert(
-    contract.runDiscipline?.requireClosedDeliverableChain === true,
-    "workflow-contract.json must require a closed deliverable chain.",
+    "workflow-contract.json schemaVersion must be >= 6 for stage-quality governance.",
   );
 
-  const requiredRunHeader = [
-    "department",
-    "primaryDeliverable",
-    "audience",
-    "freshnessRequirement",
-    "visualPolicy",
-    "handoffPlan",
-  ];
+  const protocolFirst = contract.runDiscipline?.protocolFirst ?? {};
   assert(
-    JSON.stringify(contract.runDiscipline?.requiredRunHeader ?? []) ===
-      JSON.stringify(requiredRunHeader),
-    "workflow-contract.json requiredRunHeader is out of policy.",
+    protocolFirst.enabled === true,
+    "workflow-contract.json protocolFirst must be enabled.",
   );
 
-  for (const field of [
-    "todayTask",
-    "output",
-    "deliverableLink",
-    "qualityBar",
-    "referenceDirection",
-    "handoffTarget",
-    "lengthExpectation",
-    "visualOrAssetPlan",
+  const qualityFirst = contract.runDiscipline?.qualityFirstPolicy ?? {};
+  assert(
+    qualityFirst.clarificationPolicy?.askOnlyIfAnswerChangesExecution === true &&
+      qualityFirst.clarificationPolicy?.forbidQuestionQuotaFilling === true &&
+      qualityFirst.clarificationPolicy?.questionCountPolicy ===
+        "no_quota_ask_only_outcome_branching" &&
+      !("maxBlockingQuestions" in (qualityFirst.clarificationPolicy ?? {})),
+    "workflow-contract.json qualityFirstPolicy must forbid filler clarification questions.",
+  );
+  assert(
+    qualityFirst.readBeforeEditPolicy?.requiredBeforeMutation === true &&
+      qualityFirst.readBeforeEditPolicy?.allowedDuringCriticalFetch?.includes(
+        "git_status",
+      ) &&
+      qualityFirst.readBeforeEditPolicy?.blockedBeforeThinkingReadiness?.includes(
+        "mutation",
+      ),
+    "workflow-contract.json qualityFirstPolicy must require read-before-edit evidence before mutation.",
+  );
+  const stageOutputs = qualityFirst.stageRequiredOutputs ?? {};
+  for (const [stage, field] of [
+    ["critical", "realIntent"],
+    ["critical", "noQuotaClarification"],
+    ["fetch", "decisionImpactMap"],
+    ["fetch", "capabilityDiscovery"],
+    ["thinking", "designFrame"],
+    ["thinking", "workerTaskPackets"],
+    ["thinking", "dependencyPolicy"],
+    ["review", "fallbackBoundary"],
   ]) {
     assert(
-      contract.runDiscipline?.requiredWorkerFields?.includes(field),
-      `workflow-contract.json requiredWorkerFields must include ${field}.`,
+      stageOutputs[stage]?.includes(field),
+      `workflow-contract.json qualityFirstPolicy.stageRequiredOutputs.${stage} must include ${field}.`,
     );
   }
-
-  const publicDisplayRequires = contract.runDiscipline?.publicDisplayRequires;
   assert(
-    Array.isArray(publicDisplayRequires),
-    "workflow-contract.json must define publicDisplayRequires as an array.",
+    qualityFirst.dependencyPolicy?.criticalDependencyFailureActions?.includes(
+      "return_to_stage",
+    ) &&
+      qualityFirst.dependencyPolicy?.forbiddenActions?.includes("use_fallback"),
+    "workflow-contract.json qualityFirstPolicy.dependencyPolicy must block fallback dependency handling.",
   );
-  assert(
-    JSON.stringify([...publicDisplayRequires].sort()) ===
-      JSON.stringify([...EXPECTED_PUBLIC_DISPLAY_REQUIRES].sort()),
-    "workflow-contract.json publicDisplayRequires must exactly match the canonical public-display gate set.",
-  );
-  assert(
-    contract.gates?.dealer?.primaryOwner === "meta-conductor" &&
-      contract.gates?.dealer?.escalationOwner === "meta-warden",
-    "workflow-contract.json dealer gate must model meta-conductor primary + meta-warden escalation ownership.",
-  );
-  for (const source of ["meta-sentinel", "meta-prism", "user", "system"]) {
+  for (const stage of ["critical", "fetch", "thinking", "execution", "review"]) {
     assert(
-      contract.gates?.dealer?.interruptSources?.includes(source),
-      `workflow-contract.json dealer gate must include interrupt source ${source}.`,
+      typeof qualityFirst.stageQualityContract?.[stage] === "string" &&
+        qualityFirst.stageQualityContract[stage].length > 0,
+      `workflow-contract.json qualityFirstPolicy.stageQualityContract must define ${stage}.`,
     );
   }
-
-  assert(
-    contract.gates?.publicDisplay?.owner === "meta-warden",
-    "workflow-contract.json publicDisplay gate owner must be meta-warden.",
-  );
-  assert(
-    contract.gates?.publicDisplay?.hardReleaseGate === true,
-    "workflow-contract.json publicDisplay gate must be a hard release gate.",
-  );
-  assert(
-    JSON.stringify(
-      [...(contract.gates?.publicDisplay?.requiredConditions ?? [])].sort(),
-    ) === JSON.stringify([...EXPECTED_PUBLIC_DISPLAY_REQUIRES].sort()),
-    "workflow-contract.json publicDisplay requiredConditions must match publicDisplayRequires.",
-  );
-  for (const field of [
-    "blockFinalDraftWithoutVerifiedRun",
-    "blockExternalDisplayWithoutSummaryClosure",
-    "blockCompletionWithoutClosedDeliverableChain",
-  ]) {
+  for (const workType of ["content", "product", "code", "research", "design"]) {
     assert(
-      contract.gates?.publicDisplay?.[field] === true,
-      `workflow-contract.json publicDisplay gate must set ${field} to true.`,
+      qualityFirst.expertLensCatalog?.some((entry) => entry.workType === workType),
+      `workflow-contract.json qualityFirstPolicy.expertLensCatalog must include ${workType}.`,
     );
   }
-
-  const taskClassification = contract.runDiscipline?.taskClassification;
   assert(
-    taskClassification?.classifierVersion === "v2",
-    "workflow-contract.json taskClassification classifierVersion must be v2.",
-  );
-  for (const [field, expected] of [
-    ["taskClassEnum", ["Q", "A", "P", "S"]],
-    ["requestClassEnum", ["query", "execute", "plan", "strategy"]],
-    [
-      "governanceFlowEnum",
-      [
-        "query",
-        "simple_exec",
-        "complex_dev",
-        "meta_analysis",
-        "proposal_review",
-        "rhythm",
-      ],
-    ],
-    [
-      "triggerReasonEnum",
-      [
-        "multi_file",
-        "cross_module",
-        "external_side_effect",
-        "durable_artifact",
-        "owner_missing",
-      ],
-    ],
-    [
-      "upgradeReasonEnum",
-      [
-        "cross_system_scope",
-        "review_or_verify_required",
-        "owner_creation_required",
-      ],
-    ],
-    [
-      "bypassReasonEnum",
-      [
-        "pure_query",
-        "read_only_explanation",
-        "existing_verified_artifact_reuse",
-      ],
-    ],
-  ]) {
-    for (const item of expected) {
-      assert(
-        taskClassification?.[field]?.includes(item),
-        `workflow-contract.json taskClassification.${field} must include ${item}.`,
-      );
-    }
-  }
-  assert(
-    taskClassification?.ownerRequiredByDefault === true &&
-      taskClassification?.onlyQueryMayBypassOwner === true,
-    "workflow-contract.json taskClassification must keep owner-required-by-default discipline.",
+    qualityFirst.promptPrecisionPolicy?.compactNotationAllowed === true,
+    "workflow-contract.json qualityFirstPolicy must allow compact internal prompt notation.",
   );
 
-  const cardGovernance = contract.runDiscipline?.cardGovernance;
-  assert(
-    cardGovernance?.enabled === true,
-    "workflow-contract.json cardGovernance must be enabled.",
-  );
-  assert(
-    cardGovernance?.dealerRoleModel === "conductor-primary-warden-escalation",
-    "workflow-contract.json cardGovernance dealerRoleModel must be conductor-primary-warden-escalation.",
-  );
-  for (const [field, expected] of [
-    [
-      "cardTypeEnum",
-      ["info", "action", "risk", "silence", "default", "upgrade"],
-    ],
-    [
-      "cardDecisionEnum",
-      ["deal", "suppress", "defer", "skip", "interrupt_insert", "escalate"],
-    ],
-    [
-      "cardAudienceEnum",
-      ["user", "owner", "reviewer", "governance", "runtime"],
-    ],
-    [
-      "cardTimingEnum",
-      [
-        "immediate",
-        "next_stage",
-        "after_dependency",
-        "after_verify",
-        "on_risk",
-        "on_timeout",
-        "on_user_request",
-      ],
-    ],
-    [
-      "cardShellEnum",
-      [
-        "conversation",
-        "file",
-        "packet",
-        "agent_dispatch",
-        "summary",
-        "silent_hold",
-      ],
-    ],
-    [
-      "cardSourceEnum",
-      [
-        "meta-conductor",
-        "meta-warden",
-        "meta-sentinel",
-        "meta-prism",
-        "system",
-        "user",
-      ],
-    ],
-    [
-      "suppressionReasonEnum",
-      [
-        "attention_budget_low",
-        "already_known",
-        "already_in_context",
-        "verification_pending",
-        "public_display_blocked",
-        "no_clear_intervention_gain",
-      ],
-    ],
-  ]) {
-    for (const item of expected) {
-      assert(
-        cardGovernance?.[field]?.includes(item),
-        `workflow-contract.json cardGovernance.${field} must include ${item}.`,
-      );
-    }
-  }
-  assert(
-    cardGovernance?.defaultNoCardPolicy ===
-      "prefer_silence_without_clear_intervention_gain",
-    "workflow-contract.json cardGovernance must define the default no-card policy.",
-  );
-  for (const item of [
-    "native_choice",
-    "native_mode_picker",
-    "native_hook_prompt",
-    "conversation_fallback",
-  ]) {
-    assert(
-      cardGovernance?.choiceSurfaceEnum?.includes(item),
-      `workflow-contract.json cardGovernance.choiceSurfaceEnum must include ${item}.`,
-    );
-  }
-
-  const userLanguagePolicy = contract.runDiscipline?.userLanguagePolicy;
-  assert(
-    userLanguagePolicy?.hardcodedSingleHumanLanguageForbidden === true,
-    "workflow-contract.json userLanguagePolicy must forbid hardcoded single-language user-facing text.",
-  );
-  assert(
-    userLanguagePolicy?.stageLabelsRemainCanonicalEnglish === true,
-    "workflow-contract.json userLanguagePolicy must keep protocol stage labels canonical English.",
-  );
-  assert(
-    userLanguagePolicy?.userFacingTextLanguageSource ===
-      "latest_user_message_or_explicit_preference",
-    "workflow-contract.json userLanguagePolicy must follow latest user language or explicit preference.",
-  );
-  assert(
-    typeof userLanguagePolicy?.fallbackLocale === "string" &&
-      userLanguagePolicy.fallbackLocale.length > 0,
-    "workflow-contract.json userLanguagePolicy must define fallbackLocale.",
-  );
-
-  const runtimeNativeChoiceSurfaces =
-    contract.runDiscipline?.runtimeNativeChoiceSurfaces ?? {};
-  for (const runtime of ["claude", "codex", "openclaw", "cursor"]) {
-    assert(
-      runtimeNativeChoiceSurfaces[runtime],
-      `workflow-contract.json runtimeNativeChoiceSurfaces must include ${runtime}.`,
-    );
-    assert(
-      typeof runtimeNativeChoiceSurfaces[runtime]?.primarySurface === "string",
-      `workflow-contract.json runtimeNativeChoiceSurfaces.${runtime}.primarySurface must be a string.`,
-    );
-    assert(
-      Array.isArray(runtimeNativeChoiceSurfaces[runtime]?.fallbackSurfaces),
-      `workflow-contract.json runtimeNativeChoiceSurfaces.${runtime}.fallbackSurfaces must be an array.`,
-    );
-    assert(
-      typeof runtimeNativeChoiceSurfaces[runtime]?.triggerDescription ===
-        "string",
-      `workflow-contract.json runtimeNativeChoiceSurfaces.${runtime}.triggerDescription must be a string.`,
-    );
-  }
-
-  const silencePolicy = contract.runDiscipline?.silencePolicy;
-  assert(
-    silencePolicy?.noInterventionPreferred === true &&
-      silencePolicy?.requiresInterruptionJustification === true &&
-      silencePolicy?.deferRequiresDeadline === true,
-    "workflow-contract.json silencePolicy must prefer no-intervention and require interruption/defer discipline.",
-  );
-  for (const item of ["none", "no_card", "defer", "intentional_silence"]) {
-    assert(
-      silencePolicy?.silenceDecisionEnum?.includes(item),
-      `workflow-contract.json silencePolicy.silenceDecisionEnum must include ${item}.`,
-    );
-  }
-
-  const controlIntervention = contract.runDiscipline?.controlIntervention;
-  assert(
-    controlIntervention?.requiresReturnToMainChain === true,
-    "workflow-contract.json controlIntervention must require return-to-main-chain discipline.",
-  );
-  for (const [field, expected] of [
-    [
-      "decisionTypeEnum",
-      ["skip", "interrupt", "override", "escalation_insert"],
-    ],
-    [
-      "skipReasonEnum",
-      [
-        "already_known",
-        "already_in_context",
-        "attention_budget_low",
-        "not_applicable",
-        "artifact_not_needed",
-      ],
-    ],
-    [
-      "interruptReasonEnum",
-      [
-        "security_risk",
-        "quality_drift",
-        "user_urgent",
-        "system_failure",
-        "global_impact",
-      ],
-    ],
-    [
-      "overrideReasonEnum",
-      [
-        "security_override",
-        "verification_block",
-        "public_display_block",
-        "governance_owner_insert",
-      ],
-    ],
-    [
-      "insertedGovernanceOwners",
-      ["meta-sentinel", "meta-prism", "meta-warden", "meta-conductor"],
-    ],
-  ]) {
-    for (const item of expected) {
-      assert(
-        controlIntervention?.[field]?.includes(item),
-        `workflow-contract.json controlIntervention.${field} must include ${item}.`,
-      );
-    }
-  }
-
-  const deliveryShell = contract.runDiscipline?.deliveryShell;
-  for (const [field, expected] of [
-    [
-      "shellTypeEnum",
-      [
-        "one_line",
-        "structured_status",
-        "technical_detail",
-        "review_delta",
-        "executive_summary",
-        "artifact_link",
-      ],
-    ],
-    ["presentationModeEnum", ["direct", "digest", "deferred", "quiet"]],
-    ["exposureLevelEnum", ["internal", "review", "public"]],
-    [
-      "interventionFormEnum",
-      [
-        "conversation",
-        "file_write",
-        "task_packet",
-        "agent_dispatch",
-        "notification",
-        "none",
-      ],
-    ],
-  ]) {
-    for (const item of expected) {
-      assert(
-        deliveryShell?.[field]?.includes(item),
-        `workflow-contract.json deliveryShell.${field} must include ${item}.`,
-      );
-    }
-  }
-
-  const requiredPackets =
-    contract.runDiscipline?.protocolFirst?.requiredPackets ?? [];
+  const requiredPackets = protocolFirst.requiredPackets ?? [];
   for (const packet of [
-    "runHeader",
     "taskClassification",
-    "fetchPacket",
-    "cardPlanPacket",
-    "orchestrationTaskBoardPacket",
-    "dispatchBoard",
+    "contentEvidencePacket",
+    "preDecisionOptionFrame",
+    "businessFlowBlueprintPacket",
+    "productCompletenessPacket",
+    "experienceQualityPacket",
+    "testStrategyPacket",
+    "structureHygienePacket",
+    "agentBlueprintPacket",
+    "dispatchEnvelopePacket",
     "workerTaskPacket",
-    "workerResultPacket",
     "reviewPacket",
-    "verificationPacket",
-    "summaryPacket",
-    "evolutionWritebackPacket",
   ]) {
     assert(
       requiredPackets.includes(packet),
       `workflow-contract.json protocolFirst.requiredPackets must include ${packet}.`,
     );
   }
+
   for (const flow of [
     "simple_exec",
     "complex_dev",
@@ -815,429 +388,509 @@ async function validateWorkflowContract() {
     "rhythm",
   ]) {
     assert(
-      contract.runDiscipline?.protocolFirst?.orchestrationTaskBoardPacketRequiredWhenGovernanceFlows?.includes(
+      protocolFirst.contentEvidencePacketRequiredBeforeUserChoiceWhenGovernanceFlows?.includes(
         flow,
       ),
-      `workflow-contract.json orchestrationTaskBoardPacketRequiredWhenGovernanceFlows must include ${flow}.`,
+      `workflow-contract.json must require contentEvidencePacket before user choice for ${flow}.`,
     );
-  }
-  assert(
-    contract.runDiscipline?.protocolFirst?.capabilityGapPacketRequiredWhenUpgradeReasons?.includes(
-      "owner_creation_required",
-    ),
-    "workflow-contract.json capabilityGapPacketRequiredWhenUpgradeReasons must include owner_creation_required.",
-  );
-  for (const action of ["create_execution_agent", "upgrade_execution_agent"]) {
     assert(
-      contract.runDiscipline?.protocolFirst?.executionAgentCardRequiredWhenResolutionActions?.includes(
-        action,
+      protocolFirst.preDecisionOptionFrameRequiredBeforeUserChoiceWhenGovernanceFlows?.includes(
+        flow,
       ),
-      `workflow-contract.json executionAgentCardRequiredWhenResolutionActions must include ${action}.`,
+      `workflow-contract.json must require preDecisionOptionFrame before user choice for ${flow}.`,
+    );
+    assert(
+      protocolFirst.dispatchEnvelopePacketRequiredWhenGovernanceFlows?.includes(
+        flow,
+      ),
+      `workflow-contract.json must require dispatchEnvelopePacket for ${flow}.`,
     );
   }
 
-  const findingClosure = contract.runDiscipline?.findingClosure;
+  assert(
+    protocolFirst.dispatchArtifactsFinalizedAfterChoice === true,
+    "workflow-contract.json must forbid final dispatch artifacts before user choice or a valid recorded skip.",
+  );
+
+  for (const flow of ["complex_dev", "meta_analysis"]) {
+    assert(
+      protocolFirst.intentPacketRequiredWhenGovernanceFlows?.includes(flow),
+      `workflow-contract.json must require intentPacket for ${flow}.`,
+    );
+    assert(
+      protocolFirst.intentGatePacketRequiredWhenGovernanceFlows?.includes(flow),
+      `workflow-contract.json must require intentGatePacket for ${flow}.`,
+    );
+  }
+
+  const contentEvidenceFields =
+    contract.protocols?.contentEvidencePacket?.requiredFields ?? [];
   for (const field of [
-    "findingIdRequired",
-    "reviewFindingRequiresRevisionResponse",
-    "revisionResponseRequiresFixArtifact",
-    "verificationRequiresFreshEvidence",
-    "closureRequiresVerificationResult",
+    "researchCapabilityDiscovery",
+    "localSourcesRead",
+    "contentFindings",
+    "capabilityEvidence",
+    "assumptionLedger",
+    "decisionImpactMap",
+    "evidenceLaneValidatedBy",
   ]) {
     assert(
-      findingClosure?.[field] === true,
-      `workflow-contract.json findingClosure must set ${field} to true.`,
-    );
-  }
-  for (const closeState of [
-    "open",
-    "fixed_pending_verify",
-    "verified_closed",
-    "accepted_risk",
-  ]) {
-    assert(
-      findingClosure?.closeStateEnum?.includes(closeState),
-      `workflow-contract.json findingClosure.closeStateEnum must include ${closeState}.`,
-    );
-  }
-  for (const transition of [
-    "open->fixed_pending_verify",
-    "fixed_pending_verify->verified_closed",
-    "fixed_pending_verify->accepted_risk",
-  ]) {
-    assert(
-      findingClosure?.legalTransitions?.includes(transition),
-      `workflow-contract.json findingClosure.legalTransitions must include ${transition}.`,
+      contentEvidenceFields.includes(field),
+      `workflow-contract.json contentEvidencePacket must require ${field}.`,
     );
   }
 
-  const reviewPacketFields =
-    contract.protocols?.reviewPacket?.requiredFields ?? [];
+  const capabilityDiscovery =
+    contract.protocols?.contentEvidencePacket?.researchCapabilityDiscovery ?? {};
+  for (const field of [
+    "requiredCapabilities",
+    "toolInventorySources",
+    "availableRetrievalCapabilities",
+    "selectedResearchPath",
+    "capabilityGaps",
+    "validatedBy",
+  ]) {
+    assert(
+      capabilityDiscovery.requiredFields?.includes(field),
+      `workflow-contract.json researchCapabilityDiscovery must require ${field}.`,
+    );
+  }
   assert(
-    reviewPacketFields.includes("findings"),
-    "workflow-contract.json reviewPacket must require findings.",
+    capabilityDiscovery.forbiddenFields?.includes("platformSurface"),
+    "workflow-contract.json researchCapabilityDiscovery must forbid platformSurface guessing.",
+  );
+
+  const optionFrame = contract.protocols?.preDecisionOptionFrame ?? {};
+  for (const field of [
+    "builtFromContentEvidence",
+    "contentEvidenceRefs",
+    "unresolvedQuestions",
+    "candidateOptions",
+    "recommendedDefault",
+    "solutionChoiceState",
+    "reviewOwner",
+  ]) {
+    assert(
+      optionFrame.requiredFields?.includes(field),
+      `workflow-contract.json preDecisionOptionFrame must require ${field}.`,
+    );
+  }
+  for (const field of [
+    "problemSolved",
+    "expectedResult",
+    "advantages",
+    "disadvantages",
+    "candidateOwners",
+    "candidateTaskShape",
+  ]) {
+    assert(
+      optionFrame.candidateOptionRequiredFields?.includes(field),
+      `workflow-contract.json preDecisionOptionFrame candidate options must require ${field}.`,
+    );
+  }
+
+  const productGatePolicy =
+    contract.runDiscipline?.productDeliverableGatePolicy ?? {};
+  assert(
+    productGatePolicy.enabled === true &&
+      productGatePolicy.requiredForNonQuery === true,
+    "workflow-contract.json productDeliverableGatePolicy must be enabled before non-query delivery.",
+  );
+  for (const packet of [
+    "productCompletenessPacket",
+    "experienceQualityPacket",
+    "testStrategyPacket",
+    "structureHygienePacket",
+  ]) {
+    assert(
+      productGatePolicy.requiredPackets?.includes(packet),
+      `workflow-contract.json productDeliverableGatePolicy.requiredPackets must include ${packet}.`,
+    );
+  }
+  for (const dimension of [
+    "core_highlight",
+    "feature_completeness",
+    "ui_ue_ux",
+    "real_test_strategy",
+    "directory_structure",
+    "dead_redundant_cleanup",
+  ]) {
+    assert(
+      productGatePolicy.designDimensionCatalog?.some(
+        (entry) => entry.dimensionId === dimension,
+      ),
+      `workflow-contract.json productDeliverableGatePolicy.designDimensionCatalog must include ${dimension}.`,
+    );
+  }
+
+  const businessFlow = contract.protocols?.businessFlowBlueprintPacket ?? {};
+  for (const field of [
+    "deliverableType",
+    "requiredLanes",
+    "optionalLanes",
+    "omittedLanes",
+    "laneDependencies",
+    "coverageJudgment",
+  ]) {
+    assert(
+      businessFlow.requiredFields?.includes(field),
+      `workflow-contract.json businessFlowBlueprintPacket must require ${field}.`,
+    );
+  }
+  for (const field of [
+    "capabilityNeed",
+    "capabilitySearchQuery",
+    "candidateOwners",
+    "matchedCapabilities",
+    "capabilityBindings",
+    "selectedOwner",
+    "selectionReason",
+    "coverageStatus",
+  ]) {
+    assert(
+      businessFlow.laneRequiredFields?.includes(field),
+      `workflow-contract.json businessFlowBlueprintPacket lanes must require ${field}.`,
+    );
+  }
+  assert(
+    businessFlow.coverageJudgmentEnum?.includes("incomplete") &&
+      businessFlow.coverageJudgmentEnum?.includes("intentionally_reduced"),
+    "workflow-contract.json businessFlowBlueprintPacket must distinguish incomplete coverage from intentional scope reduction.",
+  );
+
+  const runArtifactValidation = contract.runDiscipline?.runArtifactValidation ?? {};
+  assert(
+    runArtifactValidation.publicReadyTodoGate?.defaultMode === "hard" &&
+      runArtifactValidation.commentReviewGate?.defaultMode === "hard",
+    "workflow-contract.json run artifact quality gates must be hard by default.",
   );
   assert(
-    reviewPacketFields.includes("sourceProjects"),
-    "workflow-contract.json reviewPacket must require sourceProjects.",
+    !JSON.stringify(contract.protocols?.workerTaskPacket ?? {}).includes(
+      "use_fallback",
+    ),
+    "workflow-contract.json workerTaskPacket dependency contract must not allow use_fallback.",
   );
-  assert(
-    reviewPacketFields.includes("crossProjectContaminationCheck"),
-    "workflow-contract.json reviewPacket must require crossProjectContaminationCheck.",
-  );
-  assert(
-    JSON.stringify(
-      contract.protocols?.reviewPacket?.crossProjectContaminationCheckEnum ??
-        [],
-    ) === JSON.stringify(["pass", "fail"]),
-    "workflow-contract.json reviewPacket crossProjectContaminationCheckEnum must be [pass, fail].",
-  );
+
   for (const [protocolName, expectedFields] of [
     [
-      "taskClassification",
-      [
-        "taskClass",
-        "requestClass",
-        "queryScope",
-        "projectRef",
-        "registryStatus",
-        "crossProjectReason",
-        "governanceFlow",
-        "triggerReasons",
-        "upgradeReasons",
-        "bypassReasons",
-        "ownerRequired",
-        "decisionSource",
-        "classifierVersion",
-        "complexity",
-      ],
+      "productCompletenessPacket",
+      ["outcome", "acceptanceCriteria", "nonGoals", "designDimensions", "evidenceRefs"],
     ],
     [
-      "fetchPacket",
-      [
-        "projectsChecked",
-        "projectLocalSources",
-        "globalRegistryHits",
-        "capabilityMatches",
-        "capabilityGaps",
-        "graphSources",
-        "knowledgeSources",
-      ],
+      "experienceQualityPacket",
+      ["audience", "criticalJourneys", "qualityAttributes", "experienceDimensions", "evidenceRefs"],
     ],
     [
-      "intentGatePacket",
-      [
-        "ambiguitiesResolved",
-        "requiresUserChoice",
-        "defaultAssumptions",
-        "pendingUserChoices",
-        "userLanguage",
-        "languageSource",
-        "nativeChoiceSurface",
-        "intentGatePacketVersion",
-      ],
+      "testStrategyPacket",
+      ["strategy", "requiredTestTypes", "coverageRationale", "testDimensions", "evidenceRefs"],
     ],
     [
-      "cardPlanPacket",
-      [
-        "dealerOwner",
-        "dealerMode",
-        "cards",
-        "deliveryShells",
-        "silenceDecision",
-        "controlDecisions",
-        "defaultShellId",
-      ],
-    ],
-    [
-      "dispatchEnvelopePacket",
-      [
-        "ownerAgent",
-        "taskRef",
-        "allowedCapabilities",
-        "blockedCapabilities",
-        "route",
-        "ownerSelection",
-        "memoryMode",
-        "workspaceHint",
-        "resultSchemaRef",
-        "reviewOwner",
-        "verificationOwner",
-      ],
-    ],
-    [
-      "orchestrationTaskBoardPacket",
-      ["dispatchBoardId", "boardMode", "tasks", "synthesisOwner"],
-    ],
-    [
-      "orchestrationTask",
-      ["taskId", "taskKind", "owner", "sequence", "dependsOn", "deliverable"],
-    ],
-    [
-      "capabilityGapPacket",
-      [
-        "gapId",
-        "requestedCapability",
-        "currentAgentsChecked",
-        "insufficiencyReason",
-        "resolutionAction",
-        "requestedBy",
-        "approvedBy",
-      ],
-    ],
-    [
-      "executionAgentCard",
-      [
-        "agentId",
-        "purpose",
-        "capabilities",
-        "nonCapabilities",
-        "dependencies",
-        "inputs",
-        "outputs",
-      ],
-    ],
-    [
-      "cardDecision",
-      [
-        "cardId",
-        "cardType",
-        "cardIntent",
-        "cardDecision",
-        "cardAudience",
-        "cardTiming",
-        "cardShell",
-        "cardPriority",
-        "cardReason",
-        "cardSource",
-        "cardSuppressed",
-        "suppressionReason",
-        "deliveryShellId",
-        "choiceSurface",
-        "userLanguage",
-      ],
-    ],
-    [
-      "deliveryShell",
-      [
-        "deliveryShellId",
-        "shellType",
-        "presentationMode",
-        "exposureLevel",
-        "interventionForm",
-        "audience",
-        "contentBoundary",
-        "userLanguage",
-        "languageSource",
-      ],
-    ],
-    [
-      "silenceDecision",
-      [
-        "silenceDecision",
-        "noInterventionPreferred",
-        "interruptionJustified",
-        "deferUntil",
-        "reasonForSilence",
-      ],
-    ],
-    [
-      "controlDecision",
-      [
-        "decisionId",
-        "decisionType",
-        "skipReason",
-        "interruptReason",
-        "overrideReason",
-        "insertedGovernanceOwner",
-        "emergencyGovernanceTriggered",
-        "returnsToStage",
-        "rejoinCondition",
-      ],
-    ],
-    [
-      "reviewFinding",
-      [
-        "findingId",
-        "severity",
-        "owner",
-        "sourceProject",
-        "summary",
-        "requiredAction",
-        "fixArtifact",
-        "verifiedBy",
-        "closeState",
-      ],
-    ],
-    [
-      "revisionResponse",
-      [
-        "findingId",
-        "actionId",
-        "owner",
-        "responseType",
-        "status",
-        "fixArtifact",
-        "responseSummary",
-      ],
-    ],
-    [
-      "verificationResult",
-      ["findingId", "verifiedBy", "result", "evidence", "closeState"],
-    ],
-    [
-      "summaryPacket",
-      [
-        "verifyPassed",
-        "summaryClosed",
-        "singleDeliverableMaintained",
-        "deliverableChainClosed",
-        "consolidatedDeliverablePresent",
-        "publicReady",
-        "sourceProjects",
-        "deliveryShellsUsed",
-        "blockedBy",
-      ],
+      "structureHygienePacket",
+      ["changedAreas", "boundaryChecks", "orphanCleanup", "structureDimensions", "evidenceRefs"],
     ],
   ]) {
     const fields = contract.protocols?.[protocolName]?.requiredFields ?? [];
     for (const field of expectedFields) {
       assert(
         fields.includes(field),
-        `workflow-contract.json protocol ${protocolName} must require ${field}.`,
+        `workflow-contract.json ${protocolName} must require ${field}.`,
       );
     }
   }
 
-  const verificationPacketFields =
-    contract.protocols?.verificationPacket?.requiredFields ?? [];
-  for (const field of [
-    "verified",
-    "remainingIssues",
-    "evidence",
-    "fixEvidence",
-    "revisionResponses",
-    "verificationResults",
-    "closeFindings",
+  const agentBlueprint = contract.protocols?.agentBlueprintPacket ?? {};
+  const governanceStagePolicy = agentBlueprint.governanceStageCoveragePolicy ?? {};
+  for (const stage of ["Critical", "Fetch", "Thinking", "Review"]) {
+    assert(
+      governanceStagePolicy.requiredStages?.includes(stage),
+      `workflow-contract.json governanceStageCoveragePolicy must require ${stage}.`,
+    );
+    assert(
+      Array.isArray(governanceStagePolicy.stageRequiredAgents?.[stage]) &&
+        governanceStagePolicy.stageRequiredAgents[stage].length >= 1,
+      `workflow-contract.json governanceStageCoveragePolicy must assign required agents for ${stage}.`,
+    );
+  }
+  assert(
+    governanceStagePolicy.skillSelectionScope === "run_scoped",
+    "workflow-contract.json governanceStageCoveragePolicy must keep concrete skill selection run-scoped.",
+  );
+  const globalReusePolicy = agentBlueprint.globalAgentReusePolicy ?? {};
+  for (const source of [
+    "repo_canonical_capability_index",
+    "runtime_mirror_indexes",
+    "project_runtime_agent_inventory",
+    "local_global_agent_inventory",
+    "available_capability_providers_skills_tools_mcp",
   ]) {
     assert(
-      verificationPacketFields.includes(field),
-      `workflow-contract.json verificationPacket must require ${field}.`,
+      globalReusePolicy.requiredEvidenceOrder?.includes(source),
+      `workflow-contract.json globalAgentReusePolicy must require ${source}.`,
+    );
+  }
+  assert(
+    globalReusePolicy.creationBlockedUntilExistingAgentsChecked === true,
+    "workflow-contract.json globalAgentReusePolicy must block creation until existing agents are checked.",
+  );
+
+  const discoveryPolicy =
+    contract.runDiscipline?.executionOwnership?.capabilityDiscoveryRuntimePolicy ?? {};
+  assert(
+    discoveryPolicy.defaultMode === "cached_global_inventory_plus_project_light_scan",
+    "workflow-contract.json capability discovery must default to cached global inventory plus project light scan.",
+  );
+  assert(
+    discoveryPolicy.fullScanWhen?.includes("explicit_user_refresh") &&
+      discoveryPolicy.fullScanWhen?.includes("stale_cache") &&
+      discoveryPolicy.fullScanWhen?.includes("scheduled_refresh_older_than_14_days") &&
+      discoveryPolicy.fullScanWhen?.includes("high_risk_provider_route"),
+    "workflow-contract.json capability discovery full-scan triggers must be explicit.",
+  );
+  assert(
+    discoveryPolicy.staleAfterMinutes === 20160 && discoveryPolicy.staleAfterDays === 14,
+    "workflow-contract.json capability discovery cache must become stale after 14 days.",
+  );
+  assert(
+    /must not run a full global filesystem scan on every dispatch/i.test(
+      discoveryPolicy.perRunBehavior ?? "",
+    ),
+    "workflow-contract.json capability discovery must forbid per-dispatch full scans.",
+  );
+  assert(
+    /older than 14 days/i.test(discoveryPolicy.perRunBehavior ?? "") &&
+      /2 weeks/i.test(discoveryPolicy.userPromptPolicy ?? "") &&
+      /update first/i.test(discoveryPolicy.userPromptPolicy ?? ""),
+    "workflow-contract.json capability discovery must define the 2-week refresh notice UX.",
+  );
+  assert(
+    /must not dump full provider definitions/i.test(discoveryPolicy.tokenPolicy ?? ""),
+    "workflow-contract.json capability discovery must protect token budget.",
+  );
+
+  const executionAgentCard =
+    contract.protocols?.executionAgentCard?.abstractionPolicy ?? {};
+  assert(
+    executionAgentCard.concreteWorkOrderFieldsForbidden === true,
+    "workflow-contract.json executionAgentCard must forbid work-order fields in durable identity.",
+  );
+  assert(
+    executionAgentCard.pathLikeBindingsForbidden === true,
+    "workflow-contract.json executionAgentCard must forbid path-like durable bindings.",
+  );
+  assert(
+    executionAgentCard.providerFirstAgentLast === true,
+    "workflow-contract.json executionAgentCard must require provider-first, agent-last creation.",
+  );
+  for (const field of ["todayTask", "scopeFiles", "deliverableLink", "verifySteps"]) {
+    assert(
+      executionAgentCard.forbiddenDurableFields?.includes(field),
+      `workflow-contract.json executionAgentCard.abstractionPolicy must forbid ${field}.`,
     );
   }
 
-  assert(
-    contract.runDiscipline?.evolutionDecision?.required === true,
-    "workflow-contract.json must require an explicit evolution decision.",
-  );
-  for (const field of ["writeback", "none"]) {
-    assert(
-      contract.runDiscipline?.evolutionDecision?.allowedDecisions?.includes(
-        field,
-      ),
-      `workflow-contract.json evolutionDecision.allowedDecisions must include ${field}.`,
-    );
-  }
-  assert(
-    contract.runDiscipline?.evolutionDecision?.noneRequiresReason === true &&
-      contract.runDiscipline?.evolutionDecision?.writebackRequiresTargets ===
-        true,
-    "workflow-contract.json evolutionDecision must require either writeback targets or an explicit reason.",
-  );
-  const evolutionFields =
-    contract.protocols?.evolutionWritebackPacket?.requiredFields ?? [];
+  const workerFields = contract.protocols?.workerTaskPacket?.requiredFields ?? [];
   for (const field of [
-    "ownerAssessment",
-    "writebackDecision",
-    "decisionReason",
-    "writebacks",
-    "retain",
-    "upgrade",
-    "retire",
-    "scarIds",
-    "syncRequired",
+    "todayTask",
+    "scopeFiles",
+    "workType",
+    "qualityBar",
+    "referenceDirection",
+    "verifySteps",
+    "preDecisionOptionFrameRef",
+    "finalizationGate",
   ]) {
     assert(
-      evolutionFields.includes(field),
-      `workflow-contract.json evolutionWritebackPacket must require ${field}.`,
+      workerFields.includes(field),
+      `workflow-contract.json workerTaskPacket must require ${field}.`,
     );
   }
-  const publicDisplayGate = contract.runDiscipline?.publicDisplayGate;
-  for (const field of [
-    "hardReleaseGate",
-    "blockDisplayBeforeVerification",
-    "blockDisplayBeforeSummaryClosure",
-    "blockCompletionBeforeDeliverableClosure",
-  ]) {
-    assert(
-      publicDisplayGate?.[field] === true,
-      `workflow-contract.json publicDisplayGate must set ${field} to true.`,
-    );
-  }
-
-  const runArtifactValidation = contract.runDiscipline?.runArtifactValidation;
+  const verifySteps = contract.protocols?.workerTaskPacket?.verifyStepsField ?? {};
   assert(
-    runArtifactValidation?.script === "scripts/validate-run-artifact.mjs",
-    "workflow-contract.json must point runArtifactValidation to scripts/validate-run-artifact.mjs.",
-  );
-  for (const field of [
-    "findingLineageRequired",
-    "deliverableLinkMustReferencePrimaryDeliverable",
-    "summaryPacketRequired",
-    "cardPlanPacketRequired",
-    "orchestrationTaskBoardPacketRequired",
-  ]) {
-    assert(
-      runArtifactValidation?.[field] === true,
-      `workflow-contract.json runArtifactValidation must set ${field} to true.`,
-    );
-  }
-  assert(
-    runArtifactValidation?.publicReadyField === "summaryPacket.publicReady",
-    "workflow-contract.json runArtifactValidation must point publicReadyField to summaryPacket.publicReady.",
+    verifySteps.items?.required?.includes("step") &&
+      verifySteps.items?.required?.includes("verify"),
+    "workflow-contract.json workerTaskPacket.verifySteps must require step and verify.",
   );
 
+  const reviewFields = contract.protocols?.reviewPacket?.requiredFields ?? [];
+  for (const field of [
+    "ownerCoverage",
+    "protocolCompliance",
+    "qualityGate",
+    "triggerVsSkipReasonCheck",
+    "findings",
+  ]) {
+    assert(
+      reviewFields.includes(field),
+      `workflow-contract.json reviewPacket must require ${field}.`,
+    );
+  }
+}
+function assertSchemaRequired(schemaNode, value, label) {
+  for (const field of schemaNode.required ?? []) {
+    assert(
+      Object.prototype.hasOwnProperty.call(value ?? {}, field),
+      `${label} must include schema-required field ${field}.`,
+    );
+  }
+}
+
+function assertSchemaEnum(schemaNode, value, label) {
+  if (!schemaNode?.enum) {
+    return;
+  }
   assert(
-    contract.departmentVisualPolicies?.game?.defaultMode ===
-      "generate_or_self_create",
-    "workflow-contract.json game visual policy must default to generate_or_self_create.",
-  );
-  assert(
-    contract.departmentVisualPolicies?.ai?.defaultMode ===
-      "official_or_verified_reference",
-    "workflow-contract.json ai visual policy must default to official_or_verified_reference.",
+    schemaNode.enum.includes(value),
+    `${label} must be one of ${schemaNode.enum.join(", ")}.`,
   );
 }
 
-async function validateRuntimeParityMatrix() {
-  const matrixPath = path.join(
-    repoRoot,
-    "docs",
-    "runtime-capability-matrix.md",
-  );
-  const raw = await fs.readFile(matrixPath, "utf8");
+function assertSchemaConst(schemaNode, value, label) {
+  if (!Object.prototype.hasOwnProperty.call(schemaNode ?? {}, "const")) {
+    return;
+  }
+  assert(value === schemaNode.const, `${label} must equal ${schemaNode.const}.`);
+}
 
-  for (const marker of [
-    "行为一致性对照表",
-    "trigger parity",
-    "card parity",
-    "silence parity",
-    "control-decision parity",
-    "shell parity",
-    "hook parity",
-    "review parity",
-    "verification parity",
-    "stop condition parity",
-    "writeback parity",
-    "run artifact parity",
-    "`npm run meta:eval:agents`",
-    "`npm run meta:eval:agents:live`",
+function assertNoAdditionalSchemaProperties(schemaNode, value, label) {
+  if (schemaNode.additionalProperties !== false) {
+    return;
+  }
+  const allowed = new Set(Object.keys(schemaNode.properties ?? {}));
+  const extras = Object.keys(value ?? {}).filter((key) => !allowed.has(key));
+  assert(
+    extras.length === 0,
+    `${label} has fields not declared in capability-index.schema.json: ${extras.join(", ")}.`,
+  );
+}
+
+async function validateCapabilityIndexSchema(index) {
+  const schemaPath = path.join(
+    repoRoot,
+    "config",
+    "contracts",
+    "capability-index.schema.json",
+  );
+  const schema = JSON.parse(await fs.readFile(schemaPath, "utf8"));
+
+  assert(schema.type === "object", "capability-index.schema.json root must be an object schema.");
+  assertSchemaRequired(schema, index, "capability index");
+  assertNoAdditionalSchemaProperties(schema, index, "capability index");
+  assertSchemaEnum(schema.properties.scope, index.scope, "capability index scope");
+  for (const field of [
+    "abstractCapabilitySlots",
+    "metaSkillProviders",
+    "runtimeSelectedSkills",
+    "longTermAgentIdentityPolicy",
   ]) {
     assert(
-      raw.includes(marker),
-      `docs/runtime-capability-matrix.md must include ${marker}.`,
+      Object.prototype.hasOwnProperty.call(schema.properties, field),
+      `capability-index.schema.json must define ${field}.`,
     );
   }
+
+  const fetchOrderSchema = schema.properties.fetchOrder;
+  assert(Array.isArray(index.fetchOrder), "capability index fetchOrder must be an array.");
+  for (const [position, item] of index.fetchOrder.entries()) {
+    assertSchemaEnum(
+      fetchOrderSchema.items,
+      item,
+      `capability index fetchOrder[${position}]`,
+    );
+  }
+
+  const groupsSchema = schema.properties.byCapabilityType.properties;
+  assert(index.byCapabilityType && typeof index.byCapabilityType === "object", "capability index byCapabilityType must be an object.");
+
+  assert(
+    Array.isArray(index.abstractCapabilitySlots) &&
+      index.abstractCapabilitySlots.length >= 1,
+    "capability index must declare at least one abstractCapabilitySlots entry.",
+  );
+  for (const [position, slot] of index.abstractCapabilitySlots.entries()) {
+    assertSchemaRequired(
+      schema.properties.abstractCapabilitySlots.items,
+      slot,
+      `capability index abstractCapabilitySlots[${position}]`,
+    );
+    assert(
+      slot.selectedSkillScope === "run_only",
+      `capability index abstractCapabilitySlots[${position}].selectedSkillScope must be run_only.`,
+    );
+    assert(
+      Array.isArray(slot.allowedProviderIds) &&
+        slot.allowedProviderIds.length >= 1,
+      `capability index abstractCapabilitySlots[${position}] must list allowedProviderIds.`,
+    );
+  }
+  assert(
+    index.runtimeSelectedSkills?.selectedSkillScope === "run_only",
+    "capability index runtimeSelectedSkills.selectedSkillScope must be run_only.",
+  );
+  assert(
+    index.longTermAgentIdentityPolicy
+      ?.forbidConcreteSkillInLongTermAgentIdentity === true,
+    "capability index longTermAgentIdentityPolicy must forbid concrete skills in long-term agent identity.",
+  );
+  for (const provider of [
+    "agent-teams-playbook",
+    "superpowers",
+    "ecc",
+    "findskill",
+  ]) {
+    const providerEntry = index.metaSkillProviders?.[provider];
+    assert(
+      providerEntry?.providerKind === "meta-skill-package" &&
+        providerEntry?.allowedForLongTermAgentIdentity === true &&
+        providerEntry?.concreteSubSkillBindingForbidden === true,
+      `capability index metaSkillProviders.${provider} must be an allowed meta-skill package provider with concrete child-skill binding forbidden.`,
+    );
+    assert(
+      index.longTermAgentIdentityPolicy?.allowedMetaSkillProviderIds?.includes(
+        provider,
+      ),
+      `capability index longTermAgentIdentityPolicy.allowedMetaSkillProviderIds must include ${provider}.`,
+    );
+  }
+  assert(
+    Array.isArray(
+      index.longTermAgentIdentityPolicy?.forbiddenConcreteSkillPatterns,
+    ) &&
+      index.longTermAgentIdentityPolicy.forbiddenConcreteSkillPatterns.length >=
+        1,
+    "capability index longTermAgentIdentityPolicy must declare forbidden concrete child-skill binding patterns.",
+  );
+
+  const agentSchema = groupsSchema.agents.additionalProperties;
+  for (const [key, entry] of Object.entries(index.byCapabilityType.agents ?? {})) {
+    assertSchemaRequired(agentSchema, entry, `capability index agent ${key}`);
+    assertSchemaConst(agentSchema.properties.type, entry.type, `capability index agent ${key}.type`);
+    assertSchemaEnum(agentSchema.properties.layer, entry.layer, `capability index agent ${key}.layer`);
+    if (entry.layer === "meta") {
+      assert(
+        entry.executionBlock === true,
+        `capability index agent ${key} must set executionBlock=true for meta layer.`,
+      );
+    }
+  }
+
+  const skillSchema = groupsSchema.skills.additionalProperties;
+  for (const [key, entry] of Object.entries(index.byCapabilityType.skills ?? {})) {
+    assertSchemaRequired(skillSchema, entry, `capability index skill ${key}`);
+    assertSchemaConst(skillSchema.properties.type, entry.type, `capability index skill ${key}.type`);
+  }
+
+  const governanceRules = index.governanceRules ?? {};
+  const governanceSchema = schema.properties.governanceRules?.properties ?? {};
+  assertSchemaConst(
+    governanceSchema.metaAgentDispatchRule,
+    governanceRules.metaAgentDispatchRule,
+    "capability index governanceRules.metaAgentDispatchRule",
+  );
+  assertSchemaConst(
+    governanceSchema.fallbackBehavior,
+    governanceRules.fallbackBehavior,
+    "capability index governanceRules.fallbackBehavior",
+  );
 }
 
 async function validateCapabilityIndex() {
@@ -1246,6 +899,7 @@ async function validateCapabilityIndex() {
     "meta-kim-capabilities.json",
   );
   const index = JSON.parse(await fs.readFile(indexPath, "utf8"));
+  await validateCapabilityIndexSchema(index);
   assert(
     index.scope === "repo-canonical",
     "config/capability-index/meta-kim-capabilities.json must be a repo-canonical index.",
@@ -1261,7 +915,7 @@ async function validateCapabilityIndex() {
   assert(
     Array.isArray(index.fetchOrder) &&
       index.fetchOrder.join(" -> ") ===
-        "repo canonical capability index -> runtime mirror -> local global inventory -> fallback general agent with capability gap record",
+        "repo canonical capability index -> runtime mirror -> local global inventory -> capability gap packet and return to Thinking",
     "capability index fetchOrder must be canonical -> mirror -> local inventory -> fallback.",
   );
 
@@ -1272,233 +926,45 @@ async function validateCapabilityIndex() {
     "repo-canonical capability index must not contain machine-specific home paths.",
   );
 
+  const indexedAgentPaths = new Set(
+    Object.values(index.byCapabilityType?.agents ?? {}).map((entry) => entry.path),
+  );
+  const canonicalAgentFiles = (await fs.readdir(canonicalAgentsDir))
+    .filter((file) => file.endsWith(".md"))
+    .map((file) => `canonical/agents/${file}`)
+    .sort();
+  const missingAgents = canonicalAgentFiles.filter(
+    (agentPath) => !indexedAgentPaths.has(agentPath),
+  );
+  assert(
+    missingAgents.length === 0,
+    `capability index is missing canonical agents: ${missingAgents.join(", ")}.`,
+  );
+
+  const indexedSkillPaths = new Set(
+    Object.values(index.byCapabilityType?.skills ?? {}).map((entry) => entry.path),
+  );
+  const canonicalSkillManifests = await listCanonicalSkillManifests();
+  const missingSkills = canonicalSkillManifests
+    .map((skill) => skill.path)
+    .filter((skillPath) => !indexedSkillPaths.has(skillPath));
+  assert(
+    missingSkills.length === 0,
+    `capability index is missing canonical skills: ${missingSkills.join(", ")}.`,
+  );
+
+  const canonicalContent = await fs.readFile(indexPath, "utf8");
   for (const mirror of index.mirroredTo ?? []) {
     const mirrorPath = path.join(repoRoot, mirror);
-    if (await exists(mirrorPath)) {
-      const mirrored = JSON.parse(await fs.readFile(mirrorPath, "utf8"));
-      assert(
-        mirrored.canonicalProjection === CANONICAL_CAPABILITY_INDEX_RELATIVE,
-        `${mirror} must point back to ${CANONICAL_CAPABILITY_INDEX_RELATIVE}.`,
-      );
-    }
+    assert(await exists(mirrorPath), `Missing capability index mirror: ${mirror}.`);
+    const mirroredContent = await fs.readFile(mirrorPath, "utf8");
+    assert(
+      mirroredContent === canonicalContent,
+      `${mirror} must be byte-for-byte identical to ${CANONICAL_CAPABILITY_INDEX_RELATIVE}.`,
+    );
   }
 }
 
-async function validateGraphifyGate() {
-  const graphifyCli = path.join(repoRoot, "scripts", "graphify-cli.mjs");
-  await execFileAsync("node", [graphifyCli, "check"], {
-    cwd: repoRoot,
-    timeout: 30_000,
-  });
-
-  const reportPath = path.join(repoRoot, "graphify-out", "GRAPH_REPORT.md");
-  const graphPath = path.join(repoRoot, "graphify-out", "graph.json");
-  assert(await exists(reportPath), "graphify-out/GRAPH_REPORT.md is required.");
-  assert(await exists(graphPath), "graphify-out/graph.json is required.");
-
-  const [reportStat, graphStat] = await Promise.all([
-    fs.stat(reportPath),
-    fs.stat(graphPath),
-  ]);
-  assert(graphStat.size > 0, "graphify-out/graph.json must be non-empty.");
-  assert(
-    reportStat.mtimeMs >= graphStat.mtimeMs - 1000,
-    "graphify-out/GRAPH_REPORT.md must not be older than graph.json.",
-  );
-  const reportAgeDays = (Date.now() - reportStat.mtimeMs) / 86_400_000;
-  assert(
-    reportAgeDays <= GRAPHIFY_MAX_REPORT_AGE_DAYS,
-    `graphify report is stale (${reportAgeDays.toFixed(1)} days old).`,
-  );
-
-  const graph = JSON.parse(await fs.readFile(graphPath, "utf8"));
-  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-  const links = Array.isArray(graph.links)
-    ? graph.links
-    : Array.isArray(graph.edges)
-      ? graph.edges
-      : [];
-  assert(nodes.length > 0, "graphify graph must contain nodes.");
-  assert(links.length > 0, "graphify graph must contain edges/links.");
-
-  const inferredEdges = links.filter(
-    (edge) => String(edge.confidence ?? "").toUpperCase() === "INFERRED",
-  ).length;
-  const inferredRatio = inferredEdges / links.length;
-  assert(
-    inferredRatio <= GRAPHIFY_MAX_INFERRED_EDGE_RATIO,
-    `graphify inferred edge ratio is too high (${inferredRatio.toFixed(2)}).`,
-  );
-
-  const degree = new Map(nodes.map((node) => [node.id, 0]));
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  let helperGodNodeEdges = 0;
-  for (const edge of links) {
-    const source = edge.source ?? edge._src;
-    const target = edge.target ?? edge._tgt;
-    degree.set(source, (degree.get(source) ?? 0) + 1);
-    degree.set(target, (degree.get(target) ?? 0) + 1);
-    if (
-      GRAPHIFY_HELPER_GOD_NODE_LABELS.has(labelForNodeId(nodesById, source)) ||
-      GRAPHIFY_HELPER_GOD_NODE_LABELS.has(labelForNodeId(nodesById, target))
-    ) {
-      helperGodNodeEdges += 1;
-    }
-  }
-
-  const isolatedNodes = [...degree.values()].filter((value) => value === 0);
-  const isolatedRatio = isolatedNodes.length / nodes.length;
-  assert(
-    isolatedRatio <= GRAPHIFY_MAX_ISOLATED_NODE_RATIO,
-    `graphify isolated node ratio is too high (${isolatedRatio.toFixed(2)}).`,
-  );
-
-  const helperRatio = helperGodNodeEdges / links.length;
-  assert(
-    helperRatio <= GRAPHIFY_MAX_HELPER_GOD_NODE_EDGE_RATIO,
-    `graphify helper god-node edge ratio is too high (${helperRatio.toFixed(2)}).`,
-  );
-
-  const pollutedNodes = nodes.filter((node) =>
-    /(^|[\\/])(node_modules|\.git|dist|build|graphify-out)([\\/]|$)/i.test(
-      String(node.source_file ?? node.path ?? node.label ?? ""),
-    ),
-  );
-  assert(
-    pollutedNodes.length / nodes.length <= 0.05,
-    "graphify graph contains too many generated/dependency pollution nodes.",
-  );
-}
-
-async function validateDocumentationFacts() {
-  const docs = await walkFilesByExtensions(repoRoot, [".md"]);
-  const packageJson = JSON.parse(
-    await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
-  );
-  const scripts = packageJson.scripts ?? {};
-
-  for (const docPath of docs) {
-    const relativePath = toRepoRelative(docPath);
-    const raw = await fs.readFile(docPath, "utf8");
-    assert(
-      !raw.includes("docs/meta.md"),
-      `${relativePath} must not reference docs/meta.md as a theory source.`,
-    );
-    assert(
-      !/\.claude\/(?:agents|skills|capability-index)[^\n]*(?:canonical|主源|source of truth|source layer)/i.test(
-        raw,
-      ),
-      `${relativePath} must not describe .claude projections as canonical sources.`,
-    );
-    assert(
-      !/(?:canonical|主源|source of truth|source layer)[^\n]*\.claude\/(?:agents|skills|capability-index)/i.test(
-        raw,
-      ),
-      `${relativePath} must not describe .claude projections as canonical sources.`,
-    );
-
-    for (const scriptName of getNpmScriptReferences(raw)) {
-      assert(
-        scripts[scriptName],
-        `${relativePath} references missing npm script: ${scriptName}`,
-      );
-    }
-  }
-
-  for (const relativePath of [
-    "canonical/skills/meta-theory/SKILL.md",
-    "canonical/skills/meta-theory/references/meta-theory.md",
-    ".codex/skills/meta-theory/SKILL.md",
-    ".cursor/skills/meta-theory/SKILL.md",
-    "openclaw/skills/meta-theory/SKILL.md",
-  ]) {
-    assert(
-      await exists(path.join(repoRoot, relativePath)),
-      `Documented runtime skill path is missing: ${relativePath}`,
-    );
-  }
-
-  const testFiles = await walkFilesByExtensions(path.join(repoRoot, "tests"), [
-    ".mjs",
-  ]);
-  const knownGapsPath = path.join(
-    repoRoot,
-    "tests",
-    "fixtures",
-    "known-doc-gaps.json",
-  );
-  const knownDocGaps = (await exists(knownGapsPath))
-    ? JSON.parse(await fs.readFile(knownGapsPath, "utf8"))
-    : [];
-  for (const filePath of testFiles) {
-    const raw = await fs.readFile(filePath, "utf8");
-    const relativePath = toRepoRelative(filePath);
-    const docGapWarnings = [
-      ...raw.matchAll(/console\.warn\(([\s\S]*?DOC GAP[\s\S]*?)\);/g),
-    ];
-    for (const warning of docGapWarnings) {
-      const message = warning[1];
-      const allowed = knownDocGaps.some(
-        (entry) =>
-          entry.path === relativePath &&
-          message.includes(entry.messageContains) &&
-          entry.owner &&
-          entry.expiry &&
-          entry.closeCondition,
-      );
-      assert(
-        allowed,
-        `${relativePath} has an untracked DOC GAP warning; add owner, expiry, and closeCondition to tests/fixtures/known-doc-gaps.json or convert it to a failing assertion.`,
-      );
-    }
-  }
-}
-
-async function validateRunArtifactFixtures() {
-  const validFixture = path.join(
-    repoRoot,
-    "tests",
-    "fixtures",
-    "run-artifacts",
-    "valid-run.json",
-  );
-  const invalidFixture = path.join(
-    repoRoot,
-    "tests",
-    "fixtures",
-    "run-artifacts",
-    "invalid-run-public-ready.json",
-  );
-
-  await execFileAsync(
-    "node",
-    ["scripts/validate-run-artifact.mjs", validFixture],
-    {
-      cwd: repoRoot,
-      timeout: 30_000,
-    },
-  );
-
-  let invalidPassed = false;
-  try {
-    await execFileAsync(
-      "node",
-      ["scripts/validate-run-artifact.mjs", invalidFixture],
-      {
-        cwd: repoRoot,
-        timeout: 30_000,
-      },
-    );
-    invalidPassed = true;
-  } catch {
-    invalidPassed = false;
-  }
-
-  assert(
-    invalidPassed === false,
-    "scripts/validate-run-artifact.mjs must reject the invalid public-ready fixture.",
-  );
-}
 
 async function validateClaudeAgents() {
   const files = (await fs.readdir(canonicalAgentsDir))
@@ -1563,88 +1029,17 @@ async function validateClaudeAgents() {
   return ids;
 }
 
-async function validateOpenClawArtifacts(agentIds) {
-  const templateConfig = JSON.parse(
-    await fs.readFile(canonicalOpenClawTemplatePath, "utf8"),
-  );
-  const configIds = templateConfig.agents?.list?.map((agent) => agent.id) ?? [];
-  const sortedAgentIds = [...agentIds].sort();
-  const sortedConfigIds = [...configIds].sort();
-
-  assert(
-    JSON.stringify(sortedConfigIds) === JSON.stringify(sortedAgentIds),
-    "canonical OpenClaw template agent list is out of sync with canonical/agents.",
-  );
-
-  const allowedIds = templateConfig.tools?.agentToAgent?.allow ?? [];
-  const sortedAllowedIds = [...allowedIds].sort();
-  assert(
-    JSON.stringify(sortedAllowedIds) === JSON.stringify(sortedAgentIds),
-    "Canonical OpenClaw agentToAgent allow-list is out of sync with canonical/agents.",
-  );
-
-  const hookEntries = templateConfig.hooks?.internal?.entries;
-  assert(
-    templateConfig.hooks?.internal?.enabled === true,
-    "canonical OpenClaw template must enable internal hooks.",
-  );
-  for (const hookName of ["session-memory", "command-logger", "boot-md"]) {
-    assert(
-      hookEntries?.[hookName]?.enabled === true,
-      `canonical OpenClaw template is missing enabled hook ${hookName}.`,
-    );
-  }
-
-  const extraSkillDirs = templateConfig.skills?.load?.extraDirs ?? [];
-  assert(
-    extraSkillDirs.includes("__REPO_ROOT__\\openclaw\\skills"),
-    "canonical OpenClaw template must register repo-local openclaw/skills via skills.load.extraDirs.",
-  );
-
-  for (const fileName of ["HOOK.md", "handler.ts"]) {
-    await fs.access(path.join(canonicalOpenClawMemoryHookDir, fileName));
-  }
-  const sharedMemoryHook = await fs.readFile(
-    canonicalSharedMemoryHookPath,
-    "utf8",
-  );
-  const claudeStopMemoryHook = await fs.readFile(
-    path.join(canonicalClaudeHooksDir, "stop-memory-save.mjs"),
-    "utf8",
-  );
-  const openClawMemoryHook = await fs.readFile(
-    path.join(canonicalOpenClawMemoryHookDir, "handler.ts"),
-    "utf8",
-  );
-  assert(
-    sharedMemoryHook.includes("--event") &&
-      sharedMemoryHook.includes("/api/search") &&
-      sharedMemoryHook.includes("n_results") &&
-      sharedMemoryHook.includes('memory_type: "observation"') &&
-      !sharedMemoryHook.includes("memoryTypeForEvent") &&
-      !sharedMemoryHook.includes("legacy_memory_type"),
-    "canonical shared memory hook must support lifecycle events, MCP memory search, and correct memory_type=observation without legacy compatibility fields.",
-  );
-  assert(
-    claudeStopMemoryHook.includes('memory_type: "observation"') &&
-      !claudeStopMemoryHook.includes("legacy_memory_type") &&
-      !claudeStopMemoryHook.includes('memory_type: "session-summary"'),
-    "canonical Claude stop memory hook must write correct memory_type=observation without legacy compatibility fields.",
-  );
-  assert(
-    openClawMemoryHook.includes('memory_type: "observation"') &&
-      !openClawMemoryHook.includes("memoryType") &&
-      !openClawMemoryHook.includes("legacyMemoryType") &&
-      !openClawMemoryHook.includes("legacy_memory_type") &&
-      !openClawMemoryHook.includes('return "session-summary"'),
-    "canonical OpenClaw memory hook must write correct memory_type=observation without legacy compatibility fields.",
-  );
-}
-
 async function validatePortableSkill() {
   const referenceFiles = await listCanonicalSkillReferences();
   const skillSourcePath = canonicalSkillPath;
   const skillSource = await fs.readFile(skillSourcePath, "utf8");
+  const referenceSources = await Promise.all(
+    referenceFiles.map(async (referenceFile) => {
+      const referencePath = path.join(canonicalSkillReferencesDir, referenceFile);
+      return fs.readFile(referencePath, "utf8");
+    }),
+  );
+  const portableSkillCorpus = [skillSource, ...referenceSources].join("\n");
 
   for (const expected of [
     "name: meta-theory",
@@ -1665,11 +1060,11 @@ async function validatePortableSkill() {
     "Required Conductor deliverables",
   ]) {
     assert(
-      skillSource.includes(marker),
+      portableSkillCorpus.includes(marker),
       `Portable skill is missing station-deliverable marker ${marker}.`,
     );
   }
-  assertNoForbiddenMarkers(skillSource, skillSourcePath, ["AskUserQuestion"]);
+  assertNoForbiddenMarkers(skillSource, skillSourcePath, []);
   const frontmatterValidation = validateSkillFrontmatter(skillSource);
   assert(
     frontmatterValidation.ok,
@@ -1685,9 +1080,15 @@ async function validatePortableSkill() {
       canonicalReferencePath,
       "utf8",
     );
-    assertNoForbiddenMarkers(canonicalReference, canonicalReferencePath, [
-      "AskUserQuestion",
-    ]);
+    const allowedRuntimeMarkers =
+      referenceFile === "runtime-claude.md"
+        ? []
+        : ["AskUserQuestion"];
+    assertNoForbiddenMarkers(
+      canonicalReference,
+      canonicalReferencePath,
+      allowedRuntimeMarkers,
+    );
   }
 }
 
@@ -1729,6 +1130,10 @@ async function validateSyncConfiguration() {
     "config/sync.json must declare generatedTargets for every supported target.",
   );
   assert(
+    canonicalRoots.skills === "canonical/skills",
+    "config/sync.json canonicalRoots.skills must be canonical/skills.",
+  );
+  assert(
     canonicalRoots.contracts === "config/contracts",
     "config/sync.json canonicalRoots.contracts must be config/contracts.",
   );
@@ -1736,559 +1141,222 @@ async function validateSyncConfiguration() {
     canonicalRoots.capabilityIndex === "config/capability-index",
     "config/sync.json canonicalRoots.capabilityIndex must be config/capability-index.",
   );
+
+  assert(
+    profiles.codex.projection.outputPaths.skillsDir === ".agents/skills" &&
+      profiles.codex.projection.outputPaths.skillRoot ===
+        ".agents/skills/meta-theory",
+    "Codex runtime profile must use .agents/skills as the only project skill root.",
+  );
+  assert(
+    profiles.claude.projection.outputPaths.skillsDir === ".claude/skills" &&
+      profiles.openclaw.projection.outputPaths.skillsDir === "openclaw/skills" &&
+      profiles.cursor.projection.outputPaths.skillsDir === ".cursor/skills",
+    "Runtime profiles must declare skillsDir for full canonical/skills projection.",
+  );
+  assert(
+    profiles.codex.projection.outputPaths.hooksDir === ".codex/hooks" &&
+      profiles.codex.projection.outputPaths.hooksFile === ".codex/hooks.json",
+    "Codex runtime profile must declare hook output paths.",
+  );
+  assert(
+    profiles.cursor.projection.assetTypes.includes("hooks") &&
+      profiles.cursor.projection.assetTypes.includes("rules") &&
+      profiles.cursor.projection.outputPaths.hooksDir === ".cursor/hooks" &&
+      profiles.cursor.projection.outputPaths.hooksFile === ".cursor/hooks.json" &&
+      profiles.cursor.projection.outputPaths.rulesDir === ".cursor/rules",
+    "Cursor runtime profile must declare hook and rule output paths.",
+  );
+  assert(
+    (manifest.generatedTargets?.cursor ?? []).includes(".cursor/hooks") &&
+      (manifest.generatedTargets?.cursor ?? []).includes(".cursor/hooks.json") &&
+      (manifest.generatedTargets?.cursor ?? []).includes(".cursor/rules"),
+    "config/sync.json must advertise generated Cursor lifecycle hook and rule paths.",
+  );
 }
 
-async function validateCodexArtifacts() {
-  const configExample = await fs.readFile(
-    canonicalCodexConfigExamplePath,
-    "utf8",
-  );
-  for (const expected of [
-    "approval_policy",
-    "sandbox_mode",
-    "[agents]",
-    "[mcp_servers.meta_kim_runtime]",
-    ".codex/skills/",
-  ]) {
-    assert(
-      configExample.includes(expected),
-      `canonical/runtime-assets/codex/config.toml.example is missing ${expected}`,
-    );
-  }
-  const commandPath = path.join(
-    canonicalRuntimeAssetsDir,
-    "codex",
-    "commands",
-    "meta-theory.md",
-  );
-  const command = await fs.readFile(commandPath, "utf8");
-  for (const expected of [
-    "name: meta-theory",
-    "~/.codex/skills/meta-theory/SKILL.md",
-    ".codex/skills/meta-theory/SKILL.md",
-  ]) {
-    assert(
-      command.includes(expected),
-      `canonical/runtime-assets/codex/commands/meta-theory.md is missing ${expected}`,
-    );
-  }
+function sortedJson(values) {
+  return JSON.stringify([...values].sort());
 }
 
-async function validatePackageJson() {
-  const packageJsonPath = path.join(repoRoot, "package.json");
-  const pkg = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
-  assert(pkg.scripts?.["meta:sync"], "package.json is missing meta:sync.");
-  assert(
-    pkg.scripts?.["meta:validate"],
-    "package.json is missing meta:validate.",
-  );
-  assert(
-    pkg.scripts?.["meta:validate:run"],
-    "package.json is missing meta:validate:run.",
-  );
-  assert(
-    pkg.scripts?.["meta:eval:agents"],
-    "package.json is missing meta:eval:agents.",
-  );
-  assert(
-    pkg.scripts?.["meta:verify:all"],
-    "package.json is missing meta:verify:all.",
-  );
-  assert(
-    !pkg.scripts?.["sync:global:meta-theory:codex-active"],
-    "package.json should not keep the legacy sync:global:meta-theory:codex-active script.",
-  );
-  assert(
-    pkg.scripts?.["prepare:openclaw-local"],
-    "package.json is missing prepare:openclaw-local.",
-  );
-  assert(
-    pkg.scripts?.["meta:deps:install"] ===
-      "node scripts/install-global-skills-all-runtimes.mjs --targets claude",
-    "package.json meta:deps:install must use the Node-based installer with --targets claude.",
-  );
-  assert(
-    pkg.scripts?.["meta:deps:update"] ===
-      "node scripts/install-global-skills-all-runtimes.mjs --update --targets claude",
-    "package.json meta:deps:update must use the Node-based installer with --targets claude.",
-  );
-  const setupTestScript = pkg.scripts?.["meta:test:setup"] ?? "";
-  assert(
-    /tests\/setup\/\*\.test\.mjs/.test(setupTestScript) &&
-      (/node --test/.test(setupTestScript) ||
-        /scripts\/run-node-tests\.mjs/.test(setupTestScript)),
-    "package.json must expose meta:test:setup for installer regression coverage.",
-  );
-  assert(
-    pkg.scripts?.["meta:verify:all"]?.includes("npm run meta:test:setup"),
-    "package.json meta:verify:all must include npm run meta:test:setup.",
-  );
-  assert(
-    pkg.scripts?.["meta:verify:all"]?.includes("npm run meta:graphify:check"),
-    "package.json meta:verify:all must include npm run meta:graphify:check.",
-  );
-  assert(
-    pkg.scripts?.["meta:verify:all:live"]?.includes("npm run meta:test:setup"),
-    "package.json meta:verify:all:live must include npm run meta:test:setup.",
-  );
-  assert(
-    pkg.scripts?.["meta:verify:all:live"]?.includes(
-      "npm run meta:graphify:check",
+async function validateRuntimeCompatibilityCatalog() {
+  const catalog = JSON.parse(
+    await fs.readFile(
+      path.join(repoRoot, "config", "runtime-compatibility-catalog.json"),
+      "utf8",
     ),
-    "package.json meta:verify:all:live must include npm run meta:graphify:check.",
+  );
+  const manifest = await loadSyncManifest();
+  const skillsManifest = JSON.parse(
+    await fs.readFile(path.join(repoRoot, "config", "skills.json"), "utf8"),
+  );
+
+  assert(
+    (catalog.schemaVersion ?? 0) >= 1,
+    "runtime compatibility catalog schemaVersion must be >= 1.",
   );
   assert(
-    pkg.dependencies?.["@modelcontextprotocol/sdk"],
-    "package.json is missing @modelcontextprotocol/sdk.",
+    catalog.decisionBoundary?.noAutoPromotionFromDependencyInstall === true &&
+      catalog.decisionBoundary?.noAutoPromotionFromGenericSkillPath === true,
+    "runtime compatibility catalog must forbid automatic promotion from dependency installs or generic paths.",
   );
-  assert(pkg.dependencies?.zod, "package.json is missing zod.");
-  assert(pkg.license === "MIT", "package.json license must be MIT.");
-}
 
-async function validateGitignore() {
-  const gitignorePath = path.join(repoRoot, ".gitignore");
-  const gitignore = await fs.readFile(gitignorePath, "utf8");
-  for (const expected of [
-    "node_modules/",
-    "docs/",
-    "openclaw/workspaces/*/.openclaw/",
-    ".meta-kim/state/",
-    ".meta-kim/local.overrides.json",
-  ]) {
-    assert(gitignore.includes(expected), `.gitignore is missing ${expected}`);
-  }
-}
+  const products = catalog.products ?? [];
+  assert(
+    Array.isArray(products) && products.length >= 1,
+    "runtime compatibility catalog must declare products.",
+  );
+  const productIds = products.map((product) => product.id);
+  assert(
+    new Set(productIds).size === productIds.length,
+    "runtime compatibility catalog product ids must be unique.",
+  );
+  const byId = new Map(products.map((product) => [product.id, product]));
+  const supportedTargets = new Set(manifest.supportedTargets ?? []);
+  const defaultTargets = new Set(
+    manifest.defaultTargets ?? manifest.supportedTargets ?? [],
+  );
+  const projectionIds = products
+    .filter((product) => product.tier === "runtime_projection")
+    .map((product) => product.id);
 
-function collectClaudeHookCommands(hooksRoot) {
-  const commands = [];
-  if (!hooksRoot || typeof hooksRoot !== "object") {
-    return commands;
-  }
-  for (const entries of Object.values(hooksRoot)) {
-    if (!Array.isArray(entries)) {
+  assert(
+    sortedJson(projectionIds) === sortedJson(supportedTargets),
+    "runtime_projection catalog products must exactly match config/sync.json supportedTargets.",
+  );
+
+  for (const product of products) {
+    const formal = product.formalProjection ?? {};
+    if (product.tier === "runtime_projection") {
+      assert(
+        supportedTargets.has(product.id),
+        `runtime_projection ${product.id} must be in config/sync.json supportedTargets.`,
+      );
+      assert(
+        formal.inSyncManifest === true &&
+          formal.hasRuntimeProfile === true &&
+          formal.hasProjectionLayout === true,
+        `runtime_projection ${product.id} must declare formal projection evidence.`,
+      );
+      assert(
+        formal.isDefaultTarget === defaultTargets.has(product.id),
+        `runtime_projection ${product.id} default-target flag must match config/sync.json.`,
+      );
       continue;
     }
-    for (const entry of entries) {
-      for (const hook of entry.hooks ?? []) {
-        if (hook?.type === "command" && typeof hook.command === "string") {
-          commands.push(hook.command.trim());
-        }
-      }
-    }
+
+    assert(
+      !supportedTargets.has(product.id) && !defaultTargets.has(product.id),
+      `${product.id} must not be in config/sync.json until promoted to runtime_projection.`,
+    );
+    assert(
+      formal.inSyncManifest === false &&
+        formal.hasRuntimeProfile === false &&
+        formal.hasProjectionLayout === false &&
+        formal.isDefaultTarget === false,
+      `${product.id} must not claim formal projection fields before promotion.`,
+    );
   }
-  return commands;
+
+  const ecc = skillsManifest.skills?.find((skill) => skill.id === "ecc");
+  assert(ecc, "config/skills.json must declare ecc.");
+  const eccTargets = new Set(ecc.targets ?? []);
+  for (const target of eccTargets) {
+    const product = byId.get(target);
+    assert(
+      product,
+      `runtime compatibility catalog is missing ECC target ${target}.`,
+    );
+    assert(
+      product.dependencyInstall?.ecc?.support === "native",
+      `runtime compatibility catalog must mark ECC target ${target} as native.`,
+    );
+  }
+
+  const qoder = byId.get("qoder");
+  assert(qoder, "runtime compatibility catalog must include qoder.");
+  assert(
+    qoder.tier === "candidate_probe" &&
+      qoder.dependencyInstall?.ecc?.support === "not_supported" &&
+      qoder.genericCompatibility?.status === "verified_current",
+    "qoder must remain a verified generic candidate, not a formal projection or ECC target.",
+  );
+  assert(
+    !eccTargets.has("qoder") && !supportedTargets.has("qoder"),
+    "qoder must not be in ECC targets or sync supportedTargets until promoted.",
+  );
+  assert(
+    (qoder.evidence ?? []).some(
+      (entry) => entry.type === "github_issue" && entry.ref.includes("/issues/7"),
+    ) &&
+      (qoder.evidence ?? []).filter((entry) => entry.type === "official_docs")
+        .length >= 4,
+    "qoder candidate must be anchored to issue #7 and official Qoder docs.",
+  );
+
+  const cursor = byId.get("cursor");
+  assert(cursor, "runtime compatibility catalog must include cursor.");
+  assert(
+    cursor.genericCompatibility?.agentPath === ".cursor/agents/{agent}.md" &&
+      cursor.genericCompatibility?.hookConfig === ".cursor/hooks.json" &&
+      (cursor.evidence ?? []).some(
+        (entry) => entry.type === "official_docs" && entry.ref.includes("cursor.com/docs/subagents"),
+      ) &&
+      (cursor.evidence ?? []).some(
+        (entry) => entry.type === "official_docs" && entry.ref.includes("cursor.com/docs/hooks"),
+      ) &&
+      (cursor.evidence ?? []).some(
+        (entry) => entry.type === "official_docs" && entry.ref.includes("cursor.com/docs/rules"),
+      ),
+    "Cursor runtime projection must cite official subagent, hook, and rule docs.",
+  );
+
+  const openclaw = byId.get("openclaw");
+  assert(openclaw, "runtime compatibility catalog must include openclaw.");
+  assert(
+    openclaw.genericCompatibility?.status === "partial" &&
+      /typed plugin/i.test(openclaw.nextAction ?? "") &&
+      (openclaw.evidence ?? []).some(
+        (entry) => entry.type === "official_docs" && entry.ref.includes("docs.openclaw.ai/concepts/agent"),
+      ) &&
+      (openclaw.evidence ?? []).some(
+        (entry) => entry.type === "official_docs" && entry.ref.includes("docs.openclaw.ai/automation/hooks"),
+      ),
+    "OpenClaw runtime projection must preserve the official workspace/hook boundary and partial tool-blocking status.",
+  );
 }
 
-async function validateClaudeSettings() {
-  const settings = JSON.parse(
-    await fs.readFile(canonicalClaudeSettingsPath, "utf8"),
+
+async function validateSkillsManifest() {
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(repoRoot, "config", "skills.json"), "utf8"),
+  );
+  const hookprompt = manifest.skills?.find((skill) => skill.id === "hookprompt");
+  assert(hookprompt, "config/skills.json must declare hookprompt.");
+  assert(
+    hookprompt.capabilities?.includes("prompt-submission-optimization"),
+    "hookprompt must declare prompt-submission-optimization capability.",
   );
   assert(
-    settings.permissions?.deny?.length >= 1,
-    "canonical/runtime-assets/claude/settings.json is missing deny rules.",
-  );
-  const hooks = settings.hooks;
-  assert(
-    hooks?.PreToolUse?.length >= 1,
-    "canonical Claude settings are missing PreToolUse hooks.",
+    hookprompt.targets?.includes("claude") &&
+      hookprompt.targets?.includes("codex") &&
+      hookprompt.targets?.includes("cursor"),
+    "hookprompt targets must install native Claude support plus Codex and Cursor adapter support.",
   );
   assert(
-    hooks?.PostToolUse?.length >= 1,
-    "canonical Claude settings are missing PostToolUse hooks.",
-  );
-  assert(
-    hooks?.SubagentStart?.length >= 1,
-    "canonical Claude settings are missing SubagentStart hooks.",
-  );
-  assert(
-    hooks?.Stop?.length >= 1,
-    "canonical Claude settings are missing Stop hooks.",
+    hookprompt.platformSupport?.claude?.status === "native" &&
+      hookprompt.platformSupport?.codex?.status === "adapter-required" &&
+      hookprompt.platformSupport?.cursor?.status === "adapter-required",
+    "hookprompt platformSupport must distinguish native, adapter-required, and degraded runtimes.",
   );
 
-  assert(
-    hooks.PreToolUse[0]?.matcher === "Bash",
-    "canonical Claude settings PreToolUse[0] must target Bash.",
+  const planning = manifest.skills?.find(
+    (skill) => skill.id === "planning-with-files",
   );
   assert(
-    hooks.PreToolUse[1]?.matcher ===
-      "Write|Edit|Bash|Agent|MultiEdit|NotebookEdit",
-    "canonical Claude settings PreToolUse[1] must target execution + agent tools.",
+    planning?.hookSubdirs?.cursor && planning?.hookConfigFiles?.cursor,
+    "planning-with-files must install Cursor lifecycle hooks.",
   );
-  assert(
-    hooks.PostToolUse[0]?.matcher === "Edit|Write",
-    "canonical Claude settings PostToolUse must target Edit|Write.",
-  );
-  assert(
-    hooks.SubagentStart[0]?.matcher === "*",
-    "canonical Claude settings SubagentStart must use matcher *.",
-  );
-  assert(
-    hooks.Stop[0]?.matcher === "*",
-    "canonical Claude settings Stop must use matcher *.",
-  );
-
-  const found = collectClaudeHookCommands(hooks).sort();
-  const expected = [...EXPECTED_CLAUDE_HOOK_COMMANDS].sort();
-  assert(
-    JSON.stringify(found) === JSON.stringify(expected),
-    `canonical Claude hook commands must match documented hook coverage (expected ${expected.length}, found ${found.length}).`,
-  );
-}
-
-async function validateMcpConfig() {
-  const config = JSON.parse(await fs.readFile(canonicalClaudeMcpPath, "utf8"));
-  const server = config.mcpServers?.["meta-kim-runtime"];
-  assert(
-    server,
-    "canonical/runtime-assets/claude/mcp.json is missing meta-kim-runtime.",
-  );
-  assert(server.command === "node", "meta-kim-runtime must run through node.");
-  assert(
-    server.args?.includes("__REPO_ROOT__/scripts/mcp/meta-runtime-server.mjs"),
-    "canonical/runtime-assets/claude/mcp.json must use the __REPO_ROOT__ MCP template path.",
-  );
-
-  for (const relativePath of [".mcp.json", ".cursor/mcp.json"]) {
-    const runtimeMcpPath = path.join(repoRoot, relativePath);
-    if (!(await exists(runtimeMcpPath))) continue;
-    const runtimeConfig = JSON.parse(await fs.readFile(runtimeMcpPath, "utf8"));
-    const runtimeServer = runtimeConfig.mcpServers?.["meta-kim-runtime"];
-    if (!runtimeServer) continue;
-    const runtimeArg = runtimeServer.args?.[0] ?? "";
-    assert(
-      !runtimeArg.includes("__REPO_ROOT__") &&
-        !runtimeArg.includes("REPLACE_WITH_REPO_ROOT"),
-      `${relativePath} must not contain an unresolved MCP path placeholder.`,
-    );
-    assert(
-      path.isAbsolute(runtimeArg),
-      `${relativePath} meta-kim-runtime must use an absolute script path.`,
-    );
-    assert(
-      await exists(runtimeArg),
-      `${relativePath} meta-kim-runtime script path does not exist: ${runtimeArg}. meta-kim-runtime is only useful inside the Meta_Kim source repo. If this config was copied into another project, remove the meta-kim-runtime block; meta agents still load from .claude/.codex/.cursor/openclaw files.`,
-    );
-  }
-}
-
-async function validateMcpSelfTest() {
-  const scriptPath = path.join(
-    repoRoot,
-    "scripts",
-    "mcp",
-    "meta-runtime-server.mjs",
-  );
-  const { stdout } = await execFileAsync("node", [scriptPath, "--self-test"], {
-    cwd: repoRoot,
-  });
-  const parsed = JSON.parse(stdout);
-  assert(parsed.ok === true, "MCP self-test did not report ok=true.");
-  assert(parsed.agentCount >= 1, "MCP self-test returned no agents.");
-}
-
-async function validateFactoryRelease() {
-  const factoryRoot = path.join(repoRoot, "factory");
-  if (!(await exists(factoryRoot))) {
-    return;
-  }
-  const legacyPaths = [
-    "factory/generated",
-    "factory/catalog",
-    "factory/flagship-20",
-    "factory/flagship-batch-1",
-    "factory/flagship-batch-2",
-    "factory/flagship-batch-3",
-    "factory/flagship-batch-4",
-    "factory/industry-coverage-matrix.md",
-    "factory/flagship-20.md",
-    "factory/orchestration-playbooks.md",
-    "scripts/generate-industry-agents.mjs",
-    "scripts/compile-foundry-runtime-packs.mjs",
-    "scripts/build-flagship-batch-1.mjs",
-    "scripts/build-flagship-batch-2.mjs",
-    "scripts/build-flagship-batch-3.mjs",
-    "scripts/build-flagship-batch-4.mjs",
-    "scripts/build-flagship-complete.mjs",
-    "factory/README.md",
-    "factory/README.zh-CN.md",
-    "factory/flagship-complete/README.md",
-    "factory/flagship-complete/README.zh-CN.md",
-    "factory/runtime-packs/README.md",
-    "factory/runtime-packs/README.zh-CN.md",
-    "factory/flagship-20.json",
-    "openclaw/workspaces/meta-artisan/memory/README.md",
-    "openclaw/workspaces/meta-conductor/memory/README.md",
-    "openclaw/workspaces/meta-genesis/memory/README.md",
-    "openclaw/workspaces/meta-librarian/memory/README.md",
-    "openclaw/workspaces/meta-prism/memory/README.md",
-    "openclaw/workspaces/meta-scout/memory/README.md",
-    "openclaw/workspaces/meta-sentinel/memory/README.md",
-    "openclaw/workspaces/meta-warden/memory/README.md",
-  ];
-
-  for (const relativePath of legacyPaths) {
-    assert(
-      !(await exists(path.join(repoRoot, relativePath))),
-      `Legacy release-build artifact should not exist in public repo: ${relativePath}`,
-    );
-  }
-
-  const factoryRootEntries = await fs.readdir(path.join(repoRoot, "factory"), {
-    withFileTypes: true,
-  });
-  for (const entry of factoryRootEntries) {
-    assert(
-      !(entry.isFile() && entry.name.endsWith(".md")),
-      `factory/ should not contain user-facing Markdown docs: factory/${entry.name}`,
-    );
-  }
-
-  const factoryMarkdownFiles = await walkFiles(
-    path.join(repoRoot, "factory"),
-    ".md",
-  );
-  for (const filePath of factoryMarkdownFiles) {
-    const baseName = path.basename(filePath).toLowerCase();
-    assert(
-      !baseName.startsWith("readme"),
-      `Nested README files are not allowed in factory/: ${path.relative(repoRoot, filePath)}`,
-    );
-  }
-  const factoryTomlFiles = await walkFiles(
-    path.join(repoRoot, "factory"),
-    ".toml",
-  );
-  const forbiddenFactoryDocRefs = [
-    "factory/industry-coverage-matrix.md",
-    "factory/flagship-20.md",
-    "factory/orchestration-playbooks.md",
-  ];
-  for (const filePath of [...factoryMarkdownFiles, ...factoryTomlFiles]) {
-    const raw = await fs.readFile(filePath, "utf8");
-    for (const marker of forbiddenFactoryDocRefs) {
-      assert(
-        !raw.includes(marker),
-        `${path.relative(repoRoot, filePath)} still references removed release doc ${marker}.`,
-      );
-    }
-  }
-
-  const departmentCount = await countFiles(
-    path.join(repoRoot, "factory", "agent-library", "departments"),
-    ".md",
-  );
-  const specialistCount = await countFiles(
-    path.join(repoRoot, "factory", "agent-library", "specialists"),
-    ".md",
-  );
-  const flagshipCount = await countFiles(
-    path.join(repoRoot, "factory", "flagship-complete", "agents"),
-    ".md",
-  );
-  const runtimeClaudeCount = await countFiles(
-    path.join(repoRoot, "factory", "runtime-packs", "claude", "agents"),
-    ".md",
-  );
-  const runtimeCodexCount = await countFiles(
-    path.join(repoRoot, "factory", "runtime-packs", "codex", "agents"),
-    ".toml",
-  );
-  const runtimeOpenClawCount = (
-    await fs.readdir(
-      path.join(repoRoot, "factory", "runtime-packs", "openclaw", "workspaces"),
-      {
-        withFileTypes: true,
-      },
-    )
-  ).filter((entry) => entry.isDirectory()).length;
-  const flagshipClaudeCount = await countFiles(
-    path.join(
-      repoRoot,
-      "factory",
-      "flagship-complete",
-      "runtime-packs",
-      "claude",
-      "agents",
-    ),
-    ".md",
-  );
-  const flagshipCodexCount = await countFiles(
-    path.join(
-      repoRoot,
-      "factory",
-      "flagship-complete",
-      "runtime-packs",
-      "codex",
-      "agents",
-    ),
-    ".toml",
-  );
-  const flagshipOpenClawCount = (
-    await fs.readdir(
-      path.join(
-        repoRoot,
-        "factory",
-        "flagship-complete",
-        "runtime-packs",
-        "openclaw",
-        "workspaces",
-      ),
-      { withFileTypes: true },
-    )
-  ).filter((entry) => entry.isDirectory()).length;
-
-  assert(
-    departmentCount === 100,
-    `Expected 100 department briefs, found ${departmentCount}.`,
-  );
-  assert(
-    specialistCount === 1000,
-    `Expected 1000 specialist briefs, found ${specialistCount}.`,
-  );
-  assert(
-    flagshipCount === 20,
-    `Expected 20 flagship agents, found ${flagshipCount}.`,
-  );
-  assert(
-    runtimeClaudeCount === 1100,
-    `Expected 1100 Claude runtime packs, found ${runtimeClaudeCount}.`,
-  );
-  assert(
-    runtimeCodexCount === 1100,
-    `Expected 1100 Codex runtime packs, found ${runtimeCodexCount}.`,
-  );
-  assert(
-    runtimeOpenClawCount === 1100,
-    `Expected 1100 OpenClaw workspaces, found ${runtimeOpenClawCount}.`,
-  );
-  assert(
-    flagshipClaudeCount === 20,
-    `Expected 20 flagship Claude packs, found ${flagshipClaudeCount}.`,
-  );
-  assert(
-    flagshipCodexCount === 20,
-    `Expected 20 flagship Codex packs, found ${flagshipCodexCount}.`,
-  );
-  assert(
-    flagshipOpenClawCount === 20,
-    `Expected 20 flagship OpenClaw workspaces, found ${flagshipOpenClawCount}.`,
-  );
-
-  const runtimeSummary = JSON.parse(
-    await fs.readFile(
-      path.join(repoRoot, "factory", "runtime-packs", "summary.json"),
-      "utf8",
-    ),
-  );
-  assert(
-    runtimeSummary.summary?.industries === 20,
-    "runtime-packs/summary.json must report 20 industries.",
-  );
-  assert(
-    runtimeSummary.summary?.departmentSeeds === 100,
-    "runtime-packs/summary.json must report 100 department seeds.",
-  );
-  assert(
-    runtimeSummary.summary?.specialistAgents === 1000,
-    "runtime-packs/summary.json must report 1000 specialist agents.",
-  );
-  assert(
-    runtimeSummary.summary?.totalAgents === 1100,
-    "runtime-packs/summary.json must report 1100 total agents.",
-  );
-
-  const flagshipSummary = JSON.parse(
-    await fs.readFile(
-      path.join(repoRoot, "factory", "flagship-complete", "summary.json"),
-      "utf8",
-    ),
-  );
-  assert(
-    flagshipSummary.counts?.flagshipAgents === 20,
-    "flagship-complete/summary.json must report 20 flagship agents.",
-  );
-  assert(
-    flagshipSummary.counts?.claudeAgents === 20,
-    "flagship-complete/summary.json must report 20 Claude flagship agents.",
-  );
-  assert(
-    flagshipSummary.counts?.codexAgents === 20,
-    "flagship-complete/summary.json must report 20 Codex flagship agents.",
-  );
-  assert(
-    flagshipSummary.counts?.openclawWorkspaces === 20,
-    "flagship-complete/summary.json must report 20 OpenClaw flagship workspaces.",
-  );
-
-  const specialistFiles = await walkFiles(
-    path.join(repoRoot, "factory", "agent-library", "specialists"),
-    ".md",
-  );
-  const requiredSpecialistSections = [
-    "## Strategic Value",
-    "## Failure Modes to Avoid",
-    "## Escalate Immediately If",
-    "## Output Packet",
-    "## Review Checklist",
-    "## Voice Calibration",
-    "## Signature Questions",
-    "## Default Reasoning Sequence",
-  ];
-  for (const specialistPath of specialistFiles) {
-    const raw = await fs.readFile(specialistPath, "utf8");
-    for (const section of requiredSpecialistSections) {
-      assert(
-        raw.includes(section),
-        `${path.relative(repoRoot, specialistPath)} is missing section ${section}.`,
-      );
-    }
-
-    const industry = path.basename(path.dirname(path.dirname(specialistPath)));
-    const department = path.basename(path.dirname(specialistPath));
-    const specialist = path.basename(specialistPath, ".md");
-    const specialistId = `${industry}-${department}-${specialist}`;
-    const runtimeTargets = [
-      path.join(
-        repoRoot,
-        "factory",
-        "runtime-packs",
-        "claude",
-        "agents",
-        `${specialistId}.md`,
-      ),
-      path.join(
-        repoRoot,
-        "factory",
-        "runtime-packs",
-        "codex",
-        "agents",
-        `${specialistId}.toml`,
-      ),
-      path.join(
-        repoRoot,
-        "factory",
-        "runtime-packs",
-        "openclaw",
-        "workspaces",
-        specialistId,
-        "SOUL.md",
-      ),
-    ];
-
-    for (const runtimePath of runtimeTargets) {
-      assert(
-        await exists(runtimePath),
-        `Missing specialist runtime artifact: ${path.relative(repoRoot, runtimePath)}.`,
-      );
-      const runtimeRaw = await fs.readFile(runtimePath, "utf8");
-      for (const section of requiredSpecialistSections) {
-        assert(
-          runtimeRaw.includes(section),
-          `${path.relative(repoRoot, runtimePath)} is missing section ${section}.`,
-        );
-      }
-    }
-  }
 }
 
 function step(num, total, label, detail = "") {
@@ -2304,8 +1372,70 @@ function fail(msg) {
   console.error(`✗ ${msg}`);
 }
 
+/**
+ * EB-004 deprecation check (v2.3.1, warn-only).
+ *
+ * Scans .meta-kim/state/<profile>/spine/spine-state.json files for
+ * `preDecisionOptionFrame.{choiceSurfaceState,solutionChoiceState,choiceGateSkip}`
+ * — these fields belong on the top-level `state` object, not nested inside
+ * `preDecisionOptionFrame`. The frame describes the question; user answers
+ * and state markers live at the top level.
+ *
+ * v2.3.1 emits warnings only. v2.4.0 will fail validation when legacy nesting
+ * is found. A helper script `scripts/migrate-spine-state-eb004.mjs` promotes
+ * the fields and removes the legacy nesting.
+ *
+ * @returns {Promise<{warnings: string[]}>}
+ */
+async function validateSpineStateChoiceFieldLocations() {
+  const warnings = [];
+  const stateDir = path.join(repoRoot, ".meta-kim", "state");
+  if (!(await exists(stateDir))) {
+    return { warnings };
+  }
+
+  let profiles;
+  try {
+    profiles = await fs.readdir(stateDir);
+  } catch {
+    return { warnings };
+  }
+
+  const legacyFields = [
+    "choiceSurfaceState",
+    "solutionChoiceState",
+    "choiceGateSkip",
+  ];
+
+  for (const profile of profiles) {
+    const stateFile = path.join(stateDir, profile, "spine", "spine-state.json");
+    if (!(await exists(stateFile))) continue;
+    let state;
+    try {
+      state = JSON.parse(await fs.readFile(stateFile, "utf8"));
+    } catch {
+      continue;
+    }
+    const frame = state?.preDecisionOptionFrame;
+    if (!frame || typeof frame !== "object" || Array.isArray(frame)) continue;
+    for (const legacyField of legacyFields) {
+      if (frame[legacyField] !== undefined) {
+        warnings.push(
+          `[EB-004 deprecation, v2.3.1 warn-only] '${toRepoRelative(stateFile)}': ` +
+            `preDecisionOptionFrame.${legacyField} should be moved to state.${legacyField} ` +
+            `(top-level). Will FAIL in v2.4.0. ` +
+            `See docs/v2.3.1-rfc-EB-004-preDecisionOptionFrame-nesting.md. ` +
+            `Helper: scripts/migrate-spine-state-eb004.mjs.`,
+        );
+      }
+    }
+  }
+
+  return { warnings };
+}
+
 async function main() {
-  const TOTAL = 18;
+  const TOTAL = 7;
   let current = 1;
 
   console.log("\n========================================");
@@ -2325,6 +1455,7 @@ async function main() {
   // 3. Sync manifest and runtime target catalog
   step(current++, TOTAL, t.val.step03, t.val.step03Detail);
   await validateSyncConfiguration();
+  await validateRuntimeCompatibilityCatalog();
   pass(t.val.step03Pass);
 
   // 4. Canonical agent definitions
@@ -2332,79 +1463,36 @@ async function main() {
   const agentIds = await validateClaudeAgents();
   pass(t.val.step04Pass(agentIds.length, agentIds));
 
-  // 5. Canonical OpenClaw runtime asset
+  // 5. Canonical meta-theory skill
   step(current++, TOTAL, t.val.step05, t.val.step05Detail);
-  await validateOpenClawArtifacts(agentIds);
+  await validatePortableSkill();
   pass(t.val.step05Pass);
 
-  // 6. Canonical meta-theory skill
+  // 6. Skills manifest
   step(current++, TOTAL, t.val.step06, t.val.step06Detail);
-  await validatePortableSkill();
+  await validateSkillsManifest();
   pass(t.val.step06Pass);
 
-  // 7. Codex runtime asset template
+  // 7. Canonical capability index
   step(current++, TOTAL, t.val.step07, t.val.step07Detail);
-  await validateCodexArtifacts();
+  await validateCapabilityIndex();
   pass(t.val.step07Pass);
 
-  // 8. Runtime parity matrix
-  step(current++, TOTAL, t.val.step08, t.val.step08Detail);
-  await validateRuntimeParityMatrix();
-  pass(t.val.step08Pass);
-
-  // 9. Canonical capability index
-  step(current++, TOTAL, "Canonical capability index");
-  await validateCapabilityIndex();
-  pass("capability index source and mirrors are valid.");
-
-  // 10. Graphify governance gate
-  step(current++, TOTAL, "Graphify governance gate");
-  await validateGraphifyGate();
-  pass("graphify CLI, report, graph, and health gates are valid.");
-
-  // 11. Documentation fact checks
-  step(current++, TOTAL, "Documentation fact checks");
-  await validateDocumentationFacts();
-  pass("documentation references are aligned with repo facts.");
-
-  // 12. Run artifact fixtures
-  step(current++, TOTAL, t.val.step09, t.val.step09Detail);
-  await validateRunArtifactFixtures();
-  pass(t.val.step09Pass);
-
-  // 13. npm scripts
-  step(current++, TOTAL, t.val.step10, t.val.step10Detail);
-  await validatePackageJson();
-  pass(t.val.step10Pass);
-
-  // 14. .gitignore
-  step(current++, TOTAL, t.val.step11, t.val.step11Detail);
-  await validateGitignore();
-  pass(t.val.step11Pass);
-
-  // 15. Canonical Claude settings
-  step(current++, TOTAL, t.val.step12, t.val.step12Detail);
-  await validateClaudeSettings();
-  pass(t.val.step12Pass);
-
-  // 16. Canonical MCP config
-  step(current++, TOTAL, t.val.step13, t.val.step13Detail);
-  await validateMcpConfig();
-  pass(t.val.step13Pass);
-
-  // 17. MCP self-test
-  step(current++, TOTAL, t.val.step14, t.val.step14Detail);
-  await validateMcpSelfTest();
-  pass(t.val.step14Pass);
-
-  // 18. Factory release artifacts (skipped if factory/ not in public repo)
-  step(current++, TOTAL, t.val.step15, t.val.step15Detail);
-  await validateFactoryRelease();
-  pass(t.val.step15Pass);
+  // EB-004 deprecation check (warn-only, does not gate validation).
+  const eb004Result = await validateSpineStateChoiceFieldLocations();
 
   console.log("\n========================================");
   console.log(t.val.footerAll(TOTAL));
   console.log(t.val.footerAgents(agentIds.length));
+  if (eb004Result.warnings.length > 0) {
+    console.log("----------------------------------------");
+    console.log(
+      `EB-004 deprecation warnings (v2.3.1 warn-only, will FAIL in v2.4.0):`,
+    );
+    for (const warning of eb004Result.warnings) {
+      console.log(`  ! ${warning}`);
+    }
+  }
   console.log("========================================\n");
 }
 

@@ -2,9 +2,11 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SKILL_PATH,
+  AGENTS_DIR,
   REFERENCE_DIR,
   ALL_AGENTS,
   ALL_TYPES,
+  EIGHT_STAGES,
   REFERENCE_FILES,
   parseFrontmatter,
   readFile,
@@ -36,6 +38,21 @@ function parseScalarFrontmatter(raw) {
   return data;
 }
 
+function extractSecondLevelSection(markdown, heading) {
+  const startToken = `## ${heading}`;
+  const start = markdown.indexOf(startToken);
+  if (start === -1) return null;
+
+  const bodyStart = markdown.indexOf("\n", start);
+  if (bodyStart === -1) return "";
+
+  const rest = markdown.slice(bodyStart + 1);
+  const nextHeading = rest.search(/\r?\n##[ \t]+/);
+  const section =
+    nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+  return section.trim();
+}
+
 let raw;
 let frontmatter;
 
@@ -63,6 +80,19 @@ describe("SKILL.md structural integrity", async () => {
         frontmatter.version,
         /^\d+\.\d+\.\d+$/,
         `version "${frontmatter.version}" does not match semver X.Y.Z`,
+      );
+    });
+
+    test("skill version remains 3.0.0 and does not add direct websearch tooling", () => {
+      assert.equal(
+        frontmatter.version,
+        "3.0.0",
+        "meta-theory skill version must not be confused with package release version",
+      );
+      assert.doesNotMatch(
+        raw,
+        /^\s+-\s+websearch\s*$/im,
+        "meta-theory skill must route current-fact research through governance owners instead of adding a direct websearch tool",
       );
     });
 
@@ -134,10 +164,10 @@ describe("SKILL.md structural integrity", async () => {
     });
   });
 
-  // ── 4. Eight agent dispatch targets (1 test) ───────────────────────
+  // ── 4. Meta agent dispatch targets (1 test) ───────────────────────
 
   describe("Agent dispatch targets", () => {
-    test("all 8 meta-agents are referenced in SKILL.md", () => {
+    test("all expected meta-agents are referenced in SKILL.md", () => {
       const missing = ALL_AGENTS.filter((agent) => !raw.includes(agent));
       assert.deepEqual(
         missing,
@@ -158,6 +188,98 @@ describe("SKILL.md structural integrity", async () => {
         assert.ok(exists, `Reference file references/${file} must exist`);
       });
     }
+  });
+
+  describe("Progressive disclosure boundaries", () => {
+    test("SKILL.md stays lean and delegates details to references", () => {
+      const lineCount = raw.split(/\r?\n/).length;
+      assert.ok(
+        lineCount <= 320,
+        `SKILL.md should stay <= 320 lines after progressive disclosure; got ${lineCount}`,
+      );
+    });
+
+    test("SKILL.md does not document stale packet field names", () => {
+      for (const stale of [
+        "workerTaskPackets[].fileCompletionList",
+        "metaReviewPacket",
+        "verificationResults.fixEvidence",
+      ]) {
+        assert.ok(
+          !raw.includes(stale),
+          `SKILL.md must not contain stale packet field name ${stale}`,
+        );
+      }
+      assert.ok(raw.includes("workerResultPackets[].fileCompletionList"));
+      assert.ok(raw.includes("workerExecutionEvidence"));
+      assert.ok(raw.includes("verificationPacket.fixEvidence"));
+    });
+
+    test("agent-teams-playbook is scoped to real parallel execution lanes", () => {
+      assert.match(
+        raw,
+        /Thinking[\s\S]{0,120}Execution[\s\S]{0,240}agent-teams-playbook/i,
+      );
+      assert.match(raw, /2\+.*parallel worker lane|two or more.*parallel worker lane/i);
+      assert.doesNotMatch(
+        raw,
+        /Apply `agent-teams-playbook`[\s\S]{0,80}before substantive work/i,
+      );
+    });
+
+    test("runtime command does not force agent-teams-playbook for all non-trivial work", async () => {
+      const command = await readFile("canonical/runtime-assets/codex/commands/meta-theory.md");
+      assert.match(command, /2\+ independent parallel worker lanes/i);
+      assert.doesNotMatch(command, /For any non-trivial task,\s*first apply `agent-teams-playbook`/i);
+    });
+
+    test("SKILL.md preserves product reasoning, ten-x path challenge, and user-facing closure", () => {
+      assert.match(raw, /Product Reasoning Contract/i);
+      assert.match(raw, /surface request/i);
+      assert.match(raw, /real product problem/i);
+      assert.match(raw, /minimal fix/i);
+      assert.match(raw, /ten-x|10x|ten-times/i);
+      assert.match(raw, /path shift/i);
+      assert.match(raw, /chosen rationale/i);
+      assert.match(raw, /why.*changed|why.*change/i);
+      assert.match(raw, /what changed|where changed/i);
+      assert.match(raw, /user impact/i);
+      assert.match(raw, /verification/i);
+    });
+
+    test("SKILL.md requires compact human-readable stage feedback", () => {
+      assert.match(raw, /Human-Readable Stage Feedback/i);
+      assert.match(raw, /Critical.*Fetch.*Thinking.*Review/s);
+      assert.match(raw, /human/i);
+      assert.match(raw, /user.*language|detected user language|resolved user language/i);
+      assert.match(raw, /token/i);
+      assert.match(raw, /debug/i);
+      assert.match(raw, /packet/i);
+      assert.match(raw, /field name|internal keys/i);
+      assert.match(raw, /human label|human-readable label|user-facing output/i);
+      assert.match(raw, /Record internally/i);
+    });
+
+    test("SKILL.md routes meta-theory activation through Warden entry gate and evidence owners", () => {
+      assert.match(raw, /Warden Entry Gate/i);
+      assert.match(raw, /\/meta-theory[\s\S]{0,160}meta-warden/i);
+      assert.match(raw, /meta-warden[\s\S]{0,180}entry gate/i);
+      assert.match(raw, /meta-conductor[\s\S]{0,220}evidence lane/i);
+      assert.match(raw, /meta-scout[\s\S]{0,220}external evidence/i);
+      assert.match(raw, /meta-prism[\s\S]{0,220}Critical[\s\S]{0,120}Fetch[\s\S]{0,120}Thinking/i);
+    });
+
+    test("Fetch rules require material-claim extraction and blocked current-fact handling", () => {
+      assert.match(raw, /material claims/i);
+      assert.match(raw, /version/i);
+      assert.match(raw, /price/i);
+      assert.match(raw, /third-party|platform|tool/i);
+      assert.match(raw, /contentEvidencePacket\.researchRequired\s*=\s*true/i);
+      assert.match(raw, /researchCapabilityDiscovery/i);
+      assert.match(raw, /web_search|url_fetch|docs_lookup|browser_open/i);
+      assert.match(raw, /blocked|user_fallback/i);
+      assert.doesNotMatch(raw, /Key Information Extraction And Online Verification/i);
+    });
   });
 
   // ── 6. Contract files (3 tests) ────────────────────────────────────
@@ -195,5 +317,202 @@ describe("SKILL.md structural integrity", async () => {
       const exists = await fileExists("config/contracts/scar-protocol.md");
       assert.ok(exists, "config/contracts/scar-protocol.md must exist");
     });
+  });
+});
+
+describe("Canonical meta-agent boundary structure", () => {
+  const longTermProviders = [
+    "meta-theory",
+    "agent-teams-playbook",
+    "findskill",
+    "superpowers",
+    "ecc",
+  ];
+
+  for (const agent of ALL_AGENTS) {
+    test(`${agent} declares the unified 8-stage position matrix`, async () => {
+      const rawAgent = await readFile(`canonical/agents/${agent}.md`);
+      const matrix = extractSecondLevelSection(
+        rawAgent,
+        "8-Stage Position Matrix",
+      );
+
+      assert.ok(matrix, `${agent} must contain ## 8-Stage Position Matrix`);
+
+      for (const field of [
+        "Primary stage",
+        "Conditional stages",
+        "Must not execute in",
+        "Handoff owner",
+      ]) {
+        assert.ok(matrix.includes(field), `${agent} matrix missing ${field}`);
+      }
+
+      assert.ok(
+        EIGHT_STAGES.some((stage) => matrix.includes(stage)),
+        `${agent} matrix must reference at least one canonical 8-stage label`,
+      );
+    });
+
+  }
+
+  test("Long-term capability policy uses abstract slots and run-only concrete skill selection", async () => {
+    const contract = await readJson("config/contracts/workflow-contract.json");
+    const index = await readJson("config/capability-index/meta-kim-capabilities.json");
+    const policy =
+      contract.protocols?.agentBlueprintPacket?.longTermCapabilityPolicy ?? {};
+
+    assert.equal(policy.abstractCapabilitySlotsRequired, true);
+    assert.equal(policy.forbidConcreteSkillInLongTermAgentIdentity, true);
+    assert.equal(policy.selectedSkillScope, "run_only");
+    assert.equal(index.runtimeSelectedSkills?.selectedSkillScope, "run_only");
+    assert.ok(Array.isArray(index.abstractCapabilitySlots));
+    assert.ok(index.abstractCapabilitySlots.length >= 1);
+
+    for (const provider of longTermProviders) {
+      assert.ok(
+        policy.allowedMetaSkillProviders?.includes(provider),
+        `workflow contract must allow provider package ${provider}`,
+      );
+      assert.equal(
+        index.metaSkillProviders?.[provider]?.allowedForLongTermAgentIdentity,
+        true,
+        `capability index must allow provider package ${provider}`,
+      );
+    }
+  });
+
+  test("Long-term identity policy rejects concrete child skills while allowing provider packages", async () => {
+    const index = await readJson("config/capability-index/meta-kim-capabilities.json");
+    const forbiddenConcreteBindings = [
+      /superpowers\/[a-z0-9_-]+/i,
+      /gstack\/[a-z0-9_-]+/i,
+      /everything-claude-code:[a-z0-9_-]+/i,
+    ];
+    const allowedProviderIdentity =
+      "Allowed meta-skill package providers: meta-theory, agent-teams-playbook, findskill, superpowers, ecc";
+    const fixedConcreteIdentity =
+      "Dependency Skill Invocations: superpowers/test-driven-development, gstack/qa, everything-claude-code:code-reviewer";
+
+    for (const provider of longTermProviders) {
+      assert.ok(
+        allowedProviderIdentity.includes(provider),
+        `provider package ${provider} should be allowed in long-term identity`,
+      );
+    }
+    for (const pattern of forbiddenConcreteBindings) {
+      assert.ok(
+        !pattern.test(allowedProviderIdentity),
+        `provider-only identity must not match concrete child-skill pattern ${pattern}`,
+      );
+      assert.ok(
+        pattern.test(fixedConcreteIdentity),
+        `concrete child-skill identity must be rejected by ${pattern}`,
+      );
+    }
+    assert.equal(
+      index.longTermAgentIdentityPolicy?.forbidConcreteSkillInLongTermAgentIdentity,
+      true,
+    );
+  });
+
+  test("Warden boundary uses decision/arbitration language, not Prism review language", async () => {
+    const warden = await readFile("canonical/agents/meta-warden.md");
+    assert.ok(
+      warden.includes("Quality Gate decision / arbitration"),
+      "meta-warden must own Quality Gate decision / arbitration",
+    );
+    assert.ok(
+      !warden.includes("Quality Gate review"),
+      "meta-warden must not claim Quality Gate review",
+    );
+  });
+
+  test("Conductor assigns dispatch board schema validation without taking Stage 7 ownership", async () => {
+    const conductor = await readFile("canonical/agents/meta-conductor.md");
+    assert.ok(
+      conductor.includes("dispatch board schema validation"),
+      "meta-conductor must assign dispatch board schema validation",
+    );
+    assert.ok(
+      conductor.includes("Stage 7 Verification owner remains `meta-warden + meta-prism`"),
+      "meta-conductor must preserve Warden + Prism as Stage 7 Verification owner",
+    );
+    assert.ok(
+      !conductor.includes("| **Verification Owner** | `npm run meta:validate` |"),
+      "meta-conductor must not name npm run meta:validate as the Verification Owner",
+    );
+  });
+
+  test("Evolution writeback authority is uniform across canonical agents", async () => {
+    const files = await fs.readdir(AGENTS_DIR);
+    const agentFiles = files.filter((file) => file.endsWith(".md"));
+    const bad = [];
+
+    for (const file of agentFiles) {
+      const rawAgent = await readFile(`canonical/agents/${file}`);
+      if (
+        rawAgent.includes("write back directly to this agent") ||
+        rawAgent.includes("directly to canonical") ||
+        rawAgent.includes("直接写back")
+      ) {
+        bad.push(file);
+      }
+      assert.ok(
+        rawAgent.includes(
+          "Warden approves; Chrysalis coordinates; target specialist performs writeback",
+        ),
+        `${file} must state the uniform evolution writeback authority`,
+      );
+    }
+
+    assert.deepEqual(bad, [], `Direct-writeback wording remains in: ${bad.join(", ")}`);
+  });
+
+  test("oversized meta-theory references are split below operational size limits", async () => {
+    const entries = await fs.readdir(REFERENCE_DIR, { withFileTypes: true });
+    const tooLarge = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const content = await fs.readFile(`${REFERENCE_DIR}/${entry.name}`, "utf-8");
+      const lines = content.split(/\r?\n/).length;
+      if (lines > 650) tooLarge.push(`${entry.name}:${lines}`);
+    }
+    assert.deepEqual(
+      tooLarge,
+      [],
+      `Reference files over 650 lines should be split: ${tooLarge.join(", ")}`,
+    );
+  });
+
+  test("meta-conductor scopes agent-teams-playbook to parallel lanes only", async () => {
+    const conductor = await readFile("canonical/agents/meta-conductor.md");
+    assert.match(conductor, /2\+ independent parallel worker lanes/i);
+    assert.doesNotMatch(
+      conductor,
+      /At the start of Stage 4 \(Execution\), use the `agent-teams-playbook` provider package/i,
+    );
+  });
+
+  test("meta-artisan uses runtime-aware capability discovery instead of Claude-only scans", async () => {
+    const artisan = await readFile("canonical/agents/meta-artisan.md");
+    assert.match(artisan, /canonical capability index[\s\S]{0,160}runtime mirrors[\s\S]{0,160}local runtime inventory/i);
+    assert.doesNotMatch(artisan, /Scan `\.claude\/agents\/\*\.md`/);
+    assert.doesNotMatch(artisan, /Scan `\.claude\/skills\/\*\/SKILL\.md`/);
+  });
+
+  test("meta-theory references do not present Claude runtime mirrors as canonical instructions", async () => {
+    for (const rel of [
+      "canonical/skills/meta-theory/references/create-agent.md",
+      "canonical/skills/meta-theory/references/rhythm-orchestration.md",
+      "canonical/skills/meta-theory/references/ten-step-governance.md",
+    ]) {
+      const content = await readFile(rel);
+      assert.doesNotMatch(
+        content,
+        /(?:Read|See|Generate|lives in)\s+`\.claude\/agents\//i,
+        `${rel} should route through canonical source first, then runtime mirror`,
+      );
+    }
   });
 });

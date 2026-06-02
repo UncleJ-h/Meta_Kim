@@ -68,16 +68,16 @@ card:
 
 | Card | Original name | Trigger | Action | Attention | Philosophy |
 |------|---------------|---------|--------|-----------|------------|
-| **Clarify** | 澄清 | Ambiguous need | ≤2 rounds of questions | low | Gather before act |
-| **Shrink scope** | 范围收缩 | Repo too large / many files / clashes | Narrow boundary | low | Complexity → reckless edits |
-| **Options** | 方案 | Clear need, many paths | Routes + tradeoffs + pick | mid | Map before code |
-| **Execute** | 执行 | Plan done, risk OK | Assign metas, change code | high | Plan before code |
-| **Verify** | 校验 | Execution done | Build / types / deps / reqs | mid | First pass ≠ correct |
-| **Fix** | 修复 | Verify fails | Repair until pass | mid | Cap iterations |
-| **Rollback** | 回滚 | Risk or blast radius grows | Last stable state | high | Retreat = maturity |
-| **Risk** | 风险 | Shared parts / auth / global / multi-party | Surface risk; preempt | high | Safety / global first |
-| **Nudge** | 建议 | User stuck, light touch | Low-cost next step | low | Helpful, not loud |
-| **Pause** | 留白 | Streak done / digest / ≥3 high-cost | Stop pushing; short status | zero | Designed silence |
+| **Clarify** | Clarify | Ambiguous need | ≤2 rounds of questions | low | Gather before act |
+| **Shrink scope** | Scope shrink | Repo too large / many files / clashes | Narrow boundary | low | Complexity → reckless edits |
+| **Options** | Options | Clear need, many paths | Routes + tradeoffs + pick | mid | Map before code |
+| **Execute** | Execute | Plan done, risk OK | Assign metas, change code | high | Plan before code |
+| **Verify** | Verify | Execution done | Build / types / deps / reqs | mid | First pass ≠ correct |
+| **Fix** | Fix | Verify fails | Repair until pass | mid | Cap iterations |
+| **Rollback** | Rollback | Risk or blast radius grows | Last stable state | high | Retreat = maturity |
+| **Risk** | Risk | Shared parts / auth / global / multi-party | Surface risk; preempt | high | Safety / global first |
+| **Nudge** | Nudge | User stuck, light touch | Low-cost next step | low | Helpful, not loud |
+| **Pause** | Pause | Streak done / digest / ≥3 high-cost | Stop pushing; short status | zero | Designed silence |
 
 ### Dealing rules (priority order)
 
@@ -199,7 +199,7 @@ Intent amplification (deliver)
 
 ### Conductor
 
-Conductor **executes** rhythm; this doc is the **method**. Implementation (deck data, deal function, pause/preempt) lives in `.claude/agents/meta-conductor.md`.
+Conductor **executes** rhythm; this doc is the **method**. Implementation (deck data, deal function, pause/preempt) lives in the canonical `meta-conductor` agent definition and is projected into each runtime mirror.
 
 ### Warden
 
@@ -244,3 +244,64 @@ Execute(high) → [Sentinel alert] → pause deck
 Execute(high) → [scope explodes] → Rollback(high)
 → stable state → reassess → Shrink(low) → re-Execute
 ```
+
+
+## Use when
+
+Use when card timing, silence, interruption, and user choice rhythm affects route, owner, risk, acceptance, verification, public-ready, or evolution writeback.
+
+## Required inputs
+
+- Latest user request and `intentPacket`
+- `fetchPacket` evidence that changes decision
+- runtime and OS targets when tools or dependencies are involved
+- relevant config, registry, script, or artifact path
+
+## Do
+
+- Assign an owner for each action.
+- Produce a checkable packet or artifact.
+- Bind pass/fail to evidence, threshold, or command output.
+- Preserve existing foundational and native runtime capabilities.
+
+## Do not
+
+- Do not delete skills, dependencies, web/browser/research, shell, filesystem, apply_patch, MCP, memory, graph, hooks, scripts, runtime tools, or native platform abilities.
+- Do not use vague advice without trigger, output, evidence, and writeback.
+- Do not route reference-only or unknown dependencies into execution.
+
+## Required packet
+
+`referenceContractPacket`: `referenceId`, `trigger`, `requiredInputs`, `actions`, `outputs`, `passCriteria`, `failCriteria`, `blockConditions`, `returnStage`, `verification`, `writebackTarget`.
+
+## Pass
+
+- At least one action has owner, input, output, and verification.
+- Pass criteria include numeric threshold, required field list, command, artifact, or human acceptance record.
+- Unsupported, unknown, or partial capability is marked rather than removed.
+
+## Fail
+
+- Instruction is only theory or roleplay.
+- No block condition exists for missing evidence, unsupported runtime/OS, fake owner, or missing verification.
+- Public-ready can be claimed without userGoalDone and evidence.
+
+## Block
+
+Block Execution when owner, weapon, dependency eligibility, runtime support, OS support, verification owner, or rollback boundary is missing. Block public-ready when verification evidence, intent acceptance, writebackDecision, or high/critical closure is missing.
+
+## Return to stage
+
+Return to Critical for intent gaps, Fetch for evidence/support gaps, Thinking for route gaps, Execution for missing artifact, Review for open findings, Verification for missing proof, and Evolution for missing writeback.
+
+## Verification
+
+Run the most specific validator for this reference plus `npm run meta:prompt:validate`. Use command/log/artifact/human acceptance evidence, not a narrative claim.
+
+## Writeback
+
+Write durable improvements to canonical references, governance configs, capability indexes, validators, tests, or scars. If no durable change exists, record `none-with-reason`.
+
+## Preserve
+
+Preserve Skills, WebSearch/browser/research, filesystem, shell, apply_patch, MCP, memory, Graphify, graph, hooks, commands, rules, agents, subagents, approval, sandbox, runtime tools, package scripts, setup, sync, install, uninstall, status, doctor, validators, and runtime projections.

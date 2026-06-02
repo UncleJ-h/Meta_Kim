@@ -9,6 +9,30 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/meta-kim-memory-save.mjs --event session-start",
+            "timeout": 10,
+            "statusMessage": "Loading Meta_Kim memory"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/meta-kim-memory-save.mjs --event user-prompt",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -16,10 +40,6 @@
           {
             "type": "command",
             "command": "node .claude/hooks/block-dangerous-bash.mjs"
-          },
-          {
-            "type": "command",
-            "command": "node .claude/hooks/pre-git-push-confirm.mjs"
           }
         ]
       },
@@ -29,6 +49,15 @@
           {
             "type": "command",
             "command": "node .claude/hooks/enforce-agent-dispatch.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/activate-meta-theory-spine.mjs"
           }
         ]
       }

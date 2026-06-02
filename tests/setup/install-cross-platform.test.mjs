@@ -18,6 +18,10 @@ const findskillSkill = skillsManifest.skills.find((skill) => skill.id === "finds
 const planningWithFilesSkill = skillsManifest.skills.find(
   (skill) => skill.id === "planning-with-files",
 );
+const superpowersSkill = skillsManifest.skills.find(
+  (skill) => skill.id === "superpowers",
+);
+const eccSkill = skillsManifest.skills.find((skill) => skill.id === "ecc");
 
 describe("install platform config", () => {
   test("quick deploy copies root runtime guide files", () => {
@@ -70,6 +74,31 @@ describe("install platform config", () => {
   test("planning-with-files uses skills/ as canonical + pluginHookCompat for hooks", () => {
     assert.equal(planningWithFilesSkill.pluginHookCompat, true);
     assert.equal(planningWithFilesSkill.installRoot, undefined);
+  });
+
+  test("superpowers declares native Codex and Cursor plugin flows", () => {
+    assert.equal(superpowersSkill.installMethod, "pluginMarketplace");
+    assert.equal(superpowersSkill.claudePlugin, "superpowers@superpowers-marketplace");
+    assert.equal(superpowersSkill.codexPlugin, "superpowers");
+    assert.equal(superpowersSkill.cursorPlugin, "superpowers");
+  });
+
+  test("ECC uses current upstream repo and native installer policy", () => {
+    assert.equal(eccSkill.repo, "affaan-m/ECC");
+    assert.equal(eccSkill.claudePlugin, "ecc@ecc");
+    assert.equal(eccSkill.installMethod, "upstreamCli");
+    assert.equal(eccSkill.upstreamPackage, "ecc-universal@2.0.0-rc.1");
+    assert.equal(eccSkill.upstreamProfile, "core");
+    assert.deepEqual(eccSkill.legacyNames, ["everything-claude-code"]);
+    assert.equal(eccSkill.platformSupport.codex.status, "native");
+    assert.equal(eccSkill.platformSupport.cursor.status, "native");
+    assert.equal(eccSkill.platformSupport.zed.status, "native");
+    assert.equal(eccSkill.platformSupport.gemini.status, "native");
+    assert.equal(eccSkill.platformSupport.qwen.status, "native");
+    assert.ok(eccSkill.targets.includes("codex"));
+    assert.ok(eccSkill.targets.includes("cursor"));
+    assert.ok(eccSkill.targets.includes("opencode"));
+    assert.equal(eccSkill.targets.includes("qoder"), false);
   });
 
   test("legacy setup fallback only applies when requested", () => {

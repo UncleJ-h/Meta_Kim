@@ -1,6 +1,6 @@
 {
   "name": "meta-kim",
-  "version": "2.0.31",
+  "version": "2.8.4",
   "description": "Governance layer for AI coding: meta agents, workflow contract, meta-theory; canonical in canonical/, with generated Claude/Codex/OpenClaw/Cursor projections.",
   "private": true,
   "type": "module",
@@ -9,8 +9,10 @@
     "meta:check:runtimes": "node scripts/sync-runtimes.mjs --check",
     "meta:sync:global": "node scripts/sync-global-meta-theory.mjs",
     "meta:check:global": "node scripts/sync-global-meta-theory.mjs --check",
+    "meta:check:global:release": "node scripts/sync-global-meta-theory.mjs --check --with-global-hooks",
     "meta:show:global:targets": "node scripts/sync-global-meta-theory.mjs --print-targets",
     "discover:global": "node scripts/discover-global-capabilities.mjs",
+    "postinstall": "node scripts/postinstall-check.mjs",
     "meta:index:runs": "node scripts/run-index.mjs index",
     "meta:query:runs": "node scripts/run-index.mjs query",
     "meta:rebuild:run-index": "node scripts/run-index.mjs rebuild",
@@ -32,6 +34,7 @@
     "meta:status": "node scripts/footprint.mjs",
     "meta:status:json": "node scripts/footprint.mjs --json",
     "meta:status:diff": "node scripts/footprint.mjs --diff",
+    "meta:run-status": "node scripts/meta-run-status.mjs",
     "meta:uninstall": "node scripts/uninstall.mjs",
     "meta:uninstall:yes": "node scripts/uninstall.mjs --yes",
     "meta:uninstall:deep": "node scripts/uninstall.mjs --yes --deep",
@@ -46,12 +49,34 @@
     "meta:graphify:update": "node scripts/graphify-cli.mjs update",
     "meta:graphify:rebuild": "node scripts/graphify-cli.mjs rebuild",
     "meta:validate": "node scripts/validate-project.mjs",
-    "meta:check": "npm run meta:check:runtimes && npm run meta:validate",
-    "meta:verify:all": "npm run meta:check && npm run meta:graphify:check && npm run meta:check:global && node scripts/eval-meta-agents.mjs --require-all-runtimes && npm run meta:test:setup && npm run meta:test:meta-theory",
-    "meta:verify:all:live": "npm run meta:check && npm run meta:graphify:check && npm run meta:check:global && node scripts/eval-meta-agents.mjs --require-all-runtimes --live && npm run meta:test:setup && npm run meta:test:meta-theory",
+    "meta:check:sync-coverage": "node scripts/sync-coverage-check.mjs",
+    "meta:check": "npm run meta:check:runtimes && npm run meta:check:sync-coverage && npm run meta:validate",
+    "meta:verify:all": "npm run discover:global && npm run meta:check && npm run meta:graphify:check && npm run meta:check:global:release && node scripts/eval-meta-agents.mjs --require-all-runtimes && npm run meta:test:setup && npm run meta:test:meta-theory",
+    "meta:verify:all:live": "node scripts/eval-meta-agents.mjs --require-all-runtimes --live",
     "meta:setup:install": "node setup.mjs",
     "meta:setup:update": "node setup.mjs --update",
-    "meta:setup:check": "node setup.mjs --check"
+    "meta:setup:check": "node setup.mjs --check",
+    "meta:runtime:probe": "node scripts/probe-runtime-capabilities.mjs",
+    "meta:runtime:check": "node scripts/probe-runtime-capabilities.mjs --check",
+    "meta:os:probe": "node scripts/probe-os-compatibility.mjs",
+    "meta:os:check": "node scripts/probe-os-compatibility.mjs --check",
+    "meta:deps:discover": "node scripts/discover-dependency-capabilities.mjs",
+    "meta:deps:check": "node scripts/discover-dependency-capabilities.mjs --check",
+    "meta:capabilities:index": "node scripts/build-capability-inventory.mjs",
+    "meta:providers:validate": "node scripts/validate-provider-capabilities.mjs",
+    "meta:capabilities:route": "node scripts/select-execution-route.mjs",
+    "meta:capabilities:smoke": "node scripts/run-capability-discovery-smoke.mjs",
+    "meta:lens:select": "node scripts/select-lenses.mjs",
+    "meta:governance:validate": "node scripts/validate-governance-contracts.mjs",
+    "meta:route:validate": "node scripts/validate-capability-routing.mjs",
+    "meta:runtime:validate": "node scripts/validate-runtime-matrix.mjs",
+    "meta:intent:validate": "node scripts/validate-intent-amplification.mjs",
+    "meta:prompt:validate": "node scripts/validate-prompt-executability.mjs",
+    "meta:foundational:validate": "node scripts/validate-foundational-capabilities.mjs",
+    "meta:deps:compat": "node scripts/validate-dependency-compatibility.mjs",
+    "meta:hook:validate": "node scripts/validate-hook-progression.mjs",
+    "meta:test:governance": "node scripts/run-node-tests.mjs \"tests/governance/*.test.mjs\"",
+    "meta:verify:governance": "npm run meta:governance:validate && npm run meta:runtime:validate && npm run meta:os:check && npm run meta:deps:check && npm run meta:deps:compat && npm run meta:providers:validate && npm run meta:route:validate && npm run meta:intent:validate && npm run meta:prompt:validate && npm run meta:foundational:validate && npm run meta:hook:validate && npm run meta:test:governance"
   },
   "keywords": [
     "claude-code",
@@ -62,7 +87,7 @@
   ],
   "files": [
     "canonical/",
-    "scripts/",
+    "scripts/**/*.mjs",
     "bin/",
     "config/",
     "docs/",
@@ -87,7 +112,10 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.4.1",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.76"
+  },
+  "overrides": {
+    "mute-stream": "3.0.0"
   }
 }

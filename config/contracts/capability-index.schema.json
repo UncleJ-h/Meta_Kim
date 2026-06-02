@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meta-kim.dev/contracts/capability-index.schema.json",
+  "title": "Meta_Kim Capability Index",
+  "description": "Schema for Meta_Kim capability index, which distinguishes meta-agents (governance layer) from execution-agents (work layer)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "generatedAt",
+    "registryName",
+    "scope",
+    "fetchOrder",
+    "abstractCapabilitySlots",
+    "metaSkillProviders",
+    "runtimeSelectedSkills",
+    "longTermAgentIdentityPolicy",
+    "byCapabilityType"
+  ],
+  "properties": {
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO timestamp when index was generated"
+    },
+    "registryName": {
+      "type": "string",
+      "description": "Name of this capability registry"
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["repo-canonical", "local-global-inventory"],
+      "description": "Scope of this index"
+    },
+    "canonicalProjection": {
+      "type": "string",
+      "description": "Path to canonical projection within repo"
+    },
+    "canonicalSource": {
+      "type": "string",
+      "description": "Canonical source file for repo-local capability index content"
+    },
+    "mirroredTo": {
+      "type": "array",
+      "description": "Runtime mirror paths that must stay byte-for-byte aligned with canonicalProjection",
+      "items": { "type": "string" }
+    },
+    "localGlobalInventory": {
+      "type": "string",
+      "description": "Path template for local global inventory (uses {profile} placeholder)"
+    },
+    "fetchOrder": {
+      "type": "array",
+      "description": "Search order for capability discovery (CRITICAL: meta-agents must NOT be used for execution)",
+      "items": {
+        "type": "string",
+        "enum": [
+          "repo canonical capability index",
+          "runtime mirror",
+          "local global inventory",
+          "capability gap packet and return to Thinking"
+        ]
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "Summary statistics",
+      "properties": {
+        "totalAgents": { "type": "integer" },
+        "totalSkills": { "type": "integer" },
+        "totalHooks": { "type": "integer" },
+        "totalPlugins": { "type": "integer" },
+        "totalCommands": { "type": "integer" }
+      }
+    },
+    "abstractCapabilitySlots": {
+      "type": "array",
+      "description": "Long-term abstract capability slots. These describe capability needs without binding a concrete runtime sub-skill into a meta-agent identity.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slotId",
+          "description",
+          "allowedProviderIds",
+          "selectedSkillScope"
+        ],
+        "properties": {
+          "slotId": { "type": "string" },
+          "description": { "type": "string" },
+          "allowedProviderIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "selectedSkillScope": {
+            "type": "string",
+            "enum": ["run_only"]
+          }
+        }
+      }
+    },
+    "metaSkillProviders": {
+      "type": "object",
+      "description": "Meta-skill packages that may appear in long-term identity as providers, not as fixed concrete child skill bindings.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "providerKind",
+          "allowedForLongTermAgentIdentity",
+          "concreteSubSkillBindingForbidden"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "providerKind": {
+            "type": "string",
+            "enum": ["meta-skill-package"]
+          },
+          "allowedForLongTermAgentIdentity": { "type": "boolean" },
+          "concreteSubSkillBindingForbidden": { "type": "boolean" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "runtimeSelectedSkills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selectedSkillScope",
+        "persistencePolicy"
+      ],
+      "properties": {
+        "selectedSkillScope": {
+          "type": "string",
+          "enum": ["run_only"]
+        },
+        "persistencePolicy": { "type": "string" }
+      }
+    },
+    "longTermAgentIdentityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "forbidConcreteSkillInLongTermAgentIdentity",
+        "allowedMetaSkillProviderIds",
+        "forbiddenConcreteSkillPatterns"
+      ],
+      "properties": {
+        "forbidConcreteSkillInLongTermAgentIdentity": {
+          "type": "boolean",
+          "const": true
+        },
+        "allowedMetaSkillProviderIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "forbiddenConcreteSkillPatterns": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "byCapabilityType": {
+      "type": "object",
+      "description": "Capabilities grouped by type",
+      "properties": {
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["id", "type", "layer"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Agent identifier"
+              },
+              "type": {
+                "const": "agents",
+                "description": "Capability type"
+              },
+              "namespace": {
+                "type": "string",
+                "description": "Namespace (canonical, global, etc.)"
+              },
+              "path": {
+                "type": "string",
+                "description": "File path"
+              },
+              "size": {
+                "type": "integer",
+                "description": "File size in bytes"
+              },
+              "modified": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Last modified timestamp"
+              },
+              "layer": {
+                "type": "string",
+                "enum": ["meta", "execution"],
+                "description": "CRITICAL: 'meta' = governance layer (NOT for direct execution), 'execution' = work layer (performs tasks)"
+              },
+              "executionBlock": {
+                "type": "boolean",
+                "description": "If true, this agent MUST NOT be dispatched for execution work. Always true for layer='meta'"
+              },
+              "capabilities": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Capabilities this agent provides (for execution agents)"
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Additional metadata (name, description, etc.)"
+              }
+            }
+          }
+        },
+        "skills": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["id", "type"],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "const": "skills" },
+              "namespace": { "type": "string" },
+              "path": { "type": "string" },
+              "size": { "type": "integer" },
+              "modified": { "type": "string", "format": "date-time" },
+              "metadata": { "type": "object" }
+            }
+          }
+        },
+        "hooks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["id", "type"],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "const": "hooks" },
+              "namespace": { "type": "string" },
+              "path": { "type": "string" },
+              "size": { "type": "integer" },
+              "modified": { "type": "string", "format": "date-time" },
+              "metadata": { "type": "object" }
+            }
+          }
+        },
+        "plugins": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "const": "plugins" },
+              "metadata": { "type": "object" }
+            }
+          }
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "const": "commands" },
+              "metadata": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "governanceRules": {
+      "type": "object",
+      "description": "Governance rules for agent dispatch",
+      "properties": {
+        "metaAgentDispatchRule": {
+          "type": "string",
+          "description": "Rule for when meta-agents can be dispatched",
+          "const": "Meta-agents (layer='meta') are the only durable public Meta_Kim owners for Critical, Fetch, Thinking, and Review. They MUST NOT perform implementation work directly; concrete implementation capability is recorded as run-scoped matchedCapabilities/capabilityBindings across skills, commands, MCP tools, runtime tools, file sets, or capability-index queries; legacy matchedSkills is compatibility evidence only."
+        },
+        "fallbackBehavior": {
+          "type": "string",
+          "description": "Behavior when no open-source governance owner or run-scoped capability evidence is found",
+          "const": "Use a governance meta owner plus run-scoped matchedCapabilities/capabilityBindings, or block with capabilityGapPacket. Do not persist non-governance execution agents in the public repo."
+        }
+      }
+    }
+  }
+}

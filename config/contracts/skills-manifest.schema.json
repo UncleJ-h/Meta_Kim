@@ -62,14 +62,60 @@
             "type": "string",
             "description": "Claude Code marketplace plugin identifier if this skill is also an official plugin"
           },
+          "codexPlugin": {
+            "type": "string",
+            "description": "Codex plugin marketplace identifier when the package should be installed through Codex's native plugin flow instead of a skills/ fallback"
+          },
+          "cursorPlugin": {
+            "type": "string",
+            "description": "Cursor plugin marketplace identifier when the package should be installed through Cursor's native plugin flow instead of a skills/ fallback"
+          },
+          "capabilities": {
+            "type": "array",
+            "description": "Runtime-neutral capabilities provided by this skill.",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "platformSupport": {
+            "type": "object",
+            "description": "Per-runtime support status for the skill capability, distinct from install targets.",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["status"],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": ["native", "adapter-required", "degraded", "unsupported"]
+                },
+                "events": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "adapter": { "type": "string" }
+              }
+            }
+          },
+          "fallback": {
+            "type": "object",
+            "description": "Per-runtime fallback or degraded behavior notes.",
+            "additionalProperties": { "type": "string" }
+          },
           "defaultSelected": {
             "type": "boolean",
             "description": "If false, setup does not pre-select this repo in the dependency multi-select (default: true)"
           },
           "installMethod": {
             "type": "string",
-            "enum": ["pluginMarketplace", "gitClone", "gitCloneInstallScript", "subdirExtraction", "manual"],
-            "description": "How this skill is installed on target platforms. pluginMarketplace=Claude Code plugin marketplace; gitClone=plain git clone; gitCloneInstallScript=git clone then run setup script; subdirExtraction=git clone with subdir extraction; manual=copy files manually per README"
+            "enum": ["pluginMarketplace", "gitClone", "gitCloneInstallScript", "subdirExtraction", "manual", "upstreamCli"],
+            "description": "How this skill is installed on target platforms. pluginMarketplace=Claude Code plugin marketplace; upstreamCli=delegate to the dependency's own installer for non-Claude native runtime adapters; gitClone=plain git clone; gitCloneInstallScript=git clone then run setup script; subdirExtraction=git clone with subdir extraction; manual=copy files manually per README"
+          },
+          "upstreamPackage": {
+            "type": "string",
+            "description": "npm package used when installMethod is upstreamCli"
+          },
+          "upstreamProfile": {
+            "type": "string",
+            "description": "profile passed to the upstream installer when installMethod is upstreamCli"
           },
           "legacyNames": {
             "type": "array",
@@ -83,7 +129,20 @@
             "description": "Which runtimes this skill applies to. If omitted, applies to all runtimes.",
             "items": {
               "type": "string",
-              "enum": ["claude", "codex", "openclaw", "cursor", "opencode"]
+              "enum": [
+                "claude",
+                "codex",
+                "openclaw",
+                "cursor",
+                "opencode",
+                "qwen",
+                "zed",
+                "gemini",
+                "codebuddy",
+                "antigravity",
+                "joycode",
+                "qoder"
+              ]
             }
           },
           "hookSubdirs": {

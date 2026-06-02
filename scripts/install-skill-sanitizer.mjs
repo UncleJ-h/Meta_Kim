@@ -171,6 +171,63 @@ export function validateSkillFrontmatter(raw) {
   return { ok: true, code: "ok", message: "frontmatter valid" };
 }
 
+function quoteYamlDouble(value) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+export function quoteUnsafeFrontmatterScalars(raw) {
+  const frontmatter = extractFrontmatter(raw);
+  if (!frontmatter) return { content: raw, fixes: [] };
+
+  const fixes = [];
+  const lines = frontmatter.split(/\r?\n/);
+  let expectsIndentedBlock = false;
+  const patchedLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+
+    const isIndented = /^[ \t]+/.test(line);
+    if (expectsIndentedBlock) {
+      if (isIndented) return line;
+      expectsIndentedBlock = false;
+    }
+    if (isIndented || trimmed.startsWith("- ")) return line;
+
+    const keyValueMatch = line.match(/^([A-Za-z0-9_.-]+):(.*)$/);
+    if (!keyValueMatch) return line;
+
+    const value = keyValueMatch[2].trim();
+    if (!value) return line;
+    if (BLOCK_SCALAR_TOKENS.has(value)) {
+      expectsIndentedBlock = true;
+      return line;
+    }
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")) ||
+      value.startsWith("[") ||
+      value.startsWith("{")
+    ) {
+      return line;
+    }
+    if (!/: /.test(value)) return line;
+
+    fixes.push({ key: keyValueMatch[1], value });
+    return `${keyValueMatch[1]}: ${quoteYamlDouble(value)}`;
+  });
+
+  if (fixes.length === 0) return { content: raw, fixes };
+  const newline = raw.includes("\r\n") ? "\r\n" : "\n";
+  const patchedFrontmatter = patchedLines.join(newline);
+  return {
+    content: raw.replace(
+      /^---\r?\n[\s\S]*?\r?\n---/,
+      `---${newline}${patchedFrontmatter}${newline}---`,
+    ),
+    fixes,
+  };
+}
+
 async function pathExists(filePath) {
   try {
     await fs.access(filePath);
@@ -195,6 +252,122 @@ export async function detectLegacySubdirInstall(targetDir, subdirPath) {
   // folders that happen to contain a matching subdir name.
   return (
     (await pathExists(nestedSubdir)) && (await pathExists(gitMetadataPath))
+  );
+}
+
+export async function detectPluginBundleSkillResidue(targetDir) {
+  if (!(await pathExists(targetDir))) {
+    return false;
+  }
+
+  const markerNames = [
+    ".claude-plugin",
+    ".codex-plugin",
+    ".cursor-plugin",
+    "plugin.json",
+    "marketplace.json",
+  ];
+  const runtimeAdapterNames = [
+    ".agents",
+    ".claude",
+    ".codex",
+    ".cursor",
+    ".opencode",
+    ".qoder",
+    "openclaw",
+  ];
+
+  let hasMarker = false;
+  for (const name of markerNames) {
+    if (await pathExists(path.join(targetDir, name))) {
+      hasMarker = true;
+      break;
+    }
+  }
+  if (!hasMarker) {
+    return false;
+  }
+
+  let adapterCount = 0;
+  for (const name of runtimeAdapterNames) {
+    if (await pathExists(path.join(targetDir, name))) {
+      adapterCount += 1;
+    }
+  }
+
+  return adapterCount >= 2;
+}
+
+export async function detectManagedInstallConflict(
+  targetDir,
+  {
+    skillId,
+    subdirPath,
+    manifestManagedPaths = [],
+    legacyFlatMetaTheory = false,
+  } = {},
+) {
+  if (!(await pathExists(targetDir))) {
+    return { conflict: false };
+  }
+
+  const resolvedTarget = path.resolve(targetDir);
+  for (const entry of manifestManagedPaths) {
+    const entryPath = typeof entry === "string" ? entry : entry?.path;
+    if (!entryPath || path.resolve(entryPath) !== resolvedTarget) {
+      continue;
+    }
+
+    if (
+      isTrustedManagedManifestEntry(entry, skillId) ||
+      (await hasManagedInstallResidue(targetDir, subdirPath))
+    ) {
+      return { conflict: true, reason: "manifest_managed_path" };
+    }
+  }
+
+  if (legacyFlatMetaTheory && path.basename(targetDir) === "meta-theory.md") {
+    return { conflict: true, reason: "legacy_flat_meta_theory" };
+  }
+
+  if (await detectLegacySubdirInstall(targetDir, subdirPath)) {
+    return { conflict: true, reason: "legacy_subdir_install" };
+  }
+
+  if (await detectPluginBundleSkillResidue(targetDir)) {
+    return { conflict: true, reason: "plugin_bundle_residue" };
+  }
+
+  return { conflict: false };
+}
+
+function isTrustedManagedManifestEntry(entry, skillId) {
+  if (!entry || typeof entry === "string") {
+    return false;
+  }
+
+  if (skillId && entry.skillId === skillId) {
+    return true;
+  }
+
+  const purpose = String(entry.purpose ?? "");
+  if (skillId && purpose === `${skillId}-global-skill`) {
+    return true;
+  }
+
+  const source = String(entry.source ?? "");
+  return (
+    entry.category === "A" &&
+    entry.kind === "dir" &&
+    /global-skill$/.test(purpose) &&
+    /install-global-skills|sync-global-meta-theory|setup\.mjs/.test(source)
+  );
+}
+
+async function hasManagedInstallResidue(targetDir, subdirPath) {
+  return (
+    (await detectLegacySubdirInstall(targetDir, subdirPath)) ||
+    (await detectPluginBundleSkillResidue(targetDir))
   );
 }
 
@@ -317,6 +490,7 @@ export async function sanitizeInstalledSkillTree(
   const files = await listSkillFiles(targetDir);
   const invalidFiles = [];
   const hookPathFixes = [];
+  const frontmatterFixes = [];
 
   for (const filePath of files) {
     const relToTarget = path.relative(targetDir, filePath).replace(/\\/g, "/");
@@ -324,8 +498,23 @@ export async function sanitizeInstalledSkillTree(
       shouldSkipHarnessPackageSkillDoc(relToTarget);
 
     const raw = await fs.readFile(filePath, "utf8");
-    const validation = validateSkillFrontmatter(raw);
+    let validation = validateSkillFrontmatter(raw);
+    if (validation.code === "invalid_unquoted_colon") {
+      const { content: patched, fixes } = quoteUnsafeFrontmatterScalars(raw);
+      const patchedValidation = validateSkillFrontmatter(patched);
+      if (fixes.length > 0 && patchedValidation.ok) {
+        frontmatterFixes.push({ filePath, fixes });
+        if (!dryRun) {
+          await fs.writeFile(filePath, patched, "utf8");
+        }
+        validation = patchedValidation;
+      }
+    }
     if (validation.ok) {
+      const disabledPath = buildDisabledSkillPath(filePath);
+      if (!dryRun && (await pathExists(disabledPath))) {
+        await fs.rm(disabledPath, { force: true });
+      }
       // Valid YAML: check for known broken hook command paths and patch in-place.
       const { content: patched, fixes } = applyHookPathFixes(raw);
       if (fixes.length > 0) {
@@ -365,6 +554,7 @@ export async function sanitizeInstalledSkillTree(
     quarantined: invalidFiles.length,
     invalidFiles,
     hookPathFixes,
+    frontmatterFixes,
     patchedFiles: hookPathFixes.length,
   };
 }

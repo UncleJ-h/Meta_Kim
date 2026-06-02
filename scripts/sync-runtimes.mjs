@@ -7,8 +7,16 @@ import {
   mergeRepoClaudeSettings,
 } from "./claude-settings-merge.mjs";
 import {
+  buildCodexHooksJson,
+  buildCursorHooksJson,
+  buildHookPromptAdapterSource,
+  nodeHookCommand,
+} from "./runtime-hook-mapping.mjs";
+import {
   canonicalAgentsDir,
+  canonicalCapabilityIndexDir,
   canonicalRuntimeAssetsDir,
+  canonicalSkillsDir,
   canonicalSkillPath,
   canonicalSkillReferencesDir,
   repoRoot,
@@ -17,6 +25,7 @@ import {
   assertHomeBound,
   resolveRuntimeProjection,
   resolveRuntimeAllowedRoots,
+  resolveRuntimeHomeDir,
 } from "./meta-kim-sync-config.mjs";
 import { t } from "./meta-kim-i18n.mjs";
 import { CATEGORIES, openRecorder } from "./install-manifest.mjs";
@@ -25,6 +34,9 @@ import { validateSkillFrontmatter } from "./install-skill-sanitizer.mjs";
 const cliArgs = process.argv.slice(2);
 const checkOnly = process.argv.includes("--check");
 const jsonMode = process.argv.includes("--json");
+const reverseMode = process.argv.includes("--reverse");
+const dryRun = process.argv.includes("--dry-run");
+const forceWrite = process.argv.includes("--force");
 
 // Captures "will be written" entries whenever writeGeneratedFile runs under
 // --check. Populated even when not in --json mode so callers get deterministic
@@ -52,8 +64,8 @@ function recordSafe(fn) {
  * the manifest with ambiguous entries.
  *
  * Category semantics (see install-manifest.mjs CATEGORY_LABELS):
- *   D = Project runtime skills   (.claude/skills, .codex/skills, ...)
- *   E = Project runtime hooks    (.claude/hooks/*.mjs)
+ *   D = Project runtime skills   (.claude/skills, .agents/skills, ...)
+ *   E = Project runtime hooks    (.claude/hooks, .codex/hooks, .cursor/hooks, openclaw/hooks)
  *   F = Project runtime agents   (.claude/agents, .codex/agents, .cursor/agents)
  *   G = Project settings + MCP   (.claude/settings.json, .mcp.json, .codex/*.toml)
  */
@@ -62,6 +74,14 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
   const rel = path.relative(rootDir, filePath).replace(/\\/g, "/");
   if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
   if (rel === ".claude/settings.json" || rel === ".mcp.json") {
+    return CATEGORIES.G;
+  }
+  if (
+    rel.startsWith(".claude/capability-index/") ||
+    rel.startsWith(".codex/capability-index/") ||
+    rel.startsWith(".cursor/capability-index/") ||
+    rel.startsWith("openclaw/capability-index/")
+  ) {
     return CATEGORIES.G;
   }
   if (
@@ -81,7 +101,7 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
   }
   if (
     rel.startsWith(".claude/skills/") ||
-    rel.startsWith(".codex/skills/") ||
+    rel.startsWith(".agents/skills/") ||
     rel.startsWith(".cursor/skills/") ||
     rel.startsWith("openclaw/skills/") ||
     rel.startsWith("openclaw/workspaces/")
@@ -91,11 +111,15 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
   if (
     rel.startsWith(".codex/commands/") ||
     rel === ".codex/hooks.json" ||
-    rel === ".cursor/hooks.json"
+    rel === ".cursor/hooks.json" ||
+    rel.startsWith(".cursor/rules/")
   ) {
     return CATEGORIES.G;
   }
-  if (rel === "openclaw/openclaw.template.json" || rel.startsWith(".codex/")) {
+  if (
+    rel === "openclaw/openclaw.template.json" ||
+    (rel.startsWith(".codex/") && !rel.startsWith(".codex/skills/"))
+  ) {
     return CATEGORIES.G;
   }
   return null;
@@ -139,6 +163,451 @@ function getProjectionBase(scope, runtimeId) {
   return resolveRuntimeProjection(runtimeId, scope).baseDir;
 }
 
+// ── Reverse sync: Runtime -> Canonical signal collection ────────────────
+
+/**
+ * Compare two file contents and return diff information.
+ */
+function compareFileContents(canonicalContent, runtimeContent) {
+  if (canonicalContent === runtimeContent) {
+    return { hasChanges: false };
+  }
+  const canonicalLines = canonicalContent.split("\n");
+  const runtimeLines = runtimeContent.split("\n");
+  return {
+    hasChanges: true,
+    canonicalLines: canonicalLines.length,
+    runtimeLines: runtimeLines.length,
+  };
+}
+
+/**
+ * Detect local modifications in runtime agent files.
+ * Returns evolution signals: changes that should propagate to canonical.
+ */
+async function detectRuntimeAgentChanges(runtimeAgentsDir, displayPath) {
+  const signals = [];
+  try {
+    const files = await fs.readdir(runtimeAgentsDir);
+    const agentFiles = files.filter((f) => f.endsWith(".md") || f.endsWith(".toml"));
+
+    for (const file of agentFiles) {
+      const runtimePath = path.join(runtimeAgentsDir, file);
+      const runtimeContent = await fs.readFile(runtimePath, "utf8");
+
+      // Map runtime file back to canonical source
+      const canonicalPath = mapRuntimeToCanonicalAgent(runtimePath, file);
+      if (!canonicalPath) continue;
+
+      let canonicalContent = null;
+      try {
+        canonicalContent = await fs.readFile(canonicalPath, "utf8");
+      } catch {
+        // Canonical file missing - this is a new candidate
+        signals.push({
+          type: "new",
+          runtimePath,
+          canonicalPath,
+          displayPath: `${displayPath}/${file}`,
+          runtimeContent,
+        });
+        continue;
+      }
+
+      const diff = compareFileContents(canonicalContent, runtimeContent);
+      if (diff.hasChanges) {
+        signals.push({
+          type: "modified",
+          runtimePath,
+          canonicalPath,
+          displayPath: `${displayPath}/${file}`,
+          canonicalContent,
+          runtimeContent,
+          diff,
+        });
+      }
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn(`Warning: Could not read ${runtimeAgentsDir}: ${error.message}`);
+    }
+  }
+  return signals;
+}
+
+/**
+ * Detect local modifications in runtime skill files.
+ */
+async function detectRuntimeSkillChanges(runtimeSkillRoot, displayPath) {
+  const signals = [];
+  try {
+    const skillPath = path.join(runtimeSkillRoot, "SKILL.md");
+    const canonicalSkill = canonicalSkillPath;
+
+    let runtimeContent = null;
+    try {
+      runtimeContent = await fs.readFile(skillPath, "utf8");
+    } catch {
+      return signals;
+    }
+
+    let canonicalContent = null;
+    try {
+      canonicalContent = await fs.readFile(canonicalSkill, "utf8");
+    } catch {
+      signals.push({
+        type: "new",
+        runtimePath: skillPath,
+        canonicalPath: canonicalSkill,
+        displayPath: `${displayPath}/SKILL.md`,
+        runtimeContent,
+      });
+      return signals;
+    }
+
+    const diff = compareFileContents(canonicalContent, runtimeContent);
+    if (diff.hasChanges) {
+      signals.push({
+        type: "modified",
+        runtimePath: skillPath,
+        canonicalPath: canonicalSkill,
+        displayPath: `${displayPath}/SKILL.md`,
+        canonicalContent,
+        runtimeContent,
+        diff,
+      });
+    }
+
+    // Check references
+    const refsPath = path.join(runtimeSkillRoot, "references");
+    try {
+      const refFiles = await fs.readdir(refsPath);
+      for (const refFile of refFiles) {
+        const runtimeRefPath = path.join(refsPath, refFile);
+        const canonicalRefPath = path.join(canonicalSkillReferencesDir, refFile);
+
+        const runtimeRefContent = await fs.readFile(runtimeRefPath, "utf8");
+        let canonicalRefContent = null;
+        try {
+          canonicalRefContent = await fs.readFile(canonicalRefPath, "utf8");
+        } catch {
+          signals.push({
+            type: "new",
+            runtimePath: runtimeRefPath,
+            canonicalPath: canonicalRefPath,
+            displayPath: `${displayPath}/references/${refFile}`,
+            runtimeContent: runtimeRefContent,
+          });
+          continue;
+        }
+
+        const refDiff = compareFileContents(canonicalRefContent, runtimeRefContent);
+        if (refDiff.hasChanges) {
+          signals.push({
+            type: "modified",
+            runtimePath: runtimeRefPath,
+            canonicalPath: canonicalRefPath,
+            displayPath: `${displayPath}/references/${refFile}`,
+            canonicalContent: canonicalRefContent,
+            runtimeContent: runtimeRefContent,
+            diff: refDiff,
+          });
+        }
+      }
+    } catch {
+      // References directory might not exist
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn(`Warning: Could not read ${runtimeSkillRoot}: ${error.message}`);
+    }
+  }
+  return signals;
+}
+
+/**
+ * Map runtime agent file path to canonical source path.
+ */
+function mapRuntimeToCanonicalAgent(runtimePath, fileName) {
+  const ext = path.extname(fileName);
+  const baseName = path.basename(fileName, ext);
+
+  // Claude Code: .claude/agents/{id}.md -> canonical/agents/{id}.md
+  if (runtimePath.includes(".claude/agents/") || runtimePath.includes("\\.claude\\agents\\")) {
+    return path.join(canonicalAgentsDir, `${baseName}.md`);
+  }
+  // Codex: .codex/agents/{id}.toml -> canonical/agents/{id}.md
+  if (runtimePath.includes(".codex/agents/") || runtimePath.includes("\\.codex\\agents\\")) {
+    return path.join(canonicalAgentsDir, `${baseName}.md`);
+  }
+  // Cursor: .cursor/agents/{id}.md -> canonical/agents/{id}.md
+  if (runtimePath.includes(".cursor/agents/") || runtimePath.includes("\\.cursor\\agents\\")) {
+    return path.join(canonicalAgentsDir, `${baseName}.md`);
+  }
+  // OpenClaw: openclaw/workspaces/{id}/SOUL.md -> canonical/agents/{id}.md
+  if (runtimePath.includes("workspaces") && (runtimePath.endsWith("SOUL.md") || runtimePath.endsWith("BOOTSTRAP.md"))) {
+    const workspaceMatch = runtimePath.match(/workspaces[\/\\]([^\/\\]+)/);
+    if (workspaceMatch) {
+      return path.join(canonicalAgentsDir, `${workspaceMatch[1]}.md`);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Validate that proposed canonical changes comply with Five Criteria.
+ * Basic validation: frontmatter, structure, essential fields.
+ */
+function validateProposedChange(content, filePath) {
+  const errors = [];
+
+  if (filePath.endsWith(".md")) {
+    // Check for YAML frontmatter (skip if already has skill frontmatter with different format)
+    if (!content.startsWith("---")) {
+      errors.push("Missing YAML frontmatter");
+    }
+
+    // Check for essential frontmatter fields
+    const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (frontmatterMatch) {
+      const frontmatter = frontmatterMatch[1];
+      if (!frontmatter.includes("name:") && !frontmatter.includes("title:") && !frontmatter.includes("description:")) {
+        errors.push("Missing name, title, or description in frontmatter");
+      }
+    }
+
+    // Check agent files have required sections (only for actual agent files)
+    const lowerContent = content.toLowerCase();
+    const lowerPath = filePath.toLowerCase();
+
+    // Only check agent files (in canonical/agents/ or with agents in path)
+    const isAgentFile = lowerPath.includes("canonical/agents") ||
+                        lowerPath.includes(".claude/agents") ||
+                        lowerPath.includes(".codex/agents") ||
+                        lowerPath.includes(".cursor/agents") ||
+                        lowerPath.includes("/agents/");
+
+    if (isAgentFile) {
+      if (!lowerContent.includes("## boundary") &&
+          !lowerContent.includes("## responsibilities") &&
+          !lowerContent.includes("## role") &&
+          !lowerContent.includes("## ownership")) {
+        errors.push("Missing boundary, responsibilities, role, or ownership section");
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * Check for conflicts between canonical and runtime versions.
+ * Returns true if there's a conflict that requires user attention.
+ */
+function detectConflict(signal) {
+  if (signal.type === "new") {
+    return false;
+  }
+
+  // Heuristic: if canonical has significantly more content, it may have
+  // received updates not yet synced to this runtime
+  const { canonicalLines, runtimeLines } = signal.diff;
+  const lineDiff = Math.abs(canonicalLines - runtimeLines);
+  const threshold = Math.max(20, Math.floor(canonicalLines * 0.1));
+
+  // If canonical is 10% or 20+ lines different, flag as potential conflict
+  return lineDiff > threshold && canonicalLines > runtimeLines;
+}
+
+/**
+ * Execute reverse sync: collect evolution signals and write back to canonical.
+ */
+async function executeReverseSync(dirs, selectedTargets) {
+  console.log("");
+  console.log("── meta:sync (reverse mode: runtime -> canonical) ──");
+  console.log(t.reverseModeIntro);
+  console.log("");
+
+  const allSignals = [];
+
+  // Collect signals from each runtime
+  for (const runtimeId of selectedTargets) {
+    const projection = resolveRuntimeProjection(runtimeId, "project");
+
+    // Check agents
+    if (projection.agentsDir) {
+      const agentSignals = await detectRuntimeAgentChanges(
+        projection.agentsDir,
+        projection.display.agentsDir || `${runtimeId}/agents`,
+      );
+      allSignals.push(...agentSignals.map((s) => ({ ...s, runtimeId })));
+    }
+
+    // Check skills
+    if (projection.skillRoot) {
+      const skillSignals = await detectRuntimeSkillChanges(
+        projection.skillRoot,
+        projection.display.skillRoot || `${runtimeId}/skills`,
+      );
+      allSignals.push(...skillSignals.map((s) => ({ ...s, runtimeId })));
+    }
+  }
+
+  if (allSignals.length === 0) {
+    console.log(t.reverseModeNoSignals);
+    return [];
+  }
+
+  console.log(t.reverseModeSignalsFound(allSignals.length));
+  console.log("");
+
+  // Import gate functions for validation
+  const {
+    processEvolutionPacket
+  } = await import("./evolution-writeback-gate.mjs");
+
+  // Build evolution packet from signals
+  const evolutionPacket = {
+    writebackDecision: "writeback",
+    writebacks: allSignals.map(s => s.canonicalPath),
+    retain: [],
+    upgrade: [],
+    retire: [],
+    scarIds: [],
+    syncRequired: true,
+    signalSummary: {
+      totalSignals: allSignals.length,
+      byType: allSignals.reduce((acc, s) => {
+        acc[s.type] = (acc[s.type] || 0) + 1;
+        return acc;
+      }, {}),
+      bySeverity: allSignals.reduce((acc, s) => {
+        acc[s.severity] = (acc[s.severity] || 0) + 1;
+        return acc;
+      }, {})
+    }
+  };
+
+  // Pass through Evolution Writeback Gate
+  console.log("[Gate] Passing signals through Evolution Writeback Gate...");
+  const gateResult = await processEvolutionPacket(evolutionPacket, {
+    force: forceWrite,
+    dryRun: dryRun
+  });
+
+  console.log(`[Gate] Decision: ${gateResult.decision}`);
+  console.log(`[Gate] Risk Level: ${gateResult.riskLevel}`);
+  console.log(`[Gate] Reason: ${gateResult.reason}`);
+
+  // If gate rejects, stop here
+  if (gateResult.decision === "reject") {
+    console.log("");
+    console.error(`[Gate] Rejected: ${gateResult.reason}`);
+    throw new Error(`Evolution writeback rejected: ${gateResult.reason}`);
+  }
+
+  // If gate defers (needs user confirmation), stop unless --force
+  if (gateResult.decision === "defer" && !forceWrite) {
+    console.log("");
+    console.log("[Gate] User confirmation required");
+    console.log("Use --force to proceed anyway.");
+    throw new Error("Evolution writeback deferred: user confirmation required");
+  }
+
+  console.log("");
+  console.log("[Gate] Approved - proceeding with writeback");
+  console.log("");
+
+  // Categorize signals
+  const conflicts = [];
+  const safeWrites = [];
+
+  for (const signal of allSignals) {
+    const validation = validateProposedChange(signal.runtimeContent, signal.canonicalPath);
+
+    if (!validation.valid) {
+      console.warn(t.reverseModeValidationFailed(signal.displayPath));
+      for (const error of validation.errors) {
+        console.warn(`  - ${error}`);
+      }
+      continue;
+    }
+
+    if (detectConflict(signal)) {
+      conflicts.push(signal);
+    } else {
+      safeWrites.push(signal);
+    }
+  }
+
+  // Handle conflicts
+  if (conflicts.length > 0) {
+    console.warn("");
+    console.warn(t.reverseModeConflictsDetected(conflicts.length));
+    for (const conflict of conflicts) {
+      console.warn(`  - ${conflict.displayPath}`);
+      console.warn(`    ${t.reverseModeConflictHint}`);
+    }
+
+    if (!forceWrite && !dryRun) {
+      console.warn("");
+      console.warn(t.reverseModeConflictPrompt);
+      // In non-interactive context, abort on conflict
+      console.error(t.reverseModeAborted);
+      process.exitCode = 1;
+      return allSignals;
+    }
+
+    if (forceWrite) {
+      console.warn("");
+      console.warn(t.reverseModeForceProceed);
+    }
+  }
+
+  // Show summary of safe writes
+  if (safeWrites.length > 0) {
+    console.log("");
+    console.log(t.reverseModeSafeWrites(safeWrites.length));
+    for (const signal of safeWrites) {
+      const icon = signal.type === "new" ? "+" : "~";
+      console.log(`  ${icon} ${signal.displayPath}`);
+    }
+  }
+
+  // Dry run: show what would be written
+  if (dryRun) {
+    console.log("");
+    console.log(t.reverseModeDryRun);
+    return allSignals;
+  }
+
+  // Perform writeback for safe writes and forced conflicts
+  const toWrite = forceWrite ? [...safeWrites, ...conflicts] : safeWrites;
+  const writtenFiles = [];
+
+  for (const signal of toWrite) {
+    try {
+      await ensureDir(path.dirname(signal.canonicalPath));
+      await fs.writeFile(signal.canonicalPath, signal.runtimeContent, "utf8");
+      console.log(`  [writeback] ${signal.displayPath} -> canonical/${path.relative(repoRoot, signal.canonicalPath)}`);
+      writtenFiles.push(signal.canonicalPath);
+    } catch (error) {
+      console.error(t.reverseModeWriteFailed(signal.displayPath, error.message));
+    }
+  }
+
+  if (writtenFiles.length > 0) {
+    console.log("");
+    console.log(t.reverseModeComplete(writtenFiles.length));
+  }
+
+  return allSignals;
+}
+
 /**
  * Resolve projection directories based on scope.
  * Returns an object with all paths needed for sync.
@@ -153,13 +622,20 @@ function resolveProjectionDirs(scope) {
   return {
     // Claude Code
     claudeAgentsProjectionDir: claude.agentsDir,
+    claudeSkillsProjectionDir: claude.skillsDir,
     claudeSkillProjectionRoot: claude.skillRoot,
     claudeHooksProjectionDir: claude.hooksDir,
     claudeSettingsProjectionPath: claude.settingsFile,
     claudeMcpProjectionPath: claude.mcpFile,
+    claudeCapabilityIndexDir: claude.capabilityIndexDir,
 
     // Codex
+    codexSkillsDir: codex.skillsDir,
     codexSkillRoot: codex.skillRoot,
+    codexLegacySkillRoot: globalScope ? null : codex.legacySkillRoot,
+    codexLegacySkillsDir: globalScope
+      ? null
+      : path.join(repoRoot, ".codex", "skills"),
     codexLegacySkillFile: globalScope ? null : codex.legacySkillFile,
     codexLegacySkillReferencesDir: globalScope
       ? null
@@ -170,10 +646,12 @@ function resolveProjectionDirs(scope) {
     codexHooksFile: globalScope ? null : codex.hooksFile,
     codexCommandsDir: codex.commandsDir,
     codexConfigExamplePath: codex.configExampleFile,
+    codexCapabilityIndexDir: codex.capabilityIndexDir,
 
     // OpenClaw
     openclawWorkspaceDir: openclaw.workspaceDir,
     openclawDisplayWorkspaceDir: openclaw.displayWorkspaceDir,
+    openclawSkillsDir: openclaw.skillsDir,
     openclawSkillRoot: openclaw.skillRoot,
     openclawLegacySkillFile: globalScope ? null : openclaw.legacySkillFile,
     openclawLegacySkillReferencesDir: globalScope
@@ -181,40 +659,53 @@ function resolveProjectionDirs(scope) {
       : openclaw.legacySkillReferencesDir,
     openclawHooksDir: openclaw.hooksDir,
     openclawTemplateConfigPath: openclaw.templateConfigFile,
+    openclawCapabilityIndexDir: openclaw.capabilityIndexDir,
 
     // Cursor
     cursorAgentsDir: cursor.agentsDir,
+    cursorSkillsDir: cursor.skillsDir,
     cursorSkillRoot: cursor.skillRoot,
     cursorHooksDir: cursor.hooksDir,
     cursorHooksFile: cursor.hooksFile,
     cursorMcpPath: cursor.mcpFile,
+    cursorCapabilityIndexDir: cursor.capabilityIndexDir,
+    cursorRulesDir: cursor.rulesDir,
 
     // Allowed roots for safety assertion
     allowedRoots: resolveRuntimeAllowedRoots(scope),
 
     displayPaths: {
       claudeAgents: claude.display.agentsDir,
+      claudeSkills: claude.display.skillsDir,
       claudeSkill: claude.display.skillRoot,
       claudeHooks: claude.display.hooksDir,
       claudeSettings: claude.display.settingsFile,
       claudeMcp: claude.display.mcpFile,
+      claudeCapabilityIndex: claude.display.capabilityIndexDir,
       codexAgents: codex.display.agentsDir,
+      codexSkillsRoot: codex.display.skillsDir,
       codexSkills: codex.display.skillRoot,
       codexHooks: globalScope ? null : codex.display.hooksDir,
       codexHooksFile: globalScope ? null : codex.display.hooksFile,
       codexCommands: codex.display.commandsDir,
       codexConfig: codex.display.configExampleFile,
+      codexCapabilityIndex: codex.display.capabilityIndexDir,
       openclawWorkspaces: globalScope
         ? openclaw.baseDir
         : "openclaw/workspaces",
       openclawTemplate: openclaw.display.templateConfigFile,
+      openclawCapabilityIndex: openclaw.display.capabilityIndexDir,
+      openclawSkillsRoot: openclaw.display.skillsDir,
       openclawSkills: openclaw.display.skillRoot,
       openclawHooks: openclaw.display.hooksDir,
       cursorAgents: cursor.display.agentsDir,
+      cursorSkillsRoot: cursor.display.skillsDir,
       cursorSkill: cursor.display.skillRoot,
       cursorHooks: cursor.display.hooksDir,
       cursorHooksFile: cursor.display.hooksFile,
       cursorMcp: cursor.display.mcpFile,
+      cursorCapabilityIndex: cursor.display.capabilityIndexDir,
+      cursorRules: cursor.display.rulesDir,
     },
   };
 }
@@ -252,6 +743,29 @@ const canonicalSharedMemoryHookPath = path.join(
   "shared",
   "hooks",
   "meta-kim-memory-save.mjs",
+);
+const canonicalSharedSpineHookPath = path.join(
+  canonicalRuntimeAssetsDir,
+  "shared",
+  "hooks",
+  "activate-meta-theory-spine.mjs",
+);
+const canonicalClaudeEnforceDispatchHookPath = path.join(
+  canonicalRuntimeAssetsDir,
+  "claude",
+  "hooks",
+  "enforce-agent-dispatch.mjs",
+);
+const canonicalClaudeBashReadonlyWhitelistPath = path.join(
+  canonicalRuntimeAssetsDir,
+  "claude",
+  "hooks",
+  "bash-readonly-whitelist.mjs",
+);
+const canonicalCursorRulesDir = path.join(
+  canonicalRuntimeAssetsDir,
+  "cursor",
+  "rules",
 );
 const canonicalOpenClawTemplatePath = path.join(
   canonicalRuntimeAssetsDir,
@@ -387,7 +901,7 @@ function buildIdentity(agent) {
 - **Creature:** Meta_Kim meta agent
 - **Vibe:** Focused, minimal, clear boundaries; primary job: ${localizedRole}
 - **Emoji:** ${emoji}
-- **Avatar:** 
+- **Avatar:**
 
 ## Identity Notes
 
@@ -518,19 +1032,26 @@ ${agent.body}
 `;
 }
 
-function buildHeartbeat(agent) {
-  return `# HEARTBEAT.md - ${agent.id}
+let heartbeatTemplateCache = null;
 
-Default heartbeat policy:
+async function loadHeartbeatTemplate() {
+  if (heartbeatTemplateCache !== null) return heartbeatTemplateCache;
+  const templatePath = path.join(
+    canonicalRuntimeAssetsDir,
+    "openclaw",
+    "HEARTBEAT.template.md",
+  );
+  const raw = await fs.readFile(templatePath, "utf8");
+  // Strip leading canonical-only HTML comment line(s). The comment is metadata
+  // for editors; it must not appear in the generated workspace file.
+  const stripped = raw.replace(/^<!--[\s\S]*?-->\r?\n/, "");
+  heartbeatTemplateCache = stripped;
+  return stripped;
+}
 
-- If there is no explicit scheduled work, respond with \`HEARTBEAT_OK\`.
-- Do not create autonomous tasks or self-assign missions by default.
-- Only act proactively after the deployment owner adds concrete heartbeat tasks below.
-
-## Deployment Tasks
-
-- None by default.
-`;
+async function buildHeartbeat(agent) {
+  const template = await loadHeartbeatTemplate();
+  return template.replaceAll("{{AGENT_ID}}", agent.id);
 }
 
 function buildTools(agent, agents) {
@@ -579,6 +1100,69 @@ async function loadSkillReferences() {
   );
 }
 
+async function collectSkillFiles(rootDir, currentDir = rootDir, bucket = []) {
+  const entries = await fs.readdir(currentDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      await collectSkillFiles(rootDir, entryPath, bucket);
+    } else if (entry.isFile()) {
+      if (entry.name.includes(".tmp.") || entry.name.endsWith(".tmp")) {
+        continue;
+      }
+      let content;
+      try {
+        content = await fs.readFile(entryPath, "utf8");
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
+      bucket.push({
+        relativePath: path.relative(rootDir, entryPath).replace(/\\/g, "/"),
+        content,
+      });
+    }
+  }
+  return bucket.sort((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
+}
+
+async function loadCanonicalSkills() {
+  const entries = await fs.readdir(canonicalSkillsDir, { withFileTypes: true });
+  const skills = [];
+
+  for (const entry of entries.filter((item) => item.isDirectory())) {
+    const skillRoot = path.join(canonicalSkillsDir, entry.name);
+    const skillPath = path.join(skillRoot, "SKILL.md");
+    let raw = null;
+    try {
+      raw = await fs.readFile(skillPath, "utf8");
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+
+    assertPortableSkillFrontmatter(raw, skillPath);
+    skills.push({
+      id: entry.name,
+      root: skillRoot,
+      skillPath,
+      files: await collectSkillFiles(skillRoot),
+    });
+  }
+
+  if (skills.length === 0) {
+    throw new Error("No canonical skills found under canonical/skills/*/SKILL.md.");
+  }
+
+  return skills.sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function assertPortableSkillFrontmatter(raw, filePath) {
   const validation = validateSkillFrontmatter(raw);
   if (!validation.ok) {
@@ -590,6 +1174,196 @@ function assertPortableSkillFrontmatter(raw, filePath) {
 
 function escapeTomlBasicMultiline(value) {
   return value.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
+}
+
+function escapeTomlBasicString(value) {
+  return String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const CODEX_NICKNAME_CANDIDATES_BY_AGENT = {
+  "meta-warden": ["Meta Warden", "Warden"],
+  "meta-genesis": ["Meta Genesis", "Genesis"],
+  "meta-artisan": ["Meta Artisan", "Artisan"],
+  "meta-sentinel": ["Meta Sentinel", "Sentinel"],
+  "meta-librarian": ["Meta Librarian", "Librarian"],
+  "meta-conductor": ["Meta Conductor", "Conductor"],
+  "meta-prism": ["Meta Prism", "Prism", "Review"],
+  "meta-scout": ["Meta Scout", "Scout"],
+  "meta-chrysalis": ["Meta Chrysalis", "Chrysalis"],
+};
+
+export const CODEX_RUNTIME_ADAPTER_AGENTS = [
+  {
+    id: "worker",
+    description:
+      "Execute bounded Meta_Kim implementation tasks after governance dispatch.",
+    nicknameCandidates: ["Execution", "Worker", "Implementation"],
+    instructions: [
+      "You are the Codex runtime adapter for bounded Meta_Kim execution work.",
+      "This file exists to give Codex a readable project-level custom-agent definition for its generic worker role.",
+      "It is not a canonical durable Meta_Kim owner. Durable governance ownership stays with canonical meta agents; concrete execution ownership is selected per run through matched capabilities, skills, commands, MCP capabilities, and tools.",
+      "Use the parent task packet as the source of truth for roleDisplayName, roleInstanceId, scope, dependencies, verification steps, and merge owner.",
+      "Never replace roleDisplayName with a Codex runtime nickname. If Codex assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "explorer",
+    description:
+      "Perform read-only codebase, platform, and evidence discovery for Meta_Kim runs.",
+    nicknameCandidates: ["Codebase Analysis", "Explorer", "Research"],
+    instructions: [
+      "You are the Codex runtime adapter for read-only Meta_Kim discovery work.",
+      "This file exists to give Codex a readable project-level custom-agent definition for its generic explorer role.",
+      "Inspect files, official documentation, capability indexes, commands, MCP capabilities, and tool availability as requested by the parent task packet.",
+      "Do not edit files or finalize implementation decisions. Return evidence, uncertainty, and candidate paths for the governance owner to merge.",
+      "Never replace roleDisplayName with a Codex runtime nickname. If Codex assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+];
+
+export const CODEX_BUSINESS_ROLE_AGENTS = [
+  {
+    id: "frontend",
+    roleDisplayName: "frontend",
+    description:
+      "Implement bounded frontend, UI, and client-side work after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["frontend", "ui", "client"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim frontend work.",
+      "Use this role only when the task packet's roleDisplayName is frontend or an equivalent client/UI role family.",
+      "Follow the parent task packet for scope, dependencies, verification, and merge owner.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "backend",
+    roleDisplayName: "backend",
+    description:
+      "Implement bounded backend, API, data, and service work after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["backend", "server", "api"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim backend work.",
+      "Use this role only when the task packet's roleDisplayName is backend or an equivalent service/API/data role family.",
+      "Follow the parent task packet for scope, dependencies, verification, and merge owner.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "test",
+    roleDisplayName: "test",
+    description:
+      "Write or run bounded tests and QA checks after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["test", "qa", "checks"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim test and QA work.",
+      "Use this role only when the task packet's roleDisplayName is test or an equivalent QA role family.",
+      "Follow the parent task packet for target checks, expected evidence, dependencies, and merge owner.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "review",
+    roleDisplayName: "review",
+    description:
+      "Review bounded implementation outputs and report findings after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["review", "quality", "audit"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim review work.",
+      "Use this role only when the task packet's roleDisplayName is review or an equivalent quality/audit role family.",
+      "Return findings, risks, and missing verification. Do not patch reviewed files unless the parent task explicitly re-dispatches execution.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "analysis",
+    roleDisplayName: "analysis",
+    description:
+      "Perform bounded read-only codebase, platform, or product analysis after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["analysis", "research", "discovery"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim analysis work.",
+      "Use this role only when the task packet's roleDisplayName is analysis or an equivalent discovery/research role family.",
+      "Return evidence, uncertainty, and candidate paths. Do not finalize implementation decisions or edit files.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "verify",
+    roleDisplayName: "verify",
+    description:
+      "Run bounded verification evidence collection after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["verify", "validation", "evidence"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim verification work.",
+      "Use this role only when the task packet's roleDisplayName is verify or an equivalent validation/evidence role family.",
+      "Run or inspect only the checks assigned by the parent task packet and report fresh evidence.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+  {
+    id: "docs",
+    roleDisplayName: "docs",
+    description:
+      "Write or update bounded documentation after Meta_Kim governance dispatch.",
+    nicknameCandidates: ["docs", "writing", "documentation"],
+    instructions: [
+      "You are the Codex project custom agent for Meta_Kim documentation work.",
+      "Use this role only when the task packet's roleDisplayName is docs or an equivalent documentation/writing role family.",
+      "Follow the parent task packet for audience, files, scope, and review owner.",
+      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
+    ].join("\n"),
+  },
+];
+
+function normalizeCodexNicknameCandidate(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function assertCodexNicknameCandidate(value, context) {
+  if (!/^[A-Za-z0-9 _-]+$/.test(value)) {
+    throw new Error(
+      `${context} has invalid Codex nickname candidate "${value}". ` +
+        "Codex nickname_candidates must stay ASCII alphanumeric with spaces, hyphens, or underscores.",
+    );
+  }
+}
+
+function uniqueNicknameCandidates(candidates, context) {
+  const result = [];
+  const seen = new Set();
+  for (const rawCandidate of candidates) {
+    const candidate = normalizeCodexNicknameCandidate(rawCandidate);
+    if (!candidate || seen.has(candidate)) continue;
+    assertCodexNicknameCandidate(candidate, context);
+    seen.add(candidate);
+    result.push(candidate);
+  }
+  return result;
+}
+
+function titleCaseAgentId(agentId) {
+  return String(agentId ?? "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function buildCodexNicknameCandidates(agent) {
+  const configured = CODEX_NICKNAME_CANDIDATES_BY_AGENT[agent.id] ?? [];
+  const fallback = titleCaseAgentId(agent.id);
+  return uniqueNicknameCandidates(
+    [...configured, fallback, agent.id],
+    `Codex agent ${agent.id}`,
+  );
+}
+
+function formatTomlStringArray(values) {
+  return `[${values.map((value) => `"${escapeTomlBasicString(value)}"`).join(", ")}]`;
 }
 
 function buildCodexAgentInstructions(agent) {
@@ -604,13 +1378,47 @@ function buildCodexAgentInstructions(agent) {
   ].join("\n");
 }
 
-function buildCodexAgent(agent) {
+export function buildCodexAgent(agent) {
   const instructions = escapeTomlBasicMultiline(
     buildCodexAgentInstructions(agent),
   );
+  const nicknameCandidates = buildCodexNicknameCandidates(agent);
 
   return `name = "${agent.id}"
-description = "${agent.description.replace(/"/g, '\\"')}"
+description = "${escapeTomlBasicString(agent.description)}"
+nickname_candidates = ${formatTomlStringArray(nicknameCandidates)}
+developer_instructions = """
+${instructions}
+"""
+`;
+}
+
+export function buildCodexRuntimeAdapterAgent(agent) {
+  const nicknameCandidates = uniqueNicknameCandidates(
+    agent.nicknameCandidates ?? [],
+    `Codex runtime adapter ${agent.id}`,
+  );
+  const instructions = escapeTomlBasicMultiline(agent.instructions ?? "");
+
+  return `name = "${escapeTomlBasicString(agent.id)}"
+description = "${escapeTomlBasicString(agent.description)}"
+nickname_candidates = ${formatTomlStringArray(nicknameCandidates)}
+developer_instructions = """
+${instructions}
+"""
+`;
+}
+
+export function buildCodexBusinessRoleAgent(agent) {
+  const nicknameCandidates = uniqueNicknameCandidates(
+    agent.nicknameCandidates ?? [agent.roleDisplayName, agent.id],
+    `Codex business role agent ${agent.id}`,
+  );
+  const instructions = escapeTomlBasicMultiline(agent.instructions ?? "");
+
+  return `name = "${escapeTomlBasicString(agent.id)}"
+description = "${escapeTomlBasicString(agent.description)}"
+nickname_candidates = ${formatTomlStringArray(nicknameCandidates)}
 developer_instructions = """
 ${instructions}
 """
@@ -626,28 +1434,32 @@ export function buildCursorAgent(agent) {
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/\r?\n/g, "\\n");
+  const body = String(agent.body ?? "");
+  const bodyHasTitle = new RegExp(`^#\\s+${escapeRegExp(agent.title)}\\s*$`, "m").test(body);
+  const bodyHasGovernanceWarning = /GOVERNANCE LAYER AGENT\s+—\s+NOT FOR DIRECT EXECUTION/.test(body);
+  const generatedPreamble = [
+    bodyHasTitle ? null : `# ${agent.title}`,
+    bodyHasGovernanceWarning ? null : `> ${agent.summary}`,
+    `<!-- Generated from ${agent.sourceFile} by npm run sync:runtimes. Edit canonical source first. -->`,
+    `You are the Cursor agent mirror of Meta_Kim agent \`${agent.id}\`.`,
+    `Primary responsibility: ${agent.description}`,
+    "Stay inside your own responsibility boundary.",
+    "If the task crosses agent boundaries, hand the decision back to the parent session or recommend the correct sibling meta agent.",
+    "Use the portable meta-theory skill when it helps, but do not claim ownership of another agent's deliverable.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return `---
 name: ${agent.id}
 description: "${description}"
 ---
 
-# ${agent.title}
-
-> ${agent.summary}
-
-<!-- Generated from ${agent.sourceFile} by npm run sync:runtimes. Edit canonical source first. -->
-
-You are the Cursor agent mirror of Meta_Kim agent \`${agent.id}\`.
-Primary responsibility: ${agent.description}
-
-Stay inside your own responsibility boundary.
-If the task crosses agent boundaries, hand the decision back to the parent session or recommend the correct sibling meta agent.
-Use the portable meta-theory skill when it helps, but do not claim ownership of another agent's deliverable.
+${generatedPreamble}
 
 ---
 
-${agent.body}
+${body}
 `;
 }
 
@@ -737,6 +1549,77 @@ async function removeGeneratedPath(filePath) {
   return { changed: true };
 }
 
+async function removeDirIfEmpty(dirPath) {
+  if (!dirPath) return { changed: false };
+
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return { changed: false };
+    }
+    throw error;
+  }
+
+  if (entries.length > 0) {
+    return { changed: false };
+  }
+
+  if (checkOnly) {
+    staleFiles.push({
+      path: dirPath,
+      category: inferProjectCategory(dirPath),
+      action: "delete",
+    });
+    return { changed: true };
+  }
+
+  await fs.rmdir(dirPath);
+  return { changed: true };
+}
+
+async function syncCapabilityIndexMirrors(dirs, selectedTargets, changedFiles) {
+  const canonicalContent = await tryReadCanonical(
+    path.join(canonicalCapabilityIndexDir, "meta-kim-capabilities.json"),
+  );
+  if (!canonicalContent) return;
+
+  const targets = {
+    claude: {
+      dir: dirs.claudeCapabilityIndexDir,
+      display: dirs.displayPaths.claudeCapabilityIndex,
+    },
+    codex: {
+      dir: dirs.codexCapabilityIndexDir,
+      display: dirs.displayPaths.codexCapabilityIndex,
+    },
+    openclaw: {
+      dir: dirs.openclawCapabilityIndexDir,
+      display: dirs.displayPaths.openclawCapabilityIndex,
+    },
+    cursor: {
+      dir: dirs.cursorCapabilityIndexDir,
+      display: dirs.displayPaths.cursorCapabilityIndex,
+    },
+  };
+
+  for (const targetId of selectedTargets) {
+    const target = targets[targetId];
+    if (!target?.dir) continue;
+
+    const mirrorPath = path.join(target.dir, "meta-kim-capabilities.json");
+    if ((await writeGeneratedFile(mirrorPath, canonicalContent)).changed) {
+      changedFiles.push(`${target.display}/meta-kim-capabilities.json`);
+    }
+
+    const localInventoryPath = path.join(target.dir, "global-capabilities.json");
+    if ((await removeGeneratedPath(localInventoryPath)).changed) {
+      changedFiles.push(`${target.display}/global-capabilities.json`);
+    }
+  }
+}
+
 // ── Runtime skill path substitution ─────────────────────────────────────
 // The canonical SKILL.md and its references use canonical/ paths.
 // During sync, these are substituted to runtime-specific paths so that
@@ -760,6 +1643,10 @@ function buildRuntimeSkillMap(targetId) {
         pattern: /canonical\/skills\/meta-theory\/references\//g,
         replacement: ".claude/skills/meta-theory/references/",
       },
+      {
+        pattern: /canonical\/agents\/([A-Za-z0-9_*{}<>-]+)\.md/g,
+        replacement: ".claude/agents/$1.md",
+      },
       // Agent definitions: canonical/ → runtime-specific for Claude
       { pattern: /canonical\/agents\//g, replacement: ".claude/agents/" },
       // Hook files: stay in .claude/hooks/ (no canonical equivalent)
@@ -773,13 +1660,17 @@ function buildRuntimeSkillMap(targetId) {
       { pattern: /\.claude\/skills\//g, replacement: "canonical/skills/" },
     ],
     codex: [
-      // Skill references: canonical/ → .codex/skills/meta-theory/references/
+      // Skill references: canonical/ → .agents/skills/meta-theory/references/
       {
         pattern: /canonical\/skills\/meta-theory\/references\//g,
-        replacement: ".codex/skills/meta-theory/references/",
+        replacement: ".agents/skills/meta-theory/references/",
       },
-      // Skill root: canonical/skills/ → .codex/skills/
-      { pattern: /canonical\/skills\//g, replacement: ".codex/skills/" },
+      // Skill root: canonical/skills/ → .agents/skills/
+      { pattern: /canonical\/skills\//g, replacement: ".agents/skills/" },
+      {
+        pattern: /canonical\/agents\/([A-Za-z0-9_*{}<>-]+)\.md/g,
+        replacement: ".codex/agents/$1.toml",
+      },
       // Agent definitions: canonical/ → .codex/agents/
       { pattern: /canonical\/agents\//g, replacement: ".codex/agents/" },
       // Hooks: Codex uses .codex/hooks/ plus .codex/hooks.json
@@ -790,7 +1681,7 @@ function buildRuntimeSkillMap(targetId) {
         replacement: ".codex/capability-index/",
       },
       // Legacy .claude/skills/ references in source → platform-specific path
-      { pattern: /\.claude\/skills\//g, replacement: ".codex/skills/" },
+      { pattern: /\.claude\/skills\//g, replacement: ".agents/skills/" },
     ],
     openclaw: [
       // Skill references: canonical/ → openclaw/skills/meta-theory/references/
@@ -800,13 +1691,18 @@ function buildRuntimeSkillMap(targetId) {
       },
       // Skill root: canonical/skills/ → openclaw/skills/
       { pattern: /canonical\/skills\//g, replacement: "openclaw/skills/" },
+      {
+        pattern: /canonical\/agents\/([A-Za-z0-9_*{}<>-]+)\.md/g,
+        replacement: "openclaw/workspaces/$1/SOUL.md",
+      },
       // Agent definitions: OpenClaw uses workspace-per-agent model.
       // Each workspace has AGENTS.md containing all agent definitions.
       {
         pattern: /canonical\/agents\//g,
         replacement: "openclaw/workspaces/{workspace}/AGENTS.md#",
       },
-      // Hooks: OpenClaw uses Plugin SDK hooks under openclaw/hooks/
+      // Hooks: OpenClaw internal hooks live under openclaw/hooks/.
+      // Tool-blocking policy requires a typed plugin hook adapter.
       { pattern: /\.claude\/hooks\//g, replacement: "openclaw/hooks/" },
       // Capability index: preserve subdirectory structure
       {
@@ -824,6 +1720,10 @@ function buildRuntimeSkillMap(targetId) {
       },
       // Skill root: canonical/skills/ → .cursor/skills/
       { pattern: /canonical\/skills\//g, replacement: ".cursor/skills/" },
+      {
+        pattern: /canonical\/agents\/([A-Za-z0-9_*{}<>-]+)\.md/g,
+        replacement: ".cursor/agents/$1.md",
+      },
       // Agent definitions: canonical/ → .cursor/agents/
       { pattern: /canonical\/agents\//g, replacement: ".cursor/agents/" },
       // Hooks: Cursor uses .cursor/hooks/ plus .cursor/hooks.json
@@ -847,13 +1747,62 @@ function buildRuntimeSkillMap(targetId) {
  * @param {"claude"|"codex"|"openclaw"|"cursor"} targetId
  * @returns {string}
  */
-function applyRuntimePaths(content, targetId) {
+export function applyRuntimePaths(content, targetId) {
   const rules = buildRuntimeSkillMap(targetId);
   let result = content;
   for (const { pattern, replacement } of rules) {
     result = result.replace(pattern, replacement);
   }
   return result;
+}
+
+function readFrontmatterField(frontmatter, key) {
+  const lines = frontmatter.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(new RegExp(`^${key}:\\s*(.*)$`));
+    if (!match) continue;
+    const rawValue = match[1].trim();
+    if (rawValue === "|" || rawValue === ">") {
+      const blockLines = [];
+      for (let next = index + 1; next < lines.length; next += 1) {
+        if (/^[A-Za-z0-9_-]+:\s*/.test(lines[next])) {
+          break;
+        }
+        blockLines.push(lines[next].replace(/^\s{2}/, ""));
+      }
+      return blockLines.join("\n").trim();
+    }
+    return rawValue.replace(/^['"]|['"]$/g, "").trim();
+  }
+  return "";
+}
+
+function formatYamlScalar(value) {
+  const normalized = String(value ?? "").trim();
+  if (normalized.includes("\n")) {
+    return `|\n${normalized
+      .split(/\r?\n/)
+      .map((line) => `  ${line}`)
+      .join("\n")}`;
+  }
+  if (/^[A-Za-z0-9 _.,;()'"—-]+$/.test(normalized)) {
+    return normalized;
+  }
+  return JSON.stringify(normalized);
+}
+
+export function buildCodexSkillContent(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!match) {
+    return content;
+  }
+  const frontmatter = match[1];
+  const name = readFrontmatterField(frontmatter, "name");
+  const description = readFrontmatterField(frontmatter, "description");
+  if (!name || !description) {
+    return content;
+  }
+  return `---\nname: ${formatYamlScalar(name)}\ndescription: ${formatYamlScalar(description)}\n---\n\n${content.slice(match[0].length)}`;
 }
 
 export function buildCodexGraphifyContextHook() {
@@ -886,108 +1835,79 @@ export function buildCodexGraphifyContextHook() {
   ].join("\n");
 }
 
-function commandToken(value) {
-  return /[\s"]/u.test(value) ? JSON.stringify(value) : value;
-}
-
-function nodeHookCommand(scriptPath, args = []) {
-  // Hook command strings are interpreted by the host runtime's shell.
-  // A quoted absolute Windows Node path like
-  // "C:\Program Files\nodejs\node.exe" script.mjs works in cmd.exe but
-  // fails in PowerShell unless prefixed with `&`. The portable contract is:
-  // require `node` on PATH, and quote only arguments that need quoting.
-  const nodePath = "node";
-  return [nodePath, scriptPath, ...args].map(commandToken).join(" ");
-}
-
 export function buildCodexProjectHooksJson({
   graphifyHookPath = ".codex/hooks/graphify-context.mjs",
   memoryHookPath = ".codex/hooks/meta-kim-memory-save.mjs",
+  spineHookPath = ".codex/hooks/activate-meta-theory-spine.mjs",
+  enforceAgentDispatchHookPath = ".codex/hooks/enforce-agent-dispatch.mjs",
+  hookPromptAdapterPath = null,
 } = {}) {
-  return {
-    hooks: {
-      SessionStart: [
-        {
-          matcher: "startup|resume",
-          hooks: [
-            {
-              type: "command",
-              command: nodeHookCommand(memoryHookPath, ["--event", "session-start"]),
-              timeout: 10,
-              statusMessage: "Loading Meta_Kim memory",
-            },
-          ],
-        },
-      ],
-      UserPromptSubmit: [
-        {
-          hooks: [
-            {
-              type: "command",
-              command: nodeHookCommand(memoryHookPath, ["--event", "user-prompt"]),
-              timeout: 10,
-            },
-          ],
-        },
-      ],
-      PreToolUse: [
-        {
-          matcher: "Bash",
-          hooks: [
-            {
-              type: "command",
-              command: nodeHookCommand(graphifyHookPath),
-            },
-          ],
-        },
-      ],
-      Stop: [
-        {
-          hooks: [
-            {
-              type: "command",
-              command: nodeHookCommand(memoryHookPath, ["--event", "stop"]),
-              timeout: 10,
-            },
-          ],
-        },
-      ],
-    },
-  };
+  return buildCodexHooksJson({
+    graphifyHookPath,
+    memoryHookPath,
+    spineHookPath,
+    enforceAgentDispatchHookPath,
+    hookPromptAdapterPath,
+  });
 }
 
 export function buildCursorProjectHooksJson({
+  graphifyHookPath = ".cursor/hooks/graphify-context.mjs",
   memoryHookPath = ".cursor/hooks/meta-kim-memory-save.mjs",
+  enforceAgentDispatchHookPath = ".cursor/hooks/enforce-agent-dispatch.mjs",
+  hookPromptAdapterPath = null,
 } = {}) {
-  return {
-    version: 1,
-    hooks: {
-      beforeSubmitPrompt: [
-        {
-          command: nodeHookCommand(memoryHookPath, ["--event", "user-prompt"]),
-          timeout: 10,
-        },
-      ],
-      stop: [
-        {
-          command: nodeHookCommand(memoryHookPath, ["--event", "stop"]),
-          timeout: 10,
-        },
-      ],
-    },
-  };
+  return buildCursorHooksJson({
+    graphifyHookPath,
+    memoryHookPath,
+    enforceAgentDispatchHookPath,
+    hookPromptAdapterPath,
+  });
+}
+
+async function syncRuntimeSkills(
+  runtimeId,
+  runtimeSkillsDir,
+  displaySkillsDir,
+  canonicalSkills,
+  changedFiles,
+) {
+  for (const skill of canonicalSkills) {
+    for (const file of skill.files) {
+      const targetPath = path.join(
+        runtimeSkillsDir,
+        skill.id,
+        ...file.relativePath.split("/"),
+      );
+      const runtimeContent =
+        runtimeId === "codex" && file.relativePath === "SKILL.md"
+          ? buildCodexSkillContent(applyRuntimePaths(file.content, runtimeId))
+          : applyRuntimePaths(file.content, runtimeId);
+      if (
+        (
+          await writeGeneratedFile(
+            targetPath,
+            runtimeContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(
+          `${displaySkillsDir}/${skill.id}/${file.relativePath}`,
+        );
+      }
+    }
+  }
 }
 
 async function syncClaudeProjection(
   dirs,
   agents,
-  portableSkill,
-  skillReferences,
+  canonicalSkills,
   changedFiles,
 ) {
   const {
     claudeAgentsProjectionDir,
-    claudeSkillProjectionRoot,
+    claudeSkillsProjectionDir,
     claudeHooksProjectionDir,
     claudeSettingsProjectionPath,
     claudeMcpProjectionPath,
@@ -1007,31 +1927,13 @@ async function syncClaudeProjection(
     }
   }
 
-  if (
-    (
-      await writeGeneratedFile(
-        path.join(claudeSkillProjectionRoot, "SKILL.md"),
-        applyRuntimePaths(portableSkill, "claude"),
-      )
-    ).changed
-  ) {
-    changedFiles.push(`${displayPaths.claudeSkill}/SKILL.md`);
-  }
-
-  for (const reference of skillReferences) {
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(claudeSkillProjectionRoot, "references", reference.name),
-          reference.content,
-        )
-      ).changed
-    ) {
-      changedFiles.push(
-        `${displayPaths.claudeSkill}/references/${reference.name}`,
-      );
-    }
-  }
+  await syncRuntimeSkills(
+    "claude",
+    claudeSkillsProjectionDir,
+    displayPaths.claudeSkills,
+    canonicalSkills,
+    changedFiles,
+  );
 
   const hookEntries = (
     await fs.readdir(canonicalClaudeHooksDir, { withFileTypes: true })
@@ -1053,6 +1955,29 @@ async function syncClaudeProjection(
       ).changed
     ) {
       changedFiles.push(`${displayPaths.claudeHooks}/${hookEntry.name}`);
+    }
+  }
+
+  const sharedClaudeHookDependencies = [
+    "activate-meta-theory-spine.mjs",
+    "hook-i18n.mjs",
+    "meta-kim-memory-save.mjs",
+    "skip-reminder.mjs",
+  ];
+  for (const hookName of sharedClaudeHookDependencies) {
+    const hookContent = await tryReadCanonical(
+      path.join(canonicalRuntimeAssetsDir, "shared", "hooks", hookName),
+    );
+    if (
+      hookContent &&
+      (
+        await writeGeneratedFile(
+          path.join(claudeHooksProjectionDir, hookName),
+          hookContent,
+        )
+      ).changed
+    ) {
+      changedFiles.push(`${displayPaths.claudeHooks}/${hookName}`);
     }
   }
 
@@ -1137,9 +2062,12 @@ async function main() {
 
 Options:
   --scope <project|global|both>  Write projection to repo (default: project)
-  --targets <ids>                 Comma-separated runtime IDs (claude,codex,openclaw)
+  --targets <ids>                 Comma-separated runtime IDs (claude,codex,openclaw,cursor)
   --lang <code>                   Messages: en | zh-CN | ja-JP | ko-KR (aliases: zh, ja, ko)
   --check                        Show what would be synced without writing
+  --reverse                      Reverse sync: runtime -> canonical (collect evolution signals)
+  --dry-run                      Preview reverse sync changes without writing
+  --force                        Skip conflict warnings and overwrite canonical
   --help, -h                     Show this help
 
 Scopes:
@@ -1152,6 +2080,9 @@ Examples:
   node sync-runtimes.mjs --scope global        # write to ~/.claude, ~/.codex, ~/.openclaw
   node sync-runtimes.mjs --scope global --targets claude  # Claude Code only, global
   node sync-runtimes.mjs --check                # preview changes
+  node sync-runtimes.mjs --reverse              # collect evolution signals from runtime
+  node sync-runtimes.mjs --reverse --dry-run    # preview reverse sync
+  node sync-runtimes.mjs --reverse --force      # force writeback without prompts
 `);
     return;
   }
@@ -1162,10 +2093,7 @@ Examples:
   const dirs = resolveProjectionDirs(scope);
   const agents = await loadAgents();
   const teamDirectory = buildWorkspaceDirectory(agents);
-  const portableSkill = await tryReadCanonical(canonicalSkillPath);
-  if (!portableSkill) return [];
-  assertPortableSkillFrontmatter(portableSkill, canonicalSkillPath);
-  const skillReferences = await loadSkillReferences();
+  const canonicalSkills = await loadCanonicalSkills();
   const changedFiles = [];
 
   // Safety assertion: all writes must stay within allowedRoots
@@ -1188,12 +2116,28 @@ Examples:
     });
   }
 
+  // ── Reverse Mode: Runtime -> Canonical signal propagation ─────────────
+  if (reverseMode) {
+    const signals = await executeReverseSync(dirs, selectedTargets);
+
+    // After reverse sync, optionally run forward sync to propagate updates
+    // to other runtimes (unless --dry-run)
+    if (!dryRun && signals.length > 0) {
+      console.log("");
+      console.log(t.reverseModePropagating);
+      // Continue to forward sync below
+    } else {
+      return signals;
+    }
+  }
+
+  await syncCapabilityIndexMirrors(dirs, selectedTargets, changedFiles);
+
   if (selectedTargets.includes("claude")) {
     await syncClaudeProjection(
       dirs,
       agents,
-      portableSkill,
-      skillReferences,
+      canonicalSkills,
       changedFiles,
     );
   }
@@ -1203,6 +2147,7 @@ Examples:
 
     for (const agent of agents) {
       const workspaceDir = dirs.openclawWorkspaceDir(agent.id);
+      const heartbeatContent = await buildHeartbeat(agent);
       const writes = await Promise.all([
         writeGeneratedFile(
           path.join(workspaceDir, "BOOT.md"),
@@ -1228,7 +2173,7 @@ Examples:
         writeGeneratedFile(path.join(workspaceDir, "AGENTS.md"), teamDirectory),
         writeGeneratedFile(
           path.join(workspaceDir, "HEARTBEAT.md"),
-          buildHeartbeat(agent),
+          heartbeatContent,
         ),
         writeGeneratedFile(
           path.join(workspaceDir, "TOOLS.md"),
@@ -1305,28 +2250,13 @@ Examples:
     ) {
       changedFiles.push("openclaw/skills/references");
     }
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(dirs.openclawSkillRoot, "SKILL.md"),
-          applyRuntimePaths(portableSkill, "openclaw"),
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${dp.openclawSkills}/SKILL.md`);
-    }
-    for (const reference of skillReferences) {
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.openclawSkillRoot, "references", reference.name),
-            applyRuntimePaths(reference.content, "openclaw"),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.openclawSkills}/references/${reference.name}`);
-      }
-    }
+    await syncRuntimeSkills(
+      "openclaw",
+      dirs.openclawSkillsDir,
+      dp.openclawSkillsRoot,
+      canonicalSkills,
+      changedFiles,
+    );
   }
 
   if (selectedTargets.includes("codex")) {
@@ -1340,39 +2270,20 @@ Examples:
     ) {
       changedFiles.push(".codex/skills/references");
     }
+    if ((await removeGeneratedPath(dirs.codexLegacySkillRoot)).changed) {
+      changedFiles.push(".codex/skills/meta-theory");
+    }
+    if ((await removeDirIfEmpty(dirs.codexLegacySkillsDir)).changed) {
+      changedFiles.push(".codex/skills");
+    }
 
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(dirs.codexSkillRoot, "SKILL.md"),
-          applyRuntimePaths(portableSkill, "codex"),
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${dp.codexSkills}/SKILL.md`);
-    }
-    for (const reference of skillReferences) {
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexSkillRoot, "references", reference.name),
-            applyRuntimePaths(reference.content, "codex"),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexSkills}/references/${reference.name}`);
-      }
-    }
-    if (
-      scope !== "global" &&
-      (
-        await removeGeneratedPath(
-          path.join(repoRoot, ".agents", "skills", "meta-theory"),
-        )
-      ).changed
-    ) {
-      changedFiles.push(".agents/skills/meta-theory");
-    }
+    await syncRuntimeSkills(
+      "codex",
+      dirs.codexSkillsDir,
+      dp.codexSkillsRoot,
+      canonicalSkills,
+      changedFiles,
+    );
     const codexConfigExample = await tryReadCanonical(
       canonicalCodexConfigExamplePath,
     );
@@ -1426,6 +2337,117 @@ Examples:
       ) {
         changedFiles.push(`${dp.codexHooks}/meta-kim-memory-save.mjs`);
       }
+      const spineHookContent = await tryReadCanonical(canonicalSharedSpineHookPath);
+      if (
+        spineHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "activate-meta-theory-spine.mjs"),
+            spineHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/activate-meta-theory-spine.mjs`);
+      }
+      // Sync the dispatch-enforcement gate + its bash-readonly classifier from
+      // the Claude canonical hooks directory. These two files implement the
+      // capability-first gate and meta-readonly contract; they share a deny()
+      // shape that detects the host runtime at invocation time.
+      const enforceDispatchHookContent = await tryReadCanonical(
+        canonicalClaudeEnforceDispatchHookPath,
+      );
+      if (
+        enforceDispatchHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "enforce-agent-dispatch.mjs"),
+            enforceDispatchHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/enforce-agent-dispatch.mjs`);
+      }
+      const bashReadonlyWhitelistContent = await tryReadCanonical(
+        canonicalClaudeBashReadonlyWhitelistPath,
+      );
+      if (
+        bashReadonlyWhitelistContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "bash-readonly-whitelist.mjs"),
+            bashReadonlyWhitelistContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/bash-readonly-whitelist.mjs`);
+      }
+      // Sync shared hook dependencies (utils.mjs, spine-state.mjs, hook-i18n.mjs, skip-reminder.mjs)
+      const utilsHookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "utils.mjs"),
+      );
+      if (
+        utilsHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "utils.mjs"),
+            utilsHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/utils.mjs`);
+      }
+      const spineStateHookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "spine-state.mjs"),
+      );
+      if (
+        spineStateHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "spine-state.mjs"),
+            spineStateHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/spine-state.mjs`);
+      }
+      const skipReminderHookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "skip-reminder.mjs"),
+      );
+      if (
+        skipReminderHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "skip-reminder.mjs"),
+            skipReminderHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/skip-reminder.mjs`);
+      }
+      const hookI18nContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "hook-i18n.mjs"),
+      );
+      if (
+        hookI18nContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "hook-i18n.mjs"),
+            hookI18nContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/hook-i18n.mjs`);
+      }
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexHooksDir, "hookprompt-adapter.mjs"),
+            buildHookPromptAdapterSource("codex"),
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexHooks}/hookprompt-adapter.mjs`);
+      }
       const graphifyHookPath =
         scope === "global"
           ? path.join(dirs.codexHooksDir, "graphify-context.mjs")
@@ -1434,11 +2456,29 @@ Examples:
         scope === "global"
           ? path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs")
           : ".codex/hooks/meta-kim-memory-save.mjs";
+      const spineHookPath =
+        scope === "global"
+          ? path.join(dirs.codexHooksDir, "activate-meta-theory-spine.mjs")
+          : ".codex/hooks/activate-meta-theory-spine.mjs";
+      const enforceAgentDispatchHookPath =
+        scope === "global"
+          ? path.join(dirs.codexHooksDir, "enforce-agent-dispatch.mjs")
+          : ".codex/hooks/enforce-agent-dispatch.mjs";
+      const hookPromptAdapterPath =
+        scope === "global"
+          ? path.join(dirs.codexHooksDir, "hookprompt-adapter.mjs")
+          : ".codex/hooks/hookprompt-adapter.mjs";
       if (
         (
           await writeGeneratedJson(
             dirs.codexHooksFile,
-            buildCodexProjectHooksJson({ graphifyHookPath, memoryHookPath }),
+            buildCodexProjectHooksJson({
+              graphifyHookPath,
+              memoryHookPath,
+              spineHookPath,
+              enforceAgentDispatchHookPath,
+              hookPromptAdapterPath,
+            }),
           )
         ).changed
       ) {
@@ -1452,6 +2492,32 @@ Examples:
           await writeGeneratedFile(
             path.join(dirs.codexAgentsDir, `${agent.id}.toml`),
             buildCodexAgent(agent),
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexAgents}/${agent.id}.toml`);
+      }
+    }
+
+    for (const agent of CODEX_RUNTIME_ADAPTER_AGENTS) {
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexAgentsDir, `${agent.id}.toml`),
+            buildCodexRuntimeAdapterAgent(agent),
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexAgents}/${agent.id}.toml`);
+      }
+    }
+
+    for (const agent of CODEX_BUSINESS_ROLE_AGENTS) {
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.codexAgentsDir, `${agent.id}.toml`),
+            buildCodexBusinessRoleAgent(agent),
           )
         ).changed
       ) {
@@ -1478,29 +2544,51 @@ Examples:
       }
     }
 
-    // Skill projections (.cursor/skills/meta-theory/)
-    if (
-      (
-        await writeGeneratedFile(
-          path.join(dirs.cursorSkillRoot, "SKILL.md"),
-          applyRuntimePaths(portableSkill, "cursor"),
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${dp.cursorSkill}/SKILL.md`);
-    }
-    for (const reference of skillReferences) {
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorSkillRoot, "references", reference.name),
-            applyRuntimePaths(reference.content, "cursor"),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorSkill}/references/${reference.name}`);
+    // Cursor MDC rules (.cursor/rules/*.mdc) — copied verbatim from
+    // canonical/runtime-assets/cursor/rules/. Mirrors the agent-projection
+    // pattern: each canonical .mdc file is fully overwritten in the runtime
+    // mirror. Files only in the destination are left alone (no prune) —
+    // matches buildCursorAgent semantics that only emit canonical-owned IDs.
+    if (dirs.cursorRulesDir) {
+      let cursorRuleEntries = [];
+      try {
+        cursorRuleEntries = await fs.readdir(canonicalCursorRulesDir, {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+      const sortedRuleEntries = cursorRuleEntries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".mdc"))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      for (const ruleEntry of sortedRuleEntries) {
+        const ruleContent = await tryReadCanonical(
+          path.join(canonicalCursorRulesDir, ruleEntry.name),
+        );
+        if (
+          ruleContent &&
+          (
+            await writeGeneratedFile(
+              path.join(dirs.cursorRulesDir, ruleEntry.name),
+              ruleContent,
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${dp.cursorRules}/${ruleEntry.name}`);
+        }
       }
     }
+
+    // Skill projections (.cursor/skills/meta-theory/)
+    await syncRuntimeSkills(
+      "cursor",
+      dirs.cursorSkillsDir,
+      dp.cursorSkillsRoot,
+      canonicalSkills,
+      changedFiles,
+    );
 
     if (dirs.cursorHooksDir && dirs.cursorHooksFile) {
       const memoryHookContent = await tryReadCanonical(canonicalSharedMemoryHookPath);
@@ -1515,15 +2603,142 @@ Examples:
       ) {
         changedFiles.push(`${dp.cursorHooks}/meta-kim-memory-save.mjs`);
       }
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "graphify-context.mjs"),
+            buildCodexGraphifyContextHook(),
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/graphify-context.mjs`);
+      }
+      // Sync the dispatch-enforcement gate + its bash-readonly classifier from
+      // the Claude canonical hooks directory. deny() output adapts to Cursor's
+      // official Cursor hook JSON schema at runtime via META_KIM_HOOK_RUNTIME / argv inspection.
+      const cursorEnforceDispatchHookContent = await tryReadCanonical(
+        canonicalClaudeEnforceDispatchHookPath,
+      );
+      if (
+        cursorEnforceDispatchHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "enforce-agent-dispatch.mjs"),
+            cursorEnforceDispatchHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/enforce-agent-dispatch.mjs`);
+      }
+      const cursorBashReadonlyWhitelistContent = await tryReadCanonical(
+        canonicalClaudeBashReadonlyWhitelistPath,
+      );
+      if (
+        cursorBashReadonlyWhitelistContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "bash-readonly-whitelist.mjs"),
+            cursorBashReadonlyWhitelistContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/bash-readonly-whitelist.mjs`);
+      }
+      // Shared dependencies required by enforce-agent-dispatch.mjs: utils.mjs,
+      // spine-state.mjs, skip-reminder.mjs, hook-i18n.mjs. Without these the
+      // dispatch gate cannot resolve its imports.
+      const cursorUtilsHookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "utils.mjs"),
+      );
+      if (
+        cursorUtilsHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "utils.mjs"),
+            cursorUtilsHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/utils.mjs`);
+      }
+      const cursorSpineStateHookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "spine-state.mjs"),
+      );
+      if (
+        cursorSpineStateHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "spine-state.mjs"),
+            cursorSpineStateHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/spine-state.mjs`);
+      }
+      const cursorSkipReminderHookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "skip-reminder.mjs"),
+      );
+      if (
+        cursorSkipReminderHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "skip-reminder.mjs"),
+            cursorSkipReminderHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/skip-reminder.mjs`);
+      }
+      const cursorHookI18nContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "hook-i18n.mjs"),
+      );
+      if (
+        cursorHookI18nContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "hook-i18n.mjs"),
+            cursorHookI18nContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/hook-i18n.mjs`);
+      }
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "hookprompt-adapter.mjs"),
+            buildHookPromptAdapterSource("cursor"),
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/hookprompt-adapter.mjs`);
+      }
+      const graphifyHookPath =
+        scope === "global"
+          ? path.join(dirs.cursorHooksDir, "graphify-context.mjs")
+          : ".cursor/hooks/graphify-context.mjs";
       const memoryHookPath =
         scope === "global"
           ? path.join(dirs.cursorHooksDir, "meta-kim-memory-save.mjs")
           : ".cursor/hooks/meta-kim-memory-save.mjs";
+      const enforceAgentDispatchHookPath =
+        scope === "global"
+          ? path.join(dirs.cursorHooksDir, "enforce-agent-dispatch.mjs")
+          : ".cursor/hooks/enforce-agent-dispatch.mjs";
+      const hookPromptAdapterPath =
+        scope === "global"
+          ? path.join(dirs.cursorHooksDir, "hookprompt-adapter.mjs")
+          : ".cursor/hooks/hookprompt-adapter.mjs";
       if (
         (
           await writeGeneratedJson(
             dirs.cursorHooksFile,
-            buildCursorProjectHooksJson({ memoryHookPath }),
+            buildCursorProjectHooksJson({
+              graphifyHookPath,
+              memoryHookPath,
+              enforceAgentDispatchHookPath,
+              hookPromptAdapterPath,
+            }),
           )
         ).changed
       ) {
@@ -1614,7 +2829,7 @@ Examples:
       hasDisplayPrefix(f, dirs.displayPaths.claudeAgents),
     ).length,
     claudeSkill: changedFiles.filter((f) =>
-      hasDisplayPrefix(f, dirs.displayPaths.claudeSkill),
+      hasDisplayPrefix(f, dirs.displayPaths.claudeSkills),
     ).length,
     claudeHooks: changedFiles.filter((f) =>
       hasDisplayPrefix(f, dirs.displayPaths.claudeHooks),
@@ -1634,7 +2849,7 @@ Examples:
       hasDisplayPrefix(f, dirs.displayPaths.codexAgents),
     ).length,
     codexSkill: changedFiles.filter((f) =>
-      hasDisplayPrefix(f, dirs.displayPaths.codexSkills),
+      hasDisplayPrefix(f, dirs.displayPaths.codexSkillsRoot),
     ).length,
     codexHooks: changedFiles.filter((f) =>
       hasDisplayPrefix(f, dirs.displayPaths.codexHooks),
@@ -1653,7 +2868,7 @@ Examples:
       normalizeDisplayPath(f).startsWith(openclawWorkspacePrefix),
     ).length,
     openclawSkill: changedFiles.filter((f) =>
-      hasDisplayPrefix(f, dirs.displayPaths.openclawSkills),
+      hasDisplayPrefix(f, dirs.displayPaths.openclawSkillsRoot),
     ).length,
     openclawHooks: changedFiles.filter((f) =>
       hasDisplayPrefix(f, dirs.displayPaths.openclawHooks),
@@ -1667,7 +2882,7 @@ Examples:
       hasDisplayPrefix(f, dirs.displayPaths.cursorAgents),
     ).length,
     cursorSkill: changedFiles.filter((f) =>
-      hasDisplayPrefix(f, dirs.displayPaths.cursorSkill),
+      hasDisplayPrefix(f, dirs.displayPaths.cursorSkillsRoot),
     ).length,
     cursorHooks: changedFiles.filter((f) =>
       hasDisplayPrefix(f, dirs.displayPaths.cursorHooks),
@@ -1682,6 +2897,9 @@ Examples:
         normalizeDisplayPath(f) ===
         normalizeDisplayPath(dirs.displayPaths.cursorMcp),
     ).length,
+    cursorRules: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.cursorRules),
+    ).length,
   };
 
   const teamSize = agents.length;
@@ -1695,7 +2913,7 @@ Examples:
           summaryKind: "agents",
         },
         {
-          label: dirs.displayPaths.claudeSkill,
+          label: dirs.displayPaths.claudeSkills,
           count: layerCounts.claudeSkill,
           summaryKind: "files",
         },
@@ -1723,9 +2941,13 @@ Examples:
           label: dirs.displayPaths.codexAgents,
           count: layerCounts.codexAgents,
           summaryKind: "agents",
+          expectedCount:
+            teamSize +
+            CODEX_RUNTIME_ADAPTER_AGENTS.length +
+            CODEX_BUSINESS_ROLE_AGENTS.length,
         },
         {
-          label: dirs.displayPaths.codexSkills,
+          label: dirs.displayPaths.codexSkillsRoot,
           count: layerCounts.codexSkill,
           summaryKind: "files",
         },
@@ -1755,7 +2977,7 @@ Examples:
           summaryKind: "workspaces",
         },
         {
-          label: dirs.displayPaths.openclawSkills,
+          label: dirs.displayPaths.openclawSkillsRoot,
           count: layerCounts.openclawSkill,
           summaryKind: "files",
         },
@@ -1780,7 +3002,7 @@ Examples:
           summaryKind: "agents",
         },
         {
-          label: dirs.displayPaths.cursorSkill,
+          label: dirs.displayPaths.cursorSkillsRoot,
           count: layerCounts.cursorSkill,
           summaryKind: "files",
         },
@@ -1797,6 +3019,11 @@ Examples:
         {
           label: dirs.displayPaths.cursorMcp,
           count: layerCounts.cursorMcp,
+          summaryKind: "files",
+        },
+        {
+          label: dirs.displayPaths.cursorRules,
+          count: layerCounts.cursorRules,
           summaryKind: "files",
         },
       ],
@@ -1832,7 +3059,7 @@ Examples:
       const pathCol = String(entry.label).padEnd(pathColWidth);
       let detail = "";
       if (entry.summaryKind === "agents") {
-        detail = t.syncDetailAgents(entry.count, teamSize);
+        detail = t.syncDetailAgents(entry.count, entry.expectedCount ?? teamSize);
       } else if (entry.summaryKind === "workspaces") {
         detail = t.syncDetailWorkspaces(entry.count, teamSize);
       } else {

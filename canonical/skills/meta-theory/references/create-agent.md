@@ -69,54 +69,104 @@ On-demand trigger questions (answer honestly before skipping):
 - Must it need to remember what it did last time across sessions?
 - Must it hand off results to other Agents or coordinate execution order across agents?
 
-## Execution-Agent Factory Lane
+## Governance Owner Factory Lane
 
-When Type B is triggered by a **capability gap in actual business execution**, use the stricter **execution-agent factory lane** instead of an ad-hoc prompt-writing loop.
+When Type B is triggered by a **capability gap in the Meta_Kim repository itself**, use the stricter **governance owner factory lane** instead of an ad-hoc prompt-writing loop. Public Meta_Kim does not persist non-governance execution agents; implementation capability is recorded as run-scoped skill/tool evidence.
+
+When Type B is triggered while Meta_Kim is used inside a **user project**, search global agents first. If a global agent already fits, use it directly and do not copy it into the project. Copy a global agent into the user project only when project-specific knowledge, boundary changes, persistent skill/tool additions, or recurring local ownership require modification; that copy must be recorded as project-local upgrade work, not ordinary reuse.
 
 Professional role split:
 
 - **Warden** is the **public front door** and approval owner.
 - **Conductor** owns orchestration only: it converts the gap into a task board and later dispatches the result.
-- **Base-meta factory** owns capability building only: **Genesis + Artisan + Scout + Sentinel + Librarian**.
-- **Execution agents are the actual workers**. The factory never performs business execution directly.
+- **Base-meta factory** owns governance capability building only: **Genesis + Artisan + Scout + Sentinel + Librarian**.
+- **Run-scoped `matchedCapabilities` plus `capabilityBindings` are the implementation capability evidence**. Legacy `matchedSkills` may appear only as compatibility evidence. The factory never performs business execution directly.
 
 Factory lane:
 
 1. **Warden** confirms that an existing owner is insufficient.
 2. **Conductor** emits the capability-gap decision and task board.
-3. **Genesis** defines the execution-agent identity.
-4. **Artisan** defines skill / tool / dependency loadout.
+3. **Genesis** defines or refines governance owner identity and boundary.
+4. **Artisan** defines abstract capability slots, provider compatibility, and Fetch-time skill / tool selection rules.
 5. **Scout** backfills external capability only when local coverage is missing.
 6. **Sentinel** validates safety boundaries.
 7. **Librarian** provisions memory / reuse strategy.
 8. **Prism** runs the quality gate.
-9. **Warden** approves admission into the callable execution roster.
+9. **Warden** approves the governance owner decision and run-scoped capability match.
 
 Rule: Conductor may participate before or after the factory, but **Conductor does not build capability**.
 
-## Fixed Artifacts (Execution-Agent Factory Mode)
+### Station Deliverable Contract (Mandatory)
 
-The execution-agent factory lane must produce these explicit artifacts:
+Required Genesis deliverables: SOUL / identity / responsibility boundary.
+Required Artisan deliverables: capability slots, provider compatibility, loadout rules.
+Required Conductor deliverables: orchestration board, dependencies, merge path.
+
+| Station | Deliverable |
+|---|---|
+| Warden | approval gate, public boundary, final owner decision |
+| Genesis | SOUL / identity / responsibility boundary |
+| Artisan | capability slots, provider compatibility, loadout rules |
+| Sentinel | safety, permissions, rollback, external side-effect review |
+| Librarian | memory, continuity, handoff and reuse policy |
+| Conductor | orchestration board, dependencies, merge path |
+| Prism | quality review, anti-slop check, evidence closure |
+| Scout | external capability discovery and gap evidence |
+
+## Fixed Artifacts (Governance Owner Factory Mode)
+
+The public governance owner factory lane must produce these explicit artifacts:
 
 1. **Capability Gap Sheet** (`capabilityGapPacket`) — what is missing, which owners were checked, and what decision was made.
-2. **Execution Agent Role Card** (`executionAgentCard`) — the execution agent's contract.
+2. **Owner Decision** (`agentBlueprintPacket.roles[]` + `matchedCapabilities` / `capabilityBindings`) — the governance owner contract and run-scoped capability evidence for Meta_Kim itself, or the direct global-reuse / project-local-copy decision for user projects. `agentCopyPolicy = copy_to_project_for_modification` is valid only with project-local upgrade intent; `agentCopyPolicy = create_project_local_agent` is valid only with approved project-local creation. `executionAgentCard` is used only when an execution agent must be created or upgraded, not when a usable global agent is reused directly.
 3. **Orchestration Task Board** (`orchestrationTaskBoardPacket`) — ordered execution tasks plus synthesis owner.
 4. **Evolution Record** (`evolutionWritebackPacket`) — retain / upgrade / retire outcomes after the run.
 
-## Execution Agent Role Card
+## External Execution Agent Role Card Compatibility
 
-Every created or upgraded execution agent must ship with one explicit role card. No free-form shortcut.
+External/private and user-project execution-agent registries may still require `executionAgentCard` for creation or upgrade. Public Meta_Kim must not use that packet as durable public owner state; public creation or upgrade is represented by governance owner fields plus `matchedCapabilities` / `capabilityBindings`. Directly reused global agents do not require a copied project-local card.
 
 Required fields:
 
 - **Purpose** — what it is for
 - **Capabilities** — what it can do
 - **Non-Capabilities / Boundaries** — what it cannot do
-- **Dependencies** — skills, tools, MCPs, external packages, or other capability sources
+- **Dependencies** — abstract capability slots, meta-skill package providers, tools, MCPs, external packages, or other capability sources. Do not bind concrete sub-skills, commands, or plugin sub-capabilities into durable identity.
 - **Inputs** — what it accepts
 - **Outputs** — what it must deliver
 
-This card is the build contract for the factory and the dispatch contract for Conductor.
+This card is the build contract for an execution-agent factory when an agent must be created or upgraded. It is not used just because a global agent exists; direct global reuse remains a reference, not a local copy. A copied global agent must be modified or upgraded after copy; otherwise it should stay global.
+
+### Sub-agent Identity Carry-over
+
+When the orchestrator dispatches a meta-* agent as a sub-agent (e.g., `Agent(subagent_type: "meta-prism", ...)`):
+- The sub-agent's runtime identity remains "meta-*"
+- All meta-* tool restrictions and behavioral rules continue to apply
+- The sub-agent must use Read-only + Agent tools for its own work
+- If the sub-agent's task requires execution (code edits, builds, installs), it must transitively dispatch to a non-governance executor
+- This carry-over rule is enforced by both: (a) prompt-layer self-check in SKILL.md, and (b) hook-layer caller identity check in `enforce-agent-dispatch.mjs`
+
+### Skill Binding Rules For Created Or Iterated Agents
+
+Created or upgraded agents inherit durable capability shape, not a frozen tactic list.
+
+- Long-term identity may include abstract capability slots, such as `test generation`, `browser QA`, `security review`, or `planning discipline`.
+- Long-term identity may include meta-skill package providers, such as `superpowers` or `ecc`, as compatible capability providers.
+- Long-term identity must not include the concrete sub-skill, shell command, plugin sub-capability, or prompt tactic that happened to win one Fetch.
+- `findskill` is only a runtime-local capability search entrypoint. Its search result can justify a current-run `selectedSkill`, not a permanent agent binding.
+Concrete choices belong in run artifacts: `capabilitySearchResult`, `matchedCapabilities`, `capabilityBindings`, `orchestrationTaskBoardPacket`, and `workerTaskPacket`; `executionAgentCard` is included only for project-local/external execution-agent creation or upgrade.
+
+Genesis owns the durable boundary. Artisan owns provider compatibility and selection rules. Fetch owns the current-run concrete selection.
+
+### Execution Agent Abstraction Boundary
+
+An execution agent is reusable only when its identity names a capability class, not a one-run address or task. `executionAgentCard` may contain purpose, capabilities, non-capabilities, abstract dependencies, inputs, and outputs. It must not contain concrete repo paths, files, tickets, one-run commands, `todayTask`, `scopeFiles`, `deliverableLink`, `verifySteps`, or worker completion checklists.
+
+Concrete work belongs in `workerTaskPacket`: file lists, shard scope, current task text, acceptance criteria, verification steps, deliverable links, and merge rules. If the only way to describe the agent is "the agent that edits this file / fixes this page / handles this ticket," the factory must stop and return to Thinking. The correct route is usually direct reuse of an existing owner plus a concrete worker task packet, not durable agent creation.
+
+Before creating or upgrading an execution agent, Fetch must produce checked-owner evidence from repo canonical capability index, runtime mirrors, project runtime agents, local global inventory, skills, commands, hooks, rules/prompts, tools, plugins, and MCP capabilities. The factory may proceed only when `capabilityGapPacket.currentAgentsChecked` and `currentProvidersChecked` list those candidates and explain why reuse is insufficient.
+
+Reference pattern from `gstack`: a large reusable capability surface can be represented as generated `SKILL.md` providers with host-specific projection metadata, not as many durable execution-agent identities. `agents/openai.yaml`-style metadata is an interface card for discovery, not a worker identity. Meta_Kim should therefore prefer provider reuse or provider projection before creating a new execution agent; create the agent only when the missing thing is a recurring owner boundary that cannot be represented by an existing agent, skill, command, MCP tool, runtime tool, or plugin.
 
 ### Phase 4 — Review and Revision
 
@@ -150,6 +200,52 @@ echo "=== Components ===" && find src/visual/components -name "*.tsx" 2>/dev/nul
 echo "=== API routes ===" && find app/api -name "route.ts" 2>/dev/null | wc -l
 echo "=== Scripts ===" && find scripts -name "*.mjs" 2>/dev/null | wc -l
 echo "=== Tests ===" && find tests -name "*.test.*" 2>/dev/null | wc -l
+```
+
+Windows PowerShell equivalents:
+
+```powershell
+# Commit count (project scale)
+(git log --since="6 months ago" --oneline | Measure-Object -Line).Lines
+
+# Commit type distribution (feat/fix/refactor share)
+git log --since="6 months ago" --oneline |
+  ForEach-Object { ($_ -split '\s+', 3)[1] } |
+  ForEach-Object { ($_ -split ':', 2)[0] } |
+  Group-Object |
+  Sort-Object Count -Descending |
+  Select-Object Count, Name
+
+# Directory change heatmap (most active areas)
+git log --since="6 months ago" --name-only --pretty=format:"" |
+  Where-Object { $_ } |
+  ForEach-Object { Split-Path $_ -Parent } |
+  Where-Object { $_ } |
+  Group-Object |
+  Sort-Object Count -Descending |
+  Select-Object -First 20 Count, Name
+
+# Co-change analysis (dirs that often change together = high coupling)
+$commits = git log --since="6 months ago" --format="%H"
+$pairs = foreach ($commit in $commits) {
+  $dirs = git show --name-only --pretty=format:"" $commit |
+    Where-Object { $_ } |
+    ForEach-Object { Split-Path $_ -Parent } |
+    Where-Object { $_ } |
+    Sort-Object -Unique
+  for ($i = 0; $i -lt $dirs.Count; $i++) {
+    for ($j = $i + 1; $j -lt $dirs.Count; $j++) {
+      "$($dirs[$i]) $($dirs[$j])"
+    }
+  }
+}
+$pairs | Group-Object | Sort-Object Count -Descending | Select-Object -First 15 Count, Name
+
+# File category counts
+"=== Components ==="; (Get-ChildItem -LiteralPath "src/visual/components" -Filter "*.tsx" -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+"=== API routes ==="; (Get-ChildItem -LiteralPath "app/api" -Filter "route.ts" -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+"=== Scripts ==="; (Get-ChildItem -LiteralPath "scripts" -Filter "*.mjs" -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+"=== Tests ==="; (Get-ChildItem -LiteralPath "tests" -Filter "*.test.*" -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
 ```
 
 ### Steps 1–2: Analysis & grouping
@@ -191,21 +287,23 @@ All factory questions No → only Genesis + Artisan. If the Conductor question i
 
 ### Step 3: Genesis — soul design (required)
 
-**Read** `.claude/agents/meta-genesis.md` and design SOUL.md per that method.
+Read the canonical `meta-genesis` agent definition first, then use the current runtime mirror only as an adapter. Design SOUL.md per that method.
 
 See references/meta-theory.md, module 8.
 
-### Step 4: Artisan — skill matching (required)
+### Step 4: Artisan — capability provider matching (required)
 
-**Read** `.claude/agents/meta-artisan.md`
+Read the canonical `meta-artisan` agent definition first, then use the current runtime mirror only as an adapter.
 
-1. **Scan skills**: `ls .claude/skills/*/SKILL.md` + built-in skills
+1. **Scan capability providers and skills**: canonical capability index, runtime mirrors, local runtime inventory, built-in skills, then external discovery when allowed
 2. **ROI score**: `ROI = (task coverage × frequency) / (context cost + learning curve)`
-3. **Output**: per-agent skill shortlist (top 5–8) with ROI and rationale
+3. **Output**: per-agent abstract capability slots, compatible provider packages (`superpowers`, `ecc`, etc.), selection rules, and example run-scoped candidates with ROI and rationale
+
+Do not write the example candidates as durable bindings. They are examples of what Fetch may select into `selectedSkill` for a future run.
 
 ### Step 5: Sentinel — safety design (on demand)
 
-**Read** `.claude/agents/meta-sentinel.md`
+Read the canonical `meta-sentinel` agent definition first, then use the current runtime mirror only as an adapter.
 
 - **Threat model**: top 5 threats in this agent’s domain
 - **Permissions**: three levels (CAN / CANNOT / NEVER)
@@ -214,7 +312,7 @@ See references/meta-theory.md, module 8.
 
 ### Step 6: Librarian — memory design (on demand)
 
-**Read** `.claude/agents/meta-librarian.md`
+Read the canonical `meta-librarian` agent definition first, then use the current runtime mirror only as an adapter.
 
 - **Memory architecture**: three layers (index / topic / archive)
 - **Expiry**: per-type retention rules
@@ -222,7 +320,7 @@ See references/meta-theory.md, module 8.
 
 ### Step 7: Conductor — orchestration design (on demand)
 
-**Read** `.claude/agents/meta-conductor.md`
+Read the canonical `meta-conductor` agent definition first, then use the current runtime mirror only as an adapter.
 
 - **Collaboration flow**: call order among agents, parallel vs serial
 - **Triggers**: when to spawn this agent
@@ -259,7 +357,7 @@ Re-enter Step 8 until **A or better**. **Max 2 rounds**
 
 ### Step 10: Integrate & write
 
-Generate `.claude/agents/{name}.md` with this shape:
+Generate the canonical agent source with this shape, then sync runtime mirrors:
 
 ```markdown
 # {Name}: {Display name} {emoji}
@@ -295,10 +393,13 @@ Generate `.claude/agents/{name}.md` with this shape:
 ## Meta-Skills
 {≥2 self-improvement directions}
 
-## Skill loadout
-| Skill | ROI | Use |
-|-------|-----|-----|
+## Skill loadout / capability provider loadout
+| Capability slot | Provider | ROI | Selection rule |
+|-----------------|----------|-----|----------------|
 {table}
+
+## Run-scoped skill selection policy
+Concrete skills, commands, and plugin sub-capabilities are selected after Fetch and recorded in `capabilitySearchResult` / `selectedSkill` / `workerTaskPacket`, not in this agent's long-term identity.
 
 ## Safety rules (if any)
 {Permissions + hooks}
@@ -342,3 +443,64 @@ Present a full summary:
 - Five-criteria tables
 
 **Write files only after explicit user confirmation.**
+
+
+## Use when
+
+Use when new owner or agent boundary creation affects route, owner, risk, acceptance, verification, public-ready, or evolution writeback.
+
+## Required inputs
+
+- Latest user request and `intentPacket`
+- `fetchPacket` evidence that changes decision
+- runtime and OS targets when tools or dependencies are involved
+- relevant config, registry, script, or artifact path
+
+## Do
+
+- Assign an owner for each action.
+- Produce a checkable packet or artifact.
+- Bind pass/fail to evidence, threshold, or command output.
+- Preserve existing foundational and native runtime capabilities.
+
+## Do not
+
+- Do not delete skills, dependencies, web/browser/research, shell, filesystem, apply_patch, MCP, memory, graph, hooks, scripts, runtime tools, or native platform abilities.
+- Do not use vague advice without trigger, output, evidence, and writeback.
+- Do not route reference-only or unknown dependencies into execution.
+
+## Required packet
+
+`referenceContractPacket`: `referenceId`, `trigger`, `requiredInputs`, `actions`, `outputs`, `passCriteria`, `failCriteria`, `blockConditions`, `returnStage`, `verification`, `writebackTarget`.
+
+## Pass
+
+- At least one action has owner, input, output, and verification.
+- Pass criteria include numeric threshold, required field list, command, artifact, or human acceptance record.
+- Unsupported, unknown, or partial capability is marked rather than removed.
+
+## Fail
+
+- Instruction is only theory or roleplay.
+- No block condition exists for missing evidence, unsupported runtime/OS, fake owner, or missing verification.
+- Public-ready can be claimed without userGoalDone and evidence.
+
+## Block
+
+Block Execution when owner, weapon, dependency eligibility, runtime support, OS support, verification owner, or rollback boundary is missing. Block public-ready when verification evidence, intent acceptance, writebackDecision, or high/critical closure is missing.
+
+## Return to stage
+
+Return to Critical for intent gaps, Fetch for evidence/support gaps, Thinking for route gaps, Execution for missing artifact, Review for open findings, Verification for missing proof, and Evolution for missing writeback.
+
+## Verification
+
+Run the most specific validator for this reference plus `npm run meta:prompt:validate`. Use command/log/artifact/human acceptance evidence, not a narrative claim.
+
+## Writeback
+
+Write durable improvements to canonical references, governance configs, capability indexes, validators, tests, or scars. If no durable change exists, record `none-with-reason`.
+
+## Preserve
+
+Preserve Skills, WebSearch/browser/research, filesystem, shell, apply_patch, MCP, memory, Graphify, graph, hooks, commands, rules, agents, subagents, approval, sandbox, runtime tools, package scripts, setup, sync, install, uninstall, status, doctor, validators, and runtime projections.

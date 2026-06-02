@@ -12,6 +12,7 @@ import {
   MIN_NODE_VERSION,
   isSupportedNodeVersion,
 } from "./node-runtime-requirements.mjs";
+import { importDatabaseSync } from "./sqlite-runtime.mjs";
 import { validateArtifactFile } from "./validate-run-artifact.mjs";
 
 const DEFAULT_SOURCE = "tests/fixtures/run-artifacts";
@@ -93,7 +94,7 @@ async function openDb(runIndexPath) {
 
   let DatabaseSync;
   try {
-    ({ DatabaseSync } = await import("node:sqlite"));
+    DatabaseSync = await importDatabaseSync();
   } catch (error) {
     throw new Error(
       `Failed to load node:sqlite on Node ${process.versions.node}. ` +
@@ -152,30 +153,98 @@ function deriveOpenFindingIds(artifact) {
 
 function deriveOwnerAgents(artifact) {
   const owners = new Set();
-  if (artifact.dispatchEnvelopePacket?.ownerAgent) {
-    owners.add(artifact.dispatchEnvelopePacket.ownerAgent);
-  }
-  for (const packet of artifact.workerTaskPackets ?? []) {
-    if (packet.owner) {
-      owners.add(packet.owner);
+  const addOwner = (owner) => {
+    if (typeof owner === "string" && owner.trim().length > 0) {
+      owners.add(owner);
     }
+  };
+
+  for (const field of ["ownerAgent", "reviewOwner", "verificationOwner"]) {
+    addOwner(artifact.dispatchEnvelopePacket?.[field]);
+  }
+  addOwner(artifact.cardPlanPacket?.dealerOwner);
+  for (const card of artifact.cardPlanPacket?.cards ?? []) {
+    addOwner(card.cardSource);
+  }
+  for (const decision of artifact.cardPlanPacket?.controlDecisions ?? []) {
+    addOwner(decision.insertedGovernanceOwner);
+  }
+  addOwner(artifact.orchestrationTaskBoardPacket?.synthesisOwner);
+  for (const packet of artifact.workerTaskPackets ?? []) {
+    addOwner(packet.ownerAgent);
+    addOwner(packet.mergeOwner);
+  }
+  for (const role of artifact.agentBlueprintPacket?.roles ?? []) {
+    addOwner(role.ownerAgent);
+  }
+  for (const review of artifact.reviewPacket?.reviews ?? []) {
+    addOwner(review.agent);
   }
   for (const finding of artifact.reviewPacket?.findings ?? []) {
-    if (finding.owner) {
-      owners.add(finding.owner);
+    addOwner(finding.owner);
+    addOwner(finding.verifiedBy);
+  }
+  for (const response of artifact.verificationPacket?.revisionResponses ?? []) {
+    addOwner(response.owner);
+  }
+  for (const result of artifact.verificationPacket?.verificationResults ?? []) {
+    addOwner(result.verifiedBy);
+  }
+  for (const bucket of ["writebacks", "retain", "upgrade", "retire"]) {
+    for (const item of artifact.evolutionWritebackPacket?.[bucket] ?? []) {
+      addOwner(item.target);
     }
-  }
-  if (artifact.dispatchEnvelopePacket?.reviewOwner) {
-    owners.add(artifact.dispatchEnvelopePacket.reviewOwner);
-  }
-  if (artifact.dispatchEnvelopePacket?.verificationOwner) {
-    owners.add(artifact.dispatchEnvelopePacket.verificationOwner);
   }
   return [...owners].sort();
 }
 
+function deriveBusinessRoles(artifact) {
+  const roles = new Set();
+  const addRole = (role) => {
+    if (typeof role === "string" && role.trim().length > 0) {
+      roles.add(role);
+    }
+  };
+  for (const field of ["businessRoleId", "roleDisplayName"]) {
+    addRole(artifact.dispatchEnvelopePacket?.[field]);
+  }
+  for (const lane of artifact.businessFlowBlueprintPacket?.requiredLanes ?? []) {
+    addRole(lane.businessLane);
+  }
+  for (const role of artifact.agentBlueprintPacket?.roles ?? []) {
+    addRole(role.businessRoleId);
+    addRole(role.roleDisplayName);
+  }
+  for (const packet of artifact.workerTaskPackets ?? []) {
+    addRole(packet.businessRoleId);
+    addRole(packet.roleDisplayName);
+  }
+  return [...roles].sort();
+}
+
+function deriveMatchedSkillSummary(artifact) {
+  const providers = new Set();
+  const skillIds = new Set();
+  for (const role of artifact.agentBlueprintPacket?.roles ?? []) {
+    for (const skill of role.matchedSkills ?? []) {
+      if (typeof skill.providerId === "string" && skill.providerId.trim()) {
+        providers.add(skill.providerId);
+      }
+      if (typeof skill.skillId === "string" && skill.skillId.trim()) {
+        skillIds.add(skill.skillId);
+      }
+    }
+  }
+  return {
+    providers: [...providers].sort(),
+    skillIds: [...skillIds].sort(),
+  };
+}
+
 function summarizeArtifact(artifact, artifactPath) {
   const owners = deriveOwnerAgents(artifact);
+  const businessRoles = deriveBusinessRoles(artifact);
+  const matchedSkills = deriveMatchedSkillSummary(artifact);
   const openFindingIds = deriveOpenFindingIds(artifact);
   return {
     artifactPath: toRepoRelative(artifactPath),
@@ -185,6 +254,9 @@ function summarizeArtifact(artifact, artifactPath) {
     requestClass: artifact.taskClassification.requestClass,
     primaryDeliverable: artifact.runHeader.primaryDeliverable,
     ownerAgents: owners,
+    businessRoles,
+    matchedSkillProviders: matchedSkills.providers,
+    matchedSkillIds: matchedSkills.skillIds,
     publicReady: artifact.summaryPacket.publicReady === true,
     verifyPassed: artifact.summaryPacket.verifyPassed === true,
     openFindingIds,
@@ -202,6 +274,9 @@ function summarizeArtifact(artifact, artifactPath) {
       summaryPacket: artifact.summaryPacket,
       writebackDecision: artifact.evolutionWritebackPacket.writebackDecision,
       dispatchEnvelopePacket: artifact.dispatchEnvelopePacket,
+      businessRoles,
+      matchedSkillProviders: matchedSkills.providers,
+      matchedSkillIds: matchedSkills.skillIds,
     },
   };
 }

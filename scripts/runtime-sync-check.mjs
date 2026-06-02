@@ -1,5 +1,6 @@
 export const META_AGENTS = [
   "meta-artisan",
+  "meta-chrysalis",
   "meta-conductor",
   "meta-genesis",
   "meta-librarian",
@@ -7,6 +8,18 @@ export const META_AGENTS = [
   "meta-scout",
   "meta-sentinel",
   "meta-warden",
+];
+
+export const CODEX_RUNTIME_ADAPTER_AGENT_IDS = ["worker", "explorer"];
+
+export const CODEX_BUSINESS_ROLE_AGENT_IDS = [
+  "frontend",
+  "backend",
+  "test",
+  "review",
+  "analysis",
+  "verify",
+  "docs",
 ];
 
 export const OPENCLAW_WORKSPACE_MD = [
@@ -21,9 +34,11 @@ export const OPENCLAW_WORKSPACE_MD = [
   "TOOLS.md",
 ];
 
-export const CLAUDE_HOOK_FILES = [
+export const SHARED_HOOK_FILES = [
+  "hook-i18n.mjs",
+  "skip-reminder.mjs",
   "block-dangerous-bash.mjs",
-  "pre-git-push-confirm.mjs",
+  "activate-meta-theory-spine.mjs",
   "post-format.mjs",
   "post-typecheck.mjs",
   "post-console-log-warn.mjs",
@@ -33,6 +48,9 @@ export const CLAUDE_HOOK_FILES = [
   "stop-console-log-audit.mjs",
   "stop-completion-guard.mjs",
 ];
+
+// Legacy export alias for backwards compatibility
+export const CLAUDE_HOOK_FILES = SHARED_HOOK_FILES;
 
 export function expectedAgentProjectionFiles(
   extension,

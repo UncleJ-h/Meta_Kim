@@ -15,7 +15,8 @@
  *   --skills=id,...   install only these manifest skill ids (omit = all)
  *
  * Env (optional): META_KIM_CLAUDE_HOME, CLAUDE_HOME, META_KIM_CODEX_HOME,
- * CODEX_HOME, META_KIM_OPENCLAW_HOME, OPENCLAW_HOME, META_KIM_SKILL_IDS
+ * CODEX_HOME, META_KIM_OPENCLAW_HOME, OPENCLAW_HOME, META_KIM_QODER_HOME,
+ * QODER_HOME, META_KIM_SKILL_IDS
  */
 
 import { execFileSync, execSync, spawnSync, spawn } from "node:child_process";
@@ -42,7 +43,20 @@ import {
   shouldUseArchiveFallbackForUnknownClone,
 } from "./install-error-classifier.mjs";
 import {
+  CATEGORIES,
+  manifestPathFor,
+  readManifest,
+} from "./install-manifest.mjs";
+import {
+  CODEX_REQUEST_USER_INPUT_FEATURE,
+  ensureCodexWindowsNotifyCompat,
+  ensureCodexRequestUserInputFeature,
+  hasCodexRequestUserInputFeature,
+} from "./codex-config-merge.mjs";
+import {
+  detectManagedInstallConflict,
   detectLegacySubdirInstall,
+  detectPluginBundleSkillResidue,
   sanitizeInstalledSkillTree,
 } from "./install-skill-sanitizer.mjs";
 import { fileURLToPath } from "node:url";
@@ -52,6 +66,11 @@ import {
   resolveRuntimeHomeDir,
 } from "./meta-kim-sync-config.mjs";
 import { t } from "./meta-kim-i18n.mjs";
+import {
+  buildCodexHooksJson,
+  buildCursorHooksJson,
+  buildHookPromptAdapterSource,
+} from "./runtime-hook-mapping.mjs";
 
 // ── ANSI colors (matching setup.mjs) ─────────────────────────────────
 
@@ -71,6 +90,21 @@ const AMBER_BRIGHT = "\x1b[38;2;200;160;80m";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+
+const GRAPHIFY_GUIDE_TARGETS = {
+  claude: "CLAUDE.md",
+};
+
+function guideAlreadyHasGraphifySection(platform) {
+  const guideFile = GRAPHIFY_GUIDE_TARGETS[platform];
+  if (!guideFile) return false;
+  try {
+    const content = readFileSync(path.join(repoRoot, guideFile), "utf8");
+    return /^##\s+graphify\b/im.test(content);
+  } catch {
+    return false;
+  }
+}
 
 const updateMode = process.argv.includes("--update");
 const dryRun = process.argv.includes("--dry-run");
@@ -319,9 +353,15 @@ function loadSkillsManifest() {
         ...(subdir ? { subdir } : {}),
         targets: skill.targets || ["claude", "codex", "openclaw"],
         ...(skill.claudePlugin ? { claudePlugin: skill.claudePlugin } : {}),
+        ...(skill.codexPlugin ? { codexPlugin: skill.codexPlugin } : {}),
+        ...(skill.cursorPlugin ? { cursorPlugin: skill.cursorPlugin } : {}),
         ...(skill.installRoot ? { installRoot: skill.installRoot } : {}),
         ...(skill.pluginHookCompat ? { pluginHookCompat: true } : {}),
         ...(skill.installMethod ? { installMethod: skill.installMethod } : {}),
+        ...(skill.upstreamPackage
+          ? { upstreamPackage: skill.upstreamPackage }
+          : {}),
+        ...(skill.upstreamProfile ? { upstreamProfile: skill.upstreamProfile } : {}),
         ...(skill.legacyNames ? { legacyNames: skill.legacyNames } : {}),
         ...(skill.hookSubdirs ? { hookSubdirs: skill.hookSubdirs } : {}),
         ...(skill.hookConfigFiles
@@ -368,6 +408,7 @@ function applySkillsIdFilter(skillRepos, filterIds) {
 const manifestLoad = loadSkillsManifest();
 let SKILL_REPOS = manifestLoad.skillRepos;
 const skillsArg = parseSkillsArg(cliArgs);
+const skillsFilterActive = skillsArg !== null;
 if (skillsArg !== null && skillsArg.length > 0) {
   const { repos, unknownIds } = applySkillsIdFilter(SKILL_REPOS, skillsArg);
   for (const id of unknownIds) {
@@ -385,12 +426,29 @@ let CLAUDE_PLUGIN_SPECS = SKILL_REPOS.map((s) => s.claudePlugin).filter(
   Boolean,
 );
 
+function loadGlobalManagedSkillPaths() {
+  const manifest = readManifest(manifestPathFor("global"));
+  return (manifest?.entries ?? [])
+    .filter((entry) => entry.category === CATEGORIES.A && entry.kind === "dir")
+    .map((entry) => entry);
+}
+
+const globalManagedSkillPaths = loadGlobalManagedSkillPaths();
+
 function resolveHomes() {
   return {
     claude: resolveRuntimeHomeDir("claude"),
     codex: resolveRuntimeHomeDir("codex"),
     openclaw: resolveRuntimeHomeDir("openclaw"),
     cursor: resolveRuntimeHomeDir("cursor"),
+    opencode: resolveRuntimeHomeDir("opencode"),
+    qwen: resolveRuntimeHomeDir("qwen"),
+    zed: resolveRuntimeHomeDir("zed"),
+    gemini: resolveRuntimeHomeDir("gemini"),
+    codebuddy: resolveRuntimeHomeDir("codebuddy"),
+    antigravity: resolveRuntimeHomeDir("antigravity"),
+    joycode: resolveRuntimeHomeDir("joycode"),
+    qoder: resolveRuntimeHomeDir("qoder"),
   };
 }
 
@@ -408,6 +466,14 @@ function skillInstallRootSegment(spec) {
 
 function resolveSkillTargetDir(runtimeHome, spec) {
   return path.join(runtimeHome, skillInstallRootSegment(spec), spec.id);
+}
+
+function usesGenericSkillInstall(spec) {
+  return (
+    !spec.claudePlugin &&
+    spec.installMethod !== "pluginMarketplace" &&
+    spec.installMethod !== "upstreamCli"
+  );
 }
 
 /** Legacy Codex ~/.agents mirror: skills/ vs plugins/ sibling layout. */
@@ -602,11 +668,11 @@ async function repairManagedSkillTarget({
     return { repaired: false };
   }
 
-  const isLegacySubdirInstall = await detectLegacySubdirInstall(
-    targetDir,
+  const conflict = await detectManagedInstallConflict(targetDir, {
     subdirPath,
-  );
-  if (!isLegacySubdirInstall) {
+    manifestManagedPaths: updateMode ? globalManagedSkillPaths : [],
+  });
+  if (!conflict.conflict) {
     return { repaired: false };
   }
 
@@ -614,22 +680,35 @@ async function repairManagedSkillTarget({
     skillId,
     targetDir,
     subdirPath,
+    reason: conflict.reason,
     action: allowDelete ? "reinstall" : "sanitize_only",
   });
 
   if (!allowDelete) {
-    return { repaired: false, legacyDetected: true };
+    return {
+      repaired: false,
+      conflictDetected: true,
+      legacyDetected: conflict.reason === "legacy_subdir_install",
+      reason: conflict.reason,
+    };
   }
 
   console.warn(
-    `${C.yellow}⚠${C.reset} ${t.warnRepairLegacyLayout(skillId, targetDir)}`,
+    conflict.reason === "legacy_subdir_install"
+      ? `${C.yellow}⚠${C.reset} ${t.warnRepairLegacyLayout(skillId, targetDir)}`
+      : `${C.yellow}⚠${C.reset} ${skillId}: replacing managed install conflict (${conflict.reason}) at ${targetDir}`,
   );
   if (dryRun) {
     console.log(
       t.dryRun(`Replace malformed install during reinstall: ${targetDir}`),
     );
   }
-  return { repaired: true, legacyDetected: true };
+  return {
+    repaired: true,
+    conflictDetected: true,
+    legacyDetected: conflict.reason === "legacy_subdir_install",
+    reason: conflict.reason,
+  };
 }
 
 async function sanitizeManagedSkillTarget(skillId, targetDir) {
@@ -1265,7 +1344,7 @@ async function handleGitFailure({
 
 async function installGitSkill(skillId, targetDir, repoUrl) {
   assertUnderHome(targetDir);
-  await repairManagedSkillTarget({ skillId, targetDir });
+  const repairResult = await repairManagedSkillTarget({ skillId, targetDir });
   const targetExists = await pathExists(targetDir);
   const targetEmpty = targetExists && (await isEmptyDir(targetDir));
   if (targetExists && !targetEmpty) {
@@ -1274,13 +1353,18 @@ async function installGitSkill(skillId, targetDir, repoUrl) {
         console.log(t.dryRun(`update ${targetDir}`));
       } else {
         try {
-          runGit(["-C", targetDir, "pull", "--ff-only"], {
+          if (repairResult.conflictDetected) {
+            throw new Error(`managed install conflict: ${repairResult.reason}`);
+          }
+          runGit(["pull", "--ff-only"], {
+            cwd: targetDir,
             skillLabel: `pull ${skillId}`,
           });
           console.log(`${C.green}✓${C.reset} ${t.okUpdated(targetDir)}`);
         } catch {
           console.warn(`${C.yellow}⚠${C.reset} ${t.warnPullFailed(targetDir)}`);
           const stagedDir = await createSiblingStagingDir(targetDir);
+          const failureCountBeforeFallback = installFailures.length;
           try {
             try {
               runGit(["clone", "--depth", "1", repoUrl, stagedDir], {
@@ -1300,8 +1384,27 @@ async function installGitSkill(skillId, targetDir, repoUrl) {
               (await pathExists(stagedDir)) &&
               !(await isEmptyDir(stagedDir))
             ) {
+              await replaceTargetDir(targetDir, stagedDir);
+              console.log(`${C.green}✓${C.reset} ${t.okUpdated(targetDir)}`);
+            } else if (installFailures.length === failureCountBeforeFallback) {
+              recordInstallFailure({
+                skillId,
+                targetDir,
+                repoUrl,
+                category: "unknown",
+                fallback: "update_clone_replace",
+                reason: "pull fallback clone produced no staged content",
+              });
             }
           } catch (error) {
+            recordInstallFailure({
+              skillId,
+              targetDir,
+              repoUrl,
+              category: "unknown",
+              fallback: "update_clone_replace",
+              reason: error?.message || String(error),
+            });
             console.warn(
               `${C.yellow}⚠${C.reset} ${t.warnReplaceFailed(skillId, targetDir, error.message)}`,
             );
@@ -1479,7 +1582,7 @@ async function installAllSkillsForRuntime(label, runtimeHome, runtimeId) {
   };
 
   for (const spec of SKILL_REPOS) {
-    if (spec.claudePlugin || spec.installMethod === "pluginMarketplace")
+    if (!usesGenericSkillInstall(spec))
       continue; // plugin bundles handled by installPluginBundlesForNonClaudeRuntimes
     if (spec.targets && !spec.targets.includes(runtimeId)) {
       continue;
@@ -1505,13 +1608,14 @@ async function installAllSkillsForRuntime(label, runtimeHome, runtimeId) {
     await deployHookExtraFiles(spec, runtimeHome, runtimeId);
     await patchPlanningWithFilesPhaseCounters(spec, runtimeHome, runtimeId);
     await patchCodexPlanningHooksForPlatform(spec, runtimeHome, runtimeId);
+    await patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId);
     await mergeHookSettings(spec, runtimeHome, runtimeId);
     await cleanupDisabledSkillResidue(runtimeHome, spec.id);
   }
   const hasManifestSkillCreator = SKILL_REPOS.some(
     (spec) => spec.id === "skill-creator",
   );
-  if (!hasManifestSkillCreator) {
+  if (!skillsFilterActive && !hasManifestSkillCreator) {
     emitHeader();
     await installSkillCreator(skillsRoot);
   }
@@ -1524,8 +1628,7 @@ async function installAllSkillsForRuntime(label, runtimeHome, runtimeId) {
 }
 
 // ── Plugin bundles for non-Claude runtimes ────────────────────────────────
-// Upstream pluginMarketplace packages (e.g. obra/superpowers,
-// affaan-m/everything-claude-code) ship runtime-specific subtrees such as
+// Upstream pluginMarketplace packages (e.g. obra/superpowers) ship runtime-specific subtrees such as
 // `.codex/`, `.cursor-plugin/`, `.opencode/`. For non-Claude runtimes we
 // sparse-checkout the preferred subdir into `~/.<runtime>/skills/<id>/`.
 // Claude runtime is still handled by installClaudePlugins() via the native
@@ -1535,8 +1638,282 @@ const PLUGIN_BUNDLE_SUBDIR_PREF = {
   codex: [".codex", ".codex-plugin", "skills"],
   cursor: [".cursor", ".cursor-plugin", "skills"],
   opencode: [".opencode", "skills"],
+  qoder: [".qoder", "skills"],
   openclaw: ["skills"],
 };
+
+function nativePluginIdForRuntime(spec, runtimeId) {
+  if (runtimeId === "codex") return spec.codexPlugin ?? null;
+  if (runtimeId === "cursor") return spec.cursorPlugin ?? null;
+  return null;
+}
+
+async function looksLikeLegacySuperpowersSkillBundle(targetDir, spec) {
+  if (spec.id !== "superpowers") return false;
+  return (
+    (await pathExists(path.join(targetDir, "using-superpowers", "SKILL.md"))) &&
+    (await pathExists(path.join(targetDir, "test-driven-development", "SKILL.md"))) &&
+    !(await pathExists(path.join(targetDir, "plugin.json"))) &&
+    !(await pathExists(path.join(targetDir, ".codex-plugin"))) &&
+    !(await pathExists(path.join(targetDir, ".cursor-plugin")))
+  );
+}
+
+async function cleanupNativePluginSkillFallback(runtimeHome, runtimeId, spec) {
+  const nativePluginId = nativePluginIdForRuntime(spec, runtimeId);
+  if (!nativePluginId) return;
+
+  const targetDir = path.join(runtimeHome, "skills", spec.id);
+  const hasLegacyBundle =
+    (await detectPluginBundleSkillResidue(targetDir)) ||
+    (await looksLikeLegacySuperpowersSkillBundle(targetDir, spec));
+  if (!hasLegacyBundle) return;
+
+  assertUnderHome(targetDir);
+  console.warn(
+    `${C.yellow}⚠${C.reset} ${spec.id}: removing legacy ${runtimeId} skills/ fallback; use the native ${runtimeId} plugin "${nativePluginId}" instead`,
+  );
+  console.warn(`${C.dim}  ${targetDir}${C.reset}`);
+  if (dryRun) {
+    console.log(t.dryRun(`remove legacy native-plugin fallback: ${targetDir}`));
+    return;
+  }
+
+  try {
+    await rmDirWithRetry(targetDir);
+  } catch (error) {
+    if (isWindowsLockError(error)) {
+      console.warn(`${C.yellow}⚠${C.reset} ${t.warnStagingLocked(targetDir)}`);
+      return;
+    }
+    throw error;
+  }
+}
+
+const ECC_HOME_INSTALL_TARGETS = new Set(["codex", "opencode", "qwen"]);
+const ECC_PROJECT_INSTALL_TARGETS = new Set([
+  "cursor",
+  "zed",
+  "gemini",
+  "codebuddy",
+  "antigravity",
+  "joycode",
+]);
+
+function upstreamCliTargetMode(runtimeId) {
+  if (ECC_HOME_INSTALL_TARGETS.has(runtimeId)) return "home";
+  if (ECC_PROJECT_INSTALL_TARGETS.has(runtimeId)) return "project";
+  return null;
+}
+
+function upstreamCliArgsForTarget(spec, runtimeId) {
+  const pkg = spec.upstreamPackage || `${spec.id}@latest`;
+  const profile = spec.upstreamProfile || "core";
+  return [
+    "--yes",
+    "--package",
+    pkg,
+    "ecc",
+    "install",
+    "--profile",
+    profile,
+    "--target",
+    runtimeId,
+  ];
+}
+
+function formatNpxCommand(args) {
+  return `npx ${args.join(" ")}`;
+}
+
+async function installUpstreamCliSpecs(runtimeHomes, activeTargets) {
+  if (skipPlugins) return;
+  const specs = SKILL_REPOS.filter((s) => s.installMethod === "upstreamCli");
+  if (specs.length === 0) return;
+
+  let hasOutput = false;
+  const emitHeader = () => {
+    if (hasOutput) return;
+    hasOutput = true;
+    console.log(`\n${C.bold}${AMBER}Upstream native installers${C.reset}`);
+  };
+
+  for (const spec of specs) {
+    const specTargets = spec.targets || [];
+    for (const runtimeId of activeTargets) {
+      if (!specTargets.includes(runtimeId)) continue;
+      const runtimeHome = runtimeHomes[runtimeId];
+      if (!runtimeHome) continue;
+
+      await cleanupLegacySkillNames(runtimeHome, spec);
+      await cleanupDisabledSkillResidue(runtimeHome, spec.id);
+
+      if (runtimeId === "claude" && spec.claudePlugin) {
+        continue;
+      }
+
+      const targetMode = upstreamCliTargetMode(runtimeId);
+      if (!targetMode) continue;
+
+      const args = upstreamCliArgsForTarget(spec, runtimeId);
+      const commandText = formatNpxCommand(args);
+
+      emitHeader();
+      if (targetMode === "project") {
+        const message = `${spec.id}: run from each ${runtimeId} project root: ${commandText}`;
+        if (dryRun) {
+          console.log(t.dryRun(message));
+        } else {
+          console.warn(`${C.yellow}⚠${C.reset} ${message}`);
+        }
+        continue;
+      }
+
+      if (dryRun) {
+        console.log(t.dryRun(commandText));
+        continue;
+      }
+
+      console.log(
+        `${C.cyan}→${C.reset} ${spec.id}: upstream native install for ${runtimeId}`,
+      );
+      const result = spawnSync("npx", args, {
+        cwd: os.homedir(),
+        encoding: "utf8",
+        shell: shouldUseCliShell(os.platform()),
+        stdio: "inherit",
+      });
+      if (result.status !== 0) {
+        recordInstallFailure({
+          skillId: `${spec.id} (${runtimeId})`,
+          targetDir: runtimeHome,
+          repoUrl: spec.repo,
+          category: "unknown",
+          failureText: `upstream installer exited ${result.status}`,
+          fallback: "none",
+          reason: `Run ${commandText} directly to see the upstream installer output.`,
+        });
+      }
+    }
+  }
+}
+
+async function ensureCodexChoiceSurfaceAfterInstall(runtimeHomes, activeTargets) {
+  if (!activeTargets.includes("codex") || !runtimeHomes.codex) return;
+
+  const configPath = path.join(runtimeHomes.codex, "config.toml");
+  if (dryRun) {
+    console.log(
+      t.dryRun(
+        `ensure ${configPath} has [features].${CODEX_REQUEST_USER_INPUT_FEATURE} = true`,
+      ),
+    );
+    return;
+  }
+
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  const previous = (await pathExists(configPath))
+    ? await fs.readFile(configPath, "utf8")
+    : "";
+
+  const next = ensureCodexWindowsNotifyCompat(
+    ensureCodexRequestUserInputFeature(previous),
+  );
+
+  if (previous === next && hasCodexRequestUserInputFeature(previous)) {
+    console.log(
+      `${C.green}✓${C.reset} ${C.dim}Codex ${CODEX_REQUEST_USER_INPUT_FEATURE} preserved: ${configPath}${C.reset}`,
+    );
+    return;
+  }
+
+  if (previous) {
+    const backupPath = `${configPath}.meta-kim.bak`;
+    await fs.copyFile(configPath, backupPath);
+    console.log(
+      `${C.yellow}↻${C.reset} ${C.dim}Backed up Codex config before restoring choice surface: ${backupPath}${C.reset}`,
+    );
+  }
+
+  await fs.writeFile(configPath, next, "utf8");
+  console.log(
+    `${C.green}✓${C.reset} ${C.dim}Restored Codex ${CODEX_REQUEST_USER_INPUT_FEATURE} and Windows-safe notify config: ${configPath}${C.reset}`,
+  );
+}
+
+function printNativePluginInstallHint(runtimeId, pluginId) {
+  if (runtimeId === "codex") {
+    console.log(
+      `${C.yellow}⊘${C.reset} ${C.dim}Codex native plugin required: run "codex plugin add ${pluginId}@openai-curated" or install it from /plugins.${C.reset}`,
+    );
+    return;
+  }
+  if (runtimeId === "cursor") {
+    console.log(
+      `${C.yellow}⊘${C.reset} ${C.dim}Cursor native plugin required: run /add-plugin ${pluginId} in Cursor Agent chat, or install it from Cursor's plugin marketplace. Cursor ${C.reset}${C.dim}CLI ${C.reset}${C.dim}does not currently expose a non-interactive plugin install command.${C.reset}`,
+    );
+  }
+}
+
+function codexPluginInstalled(pluginId, marketplaceId = "openai-curated") {
+  const result = spawnSync("codex", ["plugin", "list"], {
+    encoding: "utf8",
+    shell: shouldUseCliShell(os.platform()),
+  });
+  if (result.status !== 0) return false;
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const escapedPlugin = pluginId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedMarketplace = marketplaceId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `${escapedPlugin}@${escapedMarketplace}\\s+installed`,
+    "i",
+  ).test(output);
+}
+
+function installCodexNativePlugin(pluginId) {
+  const marketplaceId = "openai-curated";
+  if (dryRun) {
+    console.log(t.dryRun(`codex plugin add ${pluginId}@${marketplaceId}`));
+    return true;
+  }
+
+  const versionProbe = spawnSync("codex", ["--version"], {
+    encoding: "utf8",
+    shell: shouldUseCliShell(os.platform()),
+  });
+  if (versionProbe.status !== 0) {
+    printNativePluginInstallHint("codex", pluginId);
+    return false;
+  }
+
+  if (codexPluginInstalled(pluginId, marketplaceId)) {
+    console.log(
+      `${C.green}✓${C.reset} ${C.dim}Codex plugin ${pluginId}@${marketplaceId} already installed${C.reset}`,
+    );
+    return true;
+  }
+
+  spawnSync("codex", ["plugin", "marketplace", "upgrade", marketplaceId], {
+    encoding: "utf8",
+    shell: shouldUseCliShell(os.platform()),
+    stdio: "pipe",
+  });
+  const result = spawnSync(
+    "codex",
+    ["plugin", "add", `${pluginId}@${marketplaceId}`],
+    {
+      encoding: "utf8",
+      shell: shouldUseCliShell(os.platform()),
+      stdio: "pipe",
+    },
+  );
+  if (result.status === 0) return true;
+
+  console.warn(
+    `${C.yellow}⚠${C.reset} ${C.dim}Optional Codex native plugin install failed: codex plugin add ${pluginId}@${marketplaceId}. Install it from /plugins or rerun the command manually.${C.reset}`,
+  );
+  return false;
+}
 
 async function installPluginBundlesForNonClaudeRuntimes(
   runtimeHomes,
@@ -1544,11 +1921,13 @@ async function installPluginBundlesForNonClaudeRuntimes(
 ) {
   if (skipPlugins) return;
   const pluginBundleSpecs = SKILL_REPOS.filter(
-    (s) => s.claudePlugin || s.installMethod === "pluginMarketplace",
+    (s) =>
+      s.installMethod !== "upstreamCli" &&
+      (s.claudePlugin || s.installMethod === "pluginMarketplace"),
   );
   if (pluginBundleSpecs.length === 0) return;
 
-  const NON_CLAUDE = ["codex", "cursor", "opencode", "openclaw"];
+  const NON_CLAUDE = ["codex", "cursor", "opencode", "qoder", "openclaw"];
   // Extend with "claude" ONLY for specs lacking claudePlugin — those cannot be
   // installed via `claude plugin install` and need the sparse-checkout fallback
   // even on Claude runtime (e.g. cli-anything).
@@ -1571,21 +1950,32 @@ async function installPluginBundlesForNonClaudeRuntimes(
     const specTargets = spec.targets || [];
     for (const runtimeId of eligibleRuntimes) {
       if (!specTargets.includes(runtimeId)) continue;
+      const runtimeHome = runtimeHomes[runtimeId];
+      const nativePluginId = nativePluginIdForRuntime(spec, runtimeId);
+      if (nativePluginId) {
+        emitHeader();
+        await cleanupNativePluginSkillFallback(runtimeHome, runtimeId, spec);
+        if (runtimeId === "codex") {
+          installCodexNativePlugin(nativePluginId);
+        } else {
+          printNativePluginInstallHint(runtimeId, nativePluginId);
+        }
+        continue;
+      }
       // Claude runtime with a native claudePlugin spec: already handled by
       // installClaudePlugins() via `claude plugin install`. Skip here to
       // avoid double install. Claude runtime WITHOUT claudePlugin (e.g.
       // cli-anything) still needs the sparse-checkout fallback.
       if (runtimeId === "claude" && spec.claudePlugin) continue;
-      const runtimeHome = runtimeHomes[runtimeId];
       const targetDir = path.join(runtimeHome, "skills", spec.id);
 
       // Stale bundle residue detection: previous full-repo clones of plugin
       // bundles (obra/superpowers etc.) dump .claude-plugin/ at targetDir root,
       // which non-Claude runtimes cannot consume. Treat such dirs as stale
       // and re-extract the runtime-specific subtree.
+      const conflict = await detectManagedInstallConflict(targetDir);
       const staleResidue =
-        !updateMode &&
-        (await pathExists(path.join(targetDir, ".claude-plugin")));
+        !updateMode && conflict.reason === "plugin_bundle_residue";
 
       if (
         !updateMode &&
@@ -1722,6 +2112,7 @@ async function installPluginBundlesForNonClaudeRuntimes(
       await deployHookExtraFiles(spec, runtimeHome, runtimeId);
       await patchPlanningWithFilesPhaseCounters(spec, runtimeHome, runtimeId);
       await patchCodexPlanningHooksForPlatform(spec, runtimeHome, runtimeId);
+      await patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId);
       await mergeHookSettings(spec, runtimeHome, runtimeId);
     }
   }
@@ -1729,7 +2120,7 @@ async function installPluginBundlesForNonClaudeRuntimes(
 
 async function installClaudePlugins() {
   if (skipPlugins || CLAUDE_PLUGIN_SPECS.length === 0) {
-    return;
+    return false;
   }
   console.log(`\n${C.bold}${AMBER}${t.pluginsHeader}${C.reset}`);
 
@@ -1739,7 +2130,7 @@ async function installClaudePlugins() {
   // Registry: marketplace-id -> GitHub repo URL (marketplace.json's "name" field
   // becomes the marketplace-id used in "plugin@marketplace" spec).
   const MARKETPLACE_URLS = {
-    ecc: "https://github.com/affaan-m/everything-claude-code",
+    ecc: "https://github.com/affaan-m/ECC",
     "superpowers-marketplace":
       "https://github.com/obra/superpowers-marketplace",
   };
@@ -1763,7 +2154,7 @@ async function installClaudePlugins() {
     for (const spec of CLAUDE_PLUGIN_SPECS) {
       console.log(t.dryRun(`claude plugin install ${spec}`));
     }
-    return;
+    return true;
   }
 
   // Probe which claude invocation method works.
@@ -1797,7 +2188,7 @@ async function installClaudePlugins() {
 
   if (!claudeFound) {
     console.warn(`${C.yellow}⚠${C.reset} ${t.warnClaNotFound}`);
-    return;
+    return false;
   }
 
   // Collect marketplace IDs needed by CLAUDE_PLUGIN_SPECS (spec format: "name@marketplace")
@@ -1860,6 +2251,32 @@ async function installClaudePlugins() {
         );
       }
     }
+
+    // Refresh registered marketplaces to pull latest plugin manifests
+    // (mitigates upstream rename events: e.g., everything-claude-code plugin renamed to ecc;
+    // stale marketplace caches keep the old plugin name and break new install specs)
+    for (const mktId of neededMarketplaces) {
+      console.log(
+        `${C.cyan}→${C.reset} ${C.dim}Refreshing marketplace "${mktId}"${C.reset}`,
+      );
+      const updateOut = spawnSync(
+        "claude",
+        ["plugin", "marketplace", "update", mktId],
+        { encoding: "utf8", shell: claudeShellOpt },
+      );
+      if (updateOut.status === 0) {
+        console.log(
+          `${C.green}✓${C.reset} ${C.dim}Marketplace "${mktId}" refreshed${C.reset}`,
+        );
+      } else {
+        const refreshErr = (updateOut.stderr || updateOut.stdout || "")
+          .trim()
+          .split("\n")[0];
+        console.warn(
+          `${C.yellow}⚠${C.reset} ${C.dim}Failed to refresh marketplace "${mktId}": ${refreshErr}${C.reset}`,
+        );
+      }
+    }
   }
 
   // Load installed plugin records from installed_plugins.json
@@ -1881,6 +2298,30 @@ async function installClaudePlugins() {
     }
   } catch {
     // If file missing or corrupt, fall through with fresh structure
+  }
+
+  for (const repoSpec of SKILL_REPOS.filter((s) => s.claudePlugin)) {
+    const canonicalSpec = repoSpec.claudePlugin;
+    for (const legacyName of repoSpec.legacyNames || []) {
+      for (const key of Object.keys(installedPluginsFile.plugins)) {
+        if (key === canonicalSpec) continue;
+        if (!key.startsWith(`${legacyName}@`)) continue;
+        console.warn(
+          `${C.yellow}⚠${C.reset} ${repoSpec.id}: removing stale Claude plugin record ${key}`,
+        );
+        delete installedPluginsFile.plugins[key];
+      }
+    }
+  }
+  try {
+    await fs.mkdir(path.dirname(installedPluginsPath), { recursive: true });
+    await fs.writeFile(
+      installedPluginsPath,
+      JSON.stringify(installedPluginsFile, null, 2),
+      "utf8",
+    );
+  } catch {
+    // Non-fatal; Claude can recreate this file during plugin install.
   }
 
   // Flat lookup by bare name (first matching record across all full keys)
@@ -1949,8 +2390,7 @@ async function installClaudePlugins() {
     // spec format is "bareName@marketplace" — resolve repo from skills.json manifest
     const pluginRepoMap = {
       superpowers: "obra/superpowers",
-      ecc: "affaan-m/everything-claude-code",
-      "everything-claude-code": "affaan-m/everything-claude-code",
+      ecc: "affaan-m/ECC",
       "code-simplifier": "claude-plugins-official/code-simplifier",
       "rust-analyzer-lsp": "claude-plugins-official/rust-analyzer-lsp",
       "claude-md-management": "claude-plugins-official/claude-md-management",
@@ -2070,6 +2510,7 @@ async function installClaudePlugins() {
       }
     }
   }
+  return true;
 }
 
 // ── Legacy artifact cleanup ──────────────────────────────────
@@ -2184,40 +2625,42 @@ async function cleanupStaleStagingDirs(homes) {
   const cleaned = [];
 
   for (const homeDir of Object.values(homes)) {
-    const skillsRoot = path.join(homeDir, "skills");
-    if (!(await pathExists(skillsRoot))) continue;
+    for (const segment of ["skills", "plugins"]) {
+      const installRoot = path.join(homeDir, segment);
+      if (!(await pathExists(installRoot))) continue;
 
-    let entries;
-    try {
-      entries = await fs.readdir(skillsRoot, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !entry.name.includes(".staged-")) {
+      let entries;
+      try {
+        entries = await fs.readdir(installRoot, { withFileTypes: true });
+      } catch {
         continue;
       }
 
-      const stagedPath = path.join(skillsRoot, entry.name);
-      console.warn(`${C.yellow}⚠${C.reset} ${t.warnRemovingObsoleteDir}`);
-      console.warn(
-        `${C.dim}  ${stagedPath}${C.reset} — ${t.warnStaleStagingResidual}`,
-      );
-      if (!dryRun) {
-        try {
-          await fs.rm(stagedPath, { recursive: true, force: true });
-        } catch (rmError) {
-          if (isWindowsLockError(rmError)) {
-            console.warn(
-              `${C.yellow}⚠${C.reset} ${t.warnStagingLocked(stagedPath)}`,
-            );
-            continue;
-          }
-          throw rmError;
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.includes(".staged-")) {
+          continue;
         }
+
+        const stagedPath = path.join(installRoot, entry.name);
+        console.warn(`${C.yellow}⚠${C.reset} ${t.warnRemovingObsoleteDir}`);
+        console.warn(
+          `${C.dim}  ${stagedPath}${C.reset} — ${t.warnStaleStagingResidual}`,
+        );
+        if (!dryRun) {
+          try {
+            await fs.rm(stagedPath, { recursive: true, force: true });
+          } catch (rmError) {
+            if (isWindowsLockError(rmError)) {
+              console.warn(
+                `${C.yellow}⚠${C.reset} ${t.warnStagingLocked(stagedPath)}`,
+              );
+              continue;
+            }
+            throw rmError;
+          }
+        }
+        cleaned.push(stagedPath);
       }
-      cleaned.push(stagedPath);
     }
   }
 
@@ -2225,6 +2668,43 @@ async function cleanupStaleStagingDirs(homes) {
     console.log(
       `${C.green}✓${C.reset} ${t.okRemovedStagingResidual(cleaned.length)}`,
     );
+  }
+}
+
+async function cleanupClaudeNativePluginSkillResidue(homes, activeTargets) {
+  if (!activeTargets.includes("claude") || !homes.claude) {
+    return;
+  }
+
+  const specs = SKILL_REPOS.filter((spec) => spec.claudePlugin);
+  for (const spec of specs) {
+    const candidateNames = [spec.id, ...(spec.legacyNames || [])];
+    for (const candidateName of candidateNames) {
+      const targetDir = path.join(homes.claude, "skills", candidateName);
+      if (!(await detectPluginBundleSkillResidue(targetDir))) {
+        continue;
+      }
+
+      assertUnderHome(targetDir);
+      console.warn(
+        `${C.yellow}⚠${C.reset} ${spec.id}: removing legacy Claude plugin bundle residue from skills discovery path`,
+      );
+      console.warn(`${C.dim}  ${targetDir}${C.reset}`);
+      if (dryRun) {
+        console.log(t.dryRun(`remove legacy plugin residue: ${targetDir}`));
+        continue;
+      }
+
+      try {
+        await rmDirWithRetry(targetDir);
+      } catch (error) {
+        if (isWindowsLockError(error)) {
+          console.warn(`${C.yellow}⚠${C.reset} ${t.warnStagingLocked(targetDir)}`);
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 }
 
@@ -2469,6 +2949,13 @@ async function stageSkillFromSubdir(
     return true;
   }
 
+  if (dryRun) {
+    console.log(
+      t.dryRun(`stage sparse ${repoUrl} (${subdirPath}) -> ${stagedPath}`),
+    );
+    return true;
+  }
+
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-skill-"));
   try {
     await runGitAsync(
@@ -2602,7 +3089,7 @@ async function installSkillsToMultipleRuntimes(
     // functions can skip cloning and Phase 2 can copy from that location.
     const alreadyExists = new Map();
     for (const spec of SKILL_REPOS) {
-      if (spec.claudePlugin || spec.installMethod === "pluginMarketplace")
+      if (!usesGenericSkillInstall(spec))
         continue; // plugin bundles handled separately
       const applicableRuntimes = targetRuntimeIds.filter(
         (id) => !spec.targets || spec.targets.includes(id),
@@ -2621,6 +3108,7 @@ async function installSkillsToMultipleRuntimes(
     const limitClone = createConcurrencyLimiter(MAX_CONCURRENT_CLONES);
 
     const stagePromises = SKILL_REPOS.filter((spec) => {
+      if (!usesGenericSkillInstall(spec)) return false;
       const needs = targetRuntimeIds.filter(
         (id) => !spec.targets || spec.targets.includes(id),
       );
@@ -2690,7 +3178,7 @@ async function installSkillsToMultipleRuntimes(
       };
 
       for (const spec of SKILL_REPOS) {
-        if (spec.claudePlugin || spec.installMethod === "pluginMarketplace")
+        if (!usesGenericSkillInstall(spec))
           continue; // plugin bundles handled separately
         if (spec.targets && !spec.targets.includes(runtimeId)) {
           continue;
@@ -2741,7 +3229,7 @@ async function installSkillsToMultipleRuntimes(
       const hasManifestSkillCreator = SKILL_REPOS.some(
         (s) => s.id === "skill-creator",
       );
-      if (!hasManifestSkillCreator) {
+      if (!skillsFilterActive && !hasManifestSkillCreator) {
         emitHeader();
         await installSkillCreator(skillsRoot);
       }
@@ -2780,7 +3268,13 @@ async function main() {
     };
 
     const targetRuntimeIds = activeTargets.filter(
-      (id) => homes[id] !== undefined,
+      (id) =>
+        homes[id] !== undefined &&
+        SKILL_REPOS.some(
+          (spec) =>
+            usesGenericSkillInstall(spec) &&
+            (!spec.targets || spec.targets.includes(id)),
+        ),
     );
 
     if (targetRuntimeIds.length === 1) {
@@ -2798,9 +3292,14 @@ async function main() {
   }
 
   if (activeTargets.includes("claude")) {
-    await installClaudePlugins();
+    const claudePluginsReady = await installClaudePlugins();
+    if (claudePluginsReady) {
+      await cleanupClaudeNativePluginSkillResidue(homes, activeTargets);
+    }
   }
+  await installUpstreamCliSpecs(homes, activeTargets);
   await installPluginBundlesForNonClaudeRuntimes(homes, activeTargets);
+  await ensureCodexChoiceSurfaceAfterInstall(homes, activeTargets);
 
   // Optional: graphify (code knowledge graph)
   if (!pluginsOnly) {
@@ -2855,12 +3354,18 @@ async function main() {
       console.log(t.pythonInstallHintGraphify);
     } else {
       const ensureGraphifyWiring = () => {
-        runPythonModule(
-          python,
-          ["-m", "graphify", "claude", "install"],
-          undefined,
-          { stdio: "pipe" },
-        );
+        if (guideAlreadyHasGraphifySection("claude")) {
+          console.log(
+            `${C.yellow}⊘${C.reset} ${C.dim}graphify claude install skipped (guide already has Graphify section)${C.reset}`,
+          );
+        } else {
+          runPythonModule(
+            python,
+            ["-m", "graphify", "claude", "install"],
+            undefined,
+            { stdio: "pipe" },
+          );
+        }
         runPythonModule(
           python,
           ["-m", "graphify", "hook", "install"],
@@ -2934,6 +3439,7 @@ async function main() {
     for (const cat of uniqueCats) {
       console.log(`${C.dim}•${C.reset} ${failureHint(cat)}`);
     }
+    process.exitCode = 1;
   }
   if (archiveFallbacks.length > 0) {
     console.log(
@@ -3688,6 +4194,90 @@ async function patchCodexPlanningHooksForPlatform(spec, runtimeHome, runtimeId) 
   );
   console.log(
     `${C.green}✓${C.reset} ${spec.id} Codex hooks patched for ${os.platform()}`,
+  );
+}
+
+async function patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId) {
+  if (!["codex", "cursor"].includes(runtimeId) || spec.id !== "hookprompt" || dryRun) {
+    return;
+  }
+
+  const hooksDir = path.join(runtimeHome, "hooks");
+  await fs.mkdir(hooksDir, { recursive: true });
+
+  const memoryHookPath = path.join(hooksDir, "meta-kim-memory-save.mjs");
+  const graphifyHookPath = path.join(hooksDir, "graphify-context.mjs");
+  const spineHookPath = path.join(hooksDir, "activate-meta-theory-spine.mjs");
+  const hookPromptAdapterPath = path.join(hooksDir, "hookprompt-adapter.mjs");
+
+  await fs.writeFile(
+    hookPromptAdapterPath,
+    buildHookPromptAdapterSource(runtimeId),
+    "utf8",
+  );
+
+  let existing = {};
+  const hooksJsonPath = path.join(runtimeHome, "hooks.json");
+  if (await pathExists(hooksJsonPath)) {
+    try {
+      existing = JSON.parse(await fs.readFile(hooksJsonPath, "utf8"));
+    } catch {
+      existing = {};
+    }
+  }
+  const hookBuilder = runtimeId === "codex" ? buildCodexHooksJson : buildCursorHooksJson;
+  const generated = hookBuilder({
+    graphifyHookPath:
+      (await pathExists(graphifyHookPath)) ? graphifyHookPath : "graphify-context.mjs",
+    memoryHookPath:
+      (await pathExists(memoryHookPath)) ? memoryHookPath : "meta-kim-memory-save.mjs",
+    ...(runtimeId === "codex" && {
+      spineHookPath:
+        (await pathExists(spineHookPath)) ? spineHookPath : "activate-meta-theory-spine.mjs",
+    }),
+    hookPromptAdapterPath,
+  });
+
+  const next = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
+  const event = runtimeId === "codex" ? "UserPromptSubmit" : "beforeSubmitPrompt";
+  const existingBlocks = Array.isArray(next.hooks[event]) ? next.hooks[event] : [];
+  const alreadyRegistered = existingBlocks.some((block) =>
+    (block.hooks ?? [block]).some((hook) =>
+      String(hook.command ?? "").includes("hookprompt-adapter.mjs"),
+    ),
+  );
+  if (alreadyRegistered) {
+    return;
+  }
+  const generatedEventHooks =
+    runtimeId === "codex"
+      ? generated.hooks.UserPromptSubmit[0].hooks
+      : generated.hooks.beforeSubmitPrompt;
+  const adapterHook = generatedEventHooks.find((hook) =>
+    hook.command.includes("hookprompt-adapter.mjs"),
+  );
+  if (!adapterHook) {
+    return;
+  }
+  if (existingBlocks.length > 0 && runtimeId === "codex") {
+    existingBlocks[0].hooks = [...(existingBlocks[0].hooks ?? []), adapterHook];
+    next.hooks[event] = existingBlocks;
+  } else if (existingBlocks.length > 0) {
+    next.hooks[event] = [...existingBlocks, adapterHook];
+  } else {
+    next.hooks[event] =
+      runtimeId === "codex"
+        ? [
+            {
+              hooks: [adapterHook],
+            },
+          ]
+        : [adapterHook];
+  }
+
+  await fs.writeFile(hooksJsonPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  console.log(
+    `${C.green}✓${C.reset} ${spec.id} ${runtimeId} hook adapter registered`,
   );
 }
 

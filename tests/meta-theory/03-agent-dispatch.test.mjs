@@ -26,13 +26,16 @@ const TYPE_AGENT_MAP = {
   },
   D: {
     mandatory: ["meta-prism", "meta-warden"],
-    optional: ["meta-scout", "meta-sentinel"],
+    optional: ["meta-scout", "meta-sentinel", "meta-chrysalis"],
   },
   E: { mandatory: ["meta-conductor", "meta-warden"], optional: [] },
 };
 
 let skillContent;
 let scenarios;
+let workflowContract;
+let prismContent;
+let runtimeClaude;
 
 async function ensureLoaded() {
   if (!skillContent) {
@@ -41,6 +44,17 @@ async function ensureLoaded() {
   if (!scenarios) {
     const raw = await readJsonFile(SCENARIOS_PATH, "utf-8");
     scenarios = JSON.parse(raw);
+  }
+  if (!workflowContract) {
+    workflowContract = JSON.parse(await readFile("config/contracts/workflow-contract.json"));
+  }
+  if (!prismContent) {
+    prismContent = await readFile("canonical/agents/meta-prism.md");
+  }
+  if (!runtimeClaude) {
+    runtimeClaude = await readFile(
+      "canonical/skills/meta-theory/references/runtime-claude.md",
+    );
   }
 }
 
@@ -142,7 +156,7 @@ describe("Agent Dispatch — Part A: Dispatch Mapping", async () => {
 
   // --- 3 global tests ---
 
-  test("All 8 agents appear in at least one type dispatch map", async () => {
+  test("All expected agents appear in at least one type dispatch map", async () => {
     await ensureLoaded();
 
     const referencedAgents = new Set();
@@ -209,7 +223,7 @@ describe("Agent Dispatch — Part B: Dispatch Rule Verification", async () => {
     );
   });
 
-  test("8 agents listed in dispatch table", async () => {
+  test("all meta agents listed in dispatch table", async () => {
     await ensureLoaded();
     for (const agent of ALL_AGENTS) {
       assert.ok(
@@ -264,25 +278,82 @@ describe("Agent Dispatch — Part B: Dispatch Rule Verification", async () => {
     );
   });
 
-  test("Fetch-first pattern documented (Search -> Match -> Invoke)", async () => {
+  test("Claude Code execution requires real provider dispatch, not main-thread implementation", async () => {
     await ensureLoaded();
-    const hasFetchFirst =
-      /Fetch-first/i.test(skillContent) ||
-      /Search.*Match.*Invoke/i.test(skillContent);
+    const combined = `${skillContent}\n${runtimeClaude}`;
+
+    assert.match(combined, /Dispatch-Not-Execute In Claude Code/i);
+    assert.match(combined, /main thread scopes, dispatches, reviews, and synthesizes/i);
+    assert.match(combined, /must not directly edit, write, or run implementation commands/i);
+    for (const provider of ["Agent", "Skill", "Command", "prompt", "MCP"]) {
+      assert.match(
+        combined,
+        new RegExp(provider, "i"),
+        `Claude runtime adapter must mention ${provider} provider dispatch`,
+      );
+    }
+    assert.match(combined, /capabilityBindings/i);
+    assert.match(combined, /workerTaskPackets\[\]\.taskPacketId|roleInstanceId/i);
+    assert.match(combined, /capabilityGapPacket/i);
+    assert.match(combined, /degraded mode/i);
+  });
+
+  test("Fetch evidence inventory hands off to Thinking owner resolution", async () => {
+    await ensureLoaded();
+    const hasFetchEvidenceInventory =
+      /Fetch Evidence Inventory/i.test(skillContent) &&
+      /Research -> Inventory -> Thinking Handoff/i.test(skillContent);
+    const hasThinkingResolution =
+      /Thinking determines needed execution capabilities/i.test(skillContent) &&
+      /match existing capabilities/i.test(skillContent) &&
+      /create or upgrade only for gaps/i.test(skillContent);
     assert.ok(
-      hasFetchFirst,
-      "SKILL.md must document the Fetch-first pattern (Search -> Match -> Invoke)"
+      hasFetchEvidenceInventory && hasThinkingResolution,
+      "SKILL.md must document Fetch evidence inventory and Thinking owner/capability resolution"
     );
   });
 
-  test("Capability gap resolution ladder documented (existing -> Type B -> temporary fallback)", async () => {
+  test("Capability gap resolution ladder blocks instead of temporary fallback", async () => {
     await ensureLoaded();
     const hasExistingOwner = /existing owner/i.test(skillContent);
-    const hasTypeB = /Type B creat/i.test(skillContent);
-    const hasTempFallback = /temporary.*fallback/i.test(skillContent);
+    const hasOwnerCreation = /owner upgrade|project-local creation|create.*owner/i.test(
+      skillContent,
+    );
+    const hasCapabilityGapBlock = /block.*capabilityGapPacket|capabilityGapPacket/i.test(
+      skillContent,
+    );
     assert.ok(
-      hasExistingOwner && hasTypeB && hasTempFallback,
-      "SKILL.md must document the capability gap resolution ladder: existing owner -> Type B creation -> temporary fallback"
+      hasExistingOwner && hasOwnerCreation && hasCapabilityGapBlock,
+      "SKILL.md must document the capability gap ladder: existing owner -> owner upgrade/create -> block/defer with capabilityGapPacket"
+    );
+    assert.doesNotMatch(
+      skillContent,
+      /Capability gap ladder:.*temporary fallback/i,
+      "Capability gap ladder must not reward temporary fallback owners"
+    );
+  });
+
+  test("Stage 4 templates never dispatch Type: general-purpose", async () => {
+    await ensureLoaded();
+    const conductorContent = await readFile("canonical/agents/meta-conductor.md");
+    const conductorStage4 = conductorContent.match(
+      /## Stage 4: Execution[\s\S]+?## Worker Per-File Write-Completion Contract/,
+    )?.[0] ?? conductorContent;
+
+    assert.match(
+      conductorStage4,
+      /Capability Binding/i,
+      "Stage 4 templates must require a capability binding before dispatch",
+    );
+    assert.doesNotMatch(
+      conductorStage4,
+      /(?:Skill\/Type[\s\S]{0,160}|Capability Binding[\s\S]{0,160})Type:\s*general-purpose/i,
+      "Stage 4 templates must not present general-purpose as a valid execution owner",
+    );
+    assert.match(
+      skillContent,
+      /Stage 4 owner prohibition/i,
+      "SKILL.md must define the Stage 4 owner prohibition at the source",
     );
   });
 
@@ -378,6 +449,61 @@ describe("Agent Dispatch — Part B: Dispatch Rule Verification", async () => {
       skillContent.includes("mergeOwner"),
       "workerTaskPackets must include mergeOwner field"
     );
+  });
+
+  test("dispatch and worker packets cannot finalize before user choice except explicit auto-proceed or skip reason", async () => {
+    await ensureLoaded();
+
+    const protocols = workflowContract.protocols ?? {};
+    const dispatchFields = protocols.dispatchEnvelopePacket?.requiredFields ?? [];
+    const workerFields = protocols.workerTaskPacket?.requiredFields ?? [];
+
+    for (const field of [
+      "preDecisionOptionFrameRef",
+      "userChoiceState",
+      "finalizationGate",
+    ]) {
+      assert.ok(
+        dispatchFields.includes(field),
+        `dispatchEnvelopePacket missing pre-decision finalization field "${field}"`
+      );
+      assert.ok(
+        workerFields.includes(field),
+        `workerTaskPacket missing pre-decision finalization field "${field}"`
+      );
+    }
+
+    const finalizationPolicy = JSON.stringify({
+      dispatchEnvelopePacket: protocols.dispatchEnvelopePacket,
+      workerTaskPacket: protocols.workerTaskPacket,
+      preDecisionOptionFrame: protocols.preDecisionOptionFrame,
+      controlIntervention: workflowContract.runDiscipline?.controlIntervention,
+    });
+    assert.match(finalizationPolicy, /finali[sz].*before.*userChoice|userChoice.*before.*finali[sz]/i);
+    assert.match(finalizationPolicy, /auto[-_ ]?proceed/i);
+    assert.match(finalizationPolicy, /skipReason|skip reason/i);
+    assert.match(finalizationPolicy, /explicit/i);
+  });
+
+  test("Review and Prism check trigger reasons against skip reasons", async () => {
+    await ensureLoaded();
+
+    const reviewFields =
+      workflowContract.protocols?.reviewPacket?.requiredFields ?? [];
+    assert.ok(
+      reviewFields.some((field) => /trigger.*skip|skip.*trigger/i.test(field)),
+      "reviewPacket must require a trigger-vs-skip reason check field"
+    );
+
+    const reviewPolicy = JSON.stringify({
+      reviewPacket: workflowContract.protocols?.reviewPacket,
+      taskClassification: workflowContract.protocols?.taskClassification,
+      controlDecision: workflowContract.protocols?.controlDecision,
+    });
+    assert.match(reviewPolicy, /triggerReasons/i);
+    assert.match(reviewPolicy, /skipReason/i);
+    assert.match(reviewPolicy, /trigger.*skip|skip.*trigger/i);
+    assert.match(prismContent, /trigger.*skip|skip.*trigger/i);
   });
 
   test("Evolution writeback plan documented", async () => {

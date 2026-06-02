@@ -247,7 +247,7 @@ describe("Part B: Runtime MCP Integration", async () => {
     );
   });
 
-  test("list_meta_agents returns all 8 meta-agents", async () => {
+  test("list_meta_agents returns all expected meta-agents", async () => {
     const serverPath = path.join(
       REPO_ROOT,
       "scripts",
@@ -274,8 +274,8 @@ describe("Part B: Runtime MCP Integration", async () => {
       const result = JSON.parse(output);
       assert.ok(result.ok, "meta-runtime-server.mjs self-test must pass");
       assert.ok(
-        result.agentCount >= 8,
-        `Expected at least 8 agents, got ${result.agentCount}`,
+        result.agentCount >= ALL_AGENTS.length,
+        `Expected at least ${ALL_AGENTS.length} agents, got ${result.agentCount}`,
       );
       assert.ok(
         result.tools.includes("list_meta_agents"),
@@ -316,7 +316,7 @@ describe("Part B: Runtime MCP Integration", async () => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 describe("Part C: Agent Discovery", async () => {
-  test("All 8 meta-agents have .md files in canonical/agents/", async () => {
+  test("All expected meta-agents have .md files in canonical/agents/", async () => {
     for (const agent of ALL_AGENTS) {
       const agentPath = path.join(
         REPO_ROOT,
@@ -440,10 +440,10 @@ describe("Part D: Skill Discovery", async () => {
       [
         /expert.*ecosystem/i,
         /everything-claude-code/i,
-        /specialist.*fallback/i,
+        /specialist.*ecosystem.*search/i,
         /meta-scout/i,
       ],
-      [/generic.*fallback/i, /general.*purpose/i, /temporary fallback/i],
+      [/capabilityGapPacket/i, /capability gap packet/i, /return to Thinking/i],
     ];
 
     const stepsFound = stepPatterns.filter((stepPatters) =>
@@ -626,23 +626,23 @@ describe("Part G: Memory & Knowledge Graph", async () => {
         );
       }
     }
-    // Either graphify is documented OR the Fetch stage handles fallback gracefully
+    // Either graphify is documented OR Fetch explicitly records a capability gap / degraded read path.
     assert.ok(
-      graphifyMentioned || /Fetch.*fallback/i.test(skillContent),
-      "SKILL.md must either document graphify or handle fallback gracefully",
+      graphifyMentioned || /Fetch.*capabilityGapPacket|degraded.*read/i.test(skillContent),
+      "SKILL.md must either document graphify or record a capability gap / degraded read path",
     );
   });
 
-  test("sqlite-vec memory integration is referenced or graceful fallback exists", async () => {
+  test("sqlite-vec memory integration is referenced or degraded read path is explicit", async () => {
     const skillContent = await readFile(
       "canonical/skills/meta-theory/SKILL.md",
     );
     const hasVecRef = /sqlite-vec/i.test(skillContent);
-    const hasFallback = /fallback/i.test(skillContent);
+    const hasDegradedReadPath = /degraded.*read|capabilityGapPacket/i.test(skillContent);
 
     assert.ok(
-      hasVecRef || hasFallback,
-      "SKILL.md must reference sqlite-vec or provide fallback mechanism",
+      hasVecRef || hasDegradedReadPath,
+      "SKILL.md must reference sqlite-vec or provide a degraded read path / capability gap",
     );
   });
 });
@@ -754,8 +754,8 @@ describe("Part I: Capability Gap Resolution", async () => {
 
     const ladderSteps = [
       [/existing owner/i, /direct dispatch/i],
-      [/Type B.*create/i, /owner.*creation/i],
-      [/temporary.*fallback/i, /general.*purpose.*fallback/i],
+      [/Type B.*create/i, /owner.*creation|owner.*upgrade/i],
+      [/capabilityGapPacket/i, /block|defer|return to Thinking/i],
     ];
 
     const stepsFound = ladderSteps.filter((stepPatterns) =>
@@ -764,7 +764,7 @@ describe("Part I: Capability Gap Resolution", async () => {
 
     assert.ok(
       stepsFound.length >= 2,
-      `SKILL.md must document at least 2 of 3 gap resolution steps (found ${stepsFound.length}/3)`,
+      `SKILL.md must document at least 2 of 3 non-fallback gap resolution steps (found ${stepsFound.length}/3)`,
     );
   });
 

@@ -6,6 +6,879 @@ All notable changes to Meta_Kim are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 When you tag a release, add a new **`## [version] - YYYY-MM-DD`** section at the top (above older entries) and list changes there.
 
+## [2.8.4] - 2026-06-02
+
+### Added
+
+- **Default capability-discovery smoke** — Added `npm run meta:capabilities:smoke` to prove an execution demand naturally selects an execution owner, agent provider, agent creation provider, skill discovery/creation providers, MCP provider, command/runtime tool, and verification path.
+- **OpenClaw live sharding** — Live meta-agent evaluation can now run with `--agent=<id[,id]>`, making long Claude/OpenClaw checks recoverable and easier to diagnose.
+
+### Fixed
+
+- **Execution routing now binds real providers before Execution** — Engineering execution routes now require execution-grade owner/provider/verification binding before entering Execution, instead of relying on validators or gates to catch an empty route later.
+- **OpenClaw live evaluation inherits main provider/model config** — OpenClaw smoke reads the main OpenClaw config directly, while live Meta_Kim agent checks merge the main provider/model definitions into the temporary project-agent config so project agents use the same configured provider surface as the user's OpenClaw installation.
+- **Live evaluator parsing and recovery hardened** — Claude/OpenClaw structured payload parsing now handles nested JSON text, OpenClaw session JSONL recovery, child-process cleanup, and accepted boundary wording without lowering score thresholds.
+- **OpenClaw auth hydration is less brittle** — Local OpenClaw meta-agent auth can be hydrated from an existing usable meta-agent auth source when `main/agent` auth is absent, without overwriting already usable agent auth files.
+
+### Verification
+
+- `npm run meta:capabilities:smoke` — passed
+- `npm run meta:test:governance` — passed
+- `npm run meta:providers:validate` — passed with 24 providers, 0 errors, 0 warnings
+- `node scripts/validate-provider-capabilities.mjs --strict-global-hooks` — passed with 24 providers, 0 errors, 0 warnings
+- `npm run meta:verify:all` — passed with Claude/Codex/OpenClaw smoke and 880/880 tests
+- `npm run meta:verify:all:live` — live-only evaluator gate for Claude, Codex, and OpenClaw
+- `npm audit --audit-level=high --registry=https://registry.npmjs.org` — passed with 0 vulnerabilities
+- Version bump: 2.8.3 -> 2.8.4.
+
+## [2.8.3] - 2026-06-02
+
+### Added
+
+- **Capability Provider Contract** — Added a provider-level contract and registry for auditing `runtime_native`, canonical/external skills, agents, hooks, commands, rules, plugins, MCP servers, dependency projects, memory providers, and graph providers across runtime, OS, and install layer.
+- **Provider lifecycle state model** — Providers now track `unknown -> declared -> projected -> installed -> trusted -> discoverable -> invokable -> context_effective / enforcement_effective -> verified`, plus concrete failure states such as `missing_global_install`, `output_not_consumed`, `degraded`, and `blocked_for_execution`.
+- **Provider validator** — Added `npm run meta:providers:validate` to report exact provider/runtime/OS/install-layer gaps, including strict global Codex HookPrompt checks.
+
+### Fixed
+
+- **Codex global HookPrompt chain repaired** — The global Codex `UserPromptSubmit` hook now includes `hookprompt-adapter.mjs` additively, preserving existing planning hooks while ensuring HookPrompt output is consumed as model context.
+- **Plugin providers are no longer invisible** — `superpowers`, `ecc`, and `cli-anything` are now represented in the capability index and provider registry; inventory output reports non-zero plugin/plugin-bundle counts.
+
+### Changed
+
+- **Dependency registry stays dependency-scoped** — Provider availability, install state, trust state, output contracts, and degradation now live in `provider-registry.json`; dependency registry remains focused on reusable project scoring and routing eligibility.
+- **OpenClaw capability honesty preserved** — OpenClaw remains degraded/partial where only workspace instructions or lifecycle hooks exist; no typed plugin tool-blocking adapter is claimed.
+- Version bump: 2.8.2 -> 2.8.3.
+
+### Verification
+
+- `npm run meta:check:runtimes`
+- `npm run meta:deps:check`
+- `npm run meta:deps:compat`
+- `npm run meta:providers:validate`
+- `node scripts/validate-provider-capabilities.mjs --strict-global-hooks`
+- `npm run meta:test:governance`
+- `npm run meta:graphify:rebuild` / `npm run meta:graphify:check`
+
+## [2.8.2] - 2026-06-02
+
+### Fixed
+
+- **Hook deadlock pressure reduced** — Runtime hooks now act as last-resort fuses for key behavior only: real intent, Fetch/capability discovery, selected owner, owner loadout across agent/skill/command/MCP/tool/prompt, memory strategy, runtime/OS support, and unsafe meta-agent mutation.
+- **Optional packet fields no longer hard-block execution** — Worker packet detail, rollback fields, verification-owner detail, warning classification, and writeback reservation remain validator / Review / public-ready concerns instead of universal hook blockers.
+- **Single-worker dispatch trace relaxed** — Agent dispatch no longer hard-denies a single worker path just because `taskPacketId` or `roleInstanceId` is absent. Multi-worker ambiguity is warned for Review instead of causing hook lockup.
+- **Codex Windows update path no longer restores macOS notifications** — `setup.mjs --update` and global sync now replace an inherited `terminal-notifier` Codex `notify` command with a Windows-safe no-op notifier on Windows, preventing installed users from reintroducing `legacy_notify program not found`.
+- **Optional Codex native plugin errors are quieter** — failed `codex plugin add superpowers@openai-curated` attempts are now reported as a single optional warning instead of leaking raw marketplace/cache errors during update.
+- **Skill update fallback is less alarming** — managed skill `git pull --ff-only` failures that are immediately repaired by re-clone fallback no longer print raw git errors before the successful fallback path.
+
+### Changed
+
+- **Meta-theory execution gate clarified** — `Critical -> Fetch -> Thinking -> Execution -> Review` now emphasizes whether the task is understood, whether a matching owner/provider/loadout exists, and whether memory strategy is explicit.
+- **Cross-runtime hook wording aligned** — Claude Code, Codex, Cursor, and OpenClaw docs now describe hook coverage honestly, including Codex version-dependent hook coverage and OpenClaw's declarative enforcement until a typed plugin adapter exists.
+- **Hook progression policy split** — `requiredPreflightChecks` now covers the minimum key behavior set; detailed completeness moved to `optionalValidatorChecks`.
+- Version bump: 2.8.1 -> 2.8.2.
+
+### Upgrade Notes
+
+- Existing clone installs should update source first with `git pull --ff-only`, then refresh installed projections with `node setup.mjs --update` or `npm run meta:sync:global`.
+- `node setup.mjs --update` refreshes the current installation projections and dependencies; it does not pull new Meta_Kim source code by itself.
+- Project-local users should run `npm run meta:sync` after pulling if they need `.claude`, `.codex`, `.cursor`, and OpenClaw mirrors regenerated from canonical sources.
+
+### Verification
+
+- `npm run meta:verify:all` — passed
+- `npm run meta:verify:governance` — passed
+- `npm run meta:check` — passed
+- `npm run meta:graphify:rebuild` / `npm run meta:graphify:check` — passed
+- `git diff --check` — passed
+
+## [2.8.1] - 2026-06-02
+
+### Fixed
+
+- **Choice surface skip policy clarified** — `queryBypass`/read-only is now a safety and path-classification boundary, not a choice-surface skip reason when branch-changing options exist. Renamed `pure_read_only_queryBypass` to `no_branching_choice` across all contracts, policies, and agent definitions.
+- **simpleMode backdoor removed** — Removed `simpleMode` flag from spine state creation, all gate checks, skip logic, and i18n strings (en/zh/ja/ko). SimpleMode was a consumer-only feature that had no producer-side initialization, creating an asymmetry that could bypass dispatch governance.
+- **queryBypass spine-state deadlock fixed** — Added deadlock breaker: `queryBypass` runs can now write `spine-state.json` itself (scoped via `isSpineStateWrite()`), otherwise clearing `queryBypass` would be impossible once active.
+- **i18n stale references cleaned** — Removed stale simple-mode references from restore instructions across all 4 locales.
+
+### Changed
+
+- **Hidden state skeleton initialized** — `createInitialState` now seeds `controlState: "normal"`, `gateState: "pending"`, `surfaceState: "silent"` in both claude and shared spine state modules.
+- **controlState/gateState/surfaceState enums unified** — `controlState` converged to `normal / skip / interrupt / override / iteration / intentional_silence / degraded`. `gateState` to `pending / pass / fail / rework / blocked`. `surfaceState` to `silent / notice / decision`. Public readiness separated from `surfaceState` into summary/public surface packets.
+- **Critical-Fetch Intent Loop added** — Wishful or ambiguous input now enters a bounded Critical-Fetch loop (up to `criticalFetchLoopMax = 3` rounds) with IntentCard confirmation. New fields: `criticalFetchLoopCount`, `intentCard`, `intentConfirmationState`, `intentCorrectionPayload`.
+- **Capability discovery routing refined** — Owner discovery now uses provider-first evidence / owner-last binding. Route output exposes `runtimeToolProviders`, `discoveryPrinciple`, `ownerBindingOrder`, and `routeExecutionGate` (stale cache may preview route but cannot enter Execution).
+- **Runtime matrix tests hardened** — Cursor hook/subagent assertions changed from weak regex to structured field checks. OpenClaw `popup / overlay / approval UI` tightened from `partial` to non-native. OpenClaw docs clarify internal hooks vs typed plugin hooks, workspace is not a hard sandbox.
+- **Decision templates renderer-neutral** — Generic decision and batch templates no longer embed runtime-specific schemas (AskUserQuestion JSON). Renderer-specific payloads live in runtime adapter contracts (`runtime-claude.md`, `runtime-codex.md`).
+- **choice-surface-policy.json expanded** — Added `intentConfirmationCard`, `choiceSurfaceAdapterContract`, and `readOnlyPolicy`.
+
+### Verification
+
+- `tests/meta-theory/11-eight-stage-spine.test.mjs` — 106/106 passed
+- `tests/meta-theory/00-capability-discovery.test.mjs` — 42/42 passed
+- `tests/meta-theory/e2e-eight-stage-live.test.mjs` — 37/37 passed
+- `tests/governance/capability-routing.test.mjs` — 1/1 passed
+- `tests/governance/runtime-capability-matrix.test.mjs` — 1/1 passed
+- `scripts/validate-capability-routing.mjs` — valid
+
+## [2.8.0] - 2026-06-01
+
+### Added
+
+- **Degraded mode protocol** — When Agent dispatch is unavailable or no matching owner exists after capability discovery, the spine enters `controlState=degraded` instead of silently skipping stages. Requires `capabilityGapPacket`, `degradationReason`, and `surfaceState=internal-ready`. Claiming `public-ready` in degraded mode is forbidden.
+- **Fetch discovery checklist** — Before Thinking, Fetch must search at least `~/.claude/agents/`, `.claude/agents/`, `.claude/skills/`, `.mcp.json`, `config/capability-index/*.json`, and `package.json` scripts. Pass condition: `capabilityDiscovery.searchLog` exists with checked sources and results.
+- **Adversarial verify pattern** — Review stage for `regulated_path` spawns N=3 independent skeptic reviewers, each with a different lens (correctness, security, completeness). A finding survives only if a majority of refutations fail. Per-finding vote tallies recorded in `reviewPacket.findings[].adversarialVotes`.
+- **Fetch angle decomposition** — For research tasks (`researchRequired=true`), decompose the core question into N semantically distinct search angles before searching. Recorded in `contentEvidencePacket.searchAngles`. Default N=3.
+- **Worker output schema validation** — When `workerTaskPacket.output` defines an expected structure, the dispatcher validates worker results against it. On mismatch, worker retries up to 2 times before reporting failure. Recorded in `workerResultPacket.schemaValidationAttempts`.
+- **Interactive execution communication** — During multi-stage work, the dispatcher reports progress at 5 natural transition points: Fetch complete, Thinking complete, each Execution phase complete, scope-changing findings, and route-changing discoveries. Each report is a compact notice (max 3 bullets). Scope or route changes upgrade the notice to a Decision card.
+- **Fetch baseline verification lane** — Fetch can now run targeted read-only baseline checks before route selection, including `node --test`, `node scripts/run-node-tests.mjs`, and safe package-manager scripts whose names are test/check/verify/validate/lint/typecheck shaped.
+
+### Changed
+
+- **spine-state.md controlState** — Added `degraded` to the control state enum.
+- **spine-state.md pass conditions** — Added degraded-mode pass conditions for Fetch, Thinking, Review, and Verification stages.
+- **dev-governance.md** — Added degraded mode section with stage-specific guidance and interactive execution communication section.
+- **owner-resolution.md** — Added degraded path for owner resolution when no Agent dispatch exists.
+- **workflow-contract.json** — Added `degradedPolicy` to review, meta_review, and verification stage semantics. Added `adversarialVotes` to reviewFinding protocol. Added `searchAngles` to contentEvidencePacket protocol.
+- **Critical -> Fetch hook progression** — Active runs now advance into Fetch when the operator starts repo evidence gathering or writes planning files, so baseline tests are not incorrectly blocked as Critical-stage mutation.
+- **Read-only Bash classification** — Hook command splitting is now quote-aware, allows shell-local `cd` setup for compound probes, and treats `2>&1` as fd redirection rather than a workspace write.
+- **Runtime capability honesty regression** — Runtime-native preservation now locks Codex hook support as `partial` while allowing Cursor hook support to remain `native` when verified by the runtime matrix.
+- Version bump: 2.7.0 -> 2.8.0.
+
+### Verification
+
+- `npm run meta:validate` — 7/7 checks passed
+- `npm run meta:sync` — 4 runtimes synced (claude, codex, openclaw, cursor)
+- `npm run meta:check` — all green, no stale projections
+- `npm run meta:test:setup` — 312/312 tests passed
+- `npm run meta:test:meta-theory` — 857/857 tests passed
+- `npm run meta:test:governance` — 33/33 tests passed
+
+## [2.7.0] - 2026-06-01
+
+### Added
+
+- **Two-speed capability discovery** — Added a Codex-ready discovery policy that uses full global scans for install, update, explicit refresh, stale or missing cache, missing required providers, and high-risk provider routes, while normal governed runs read cached global inventory plus a lightweight project scan.
+- **Provider-first owner routing** — Expanded owner discovery beyond agents and skills to include commands, hooks, rules/prompts, MCP capabilities, runtime tools, and plugins before creating or upgrading execution agents.
+- **Capability scan UX contract** — Added user-facing refresh guidance and token controls so runs expose counts, top candidates, and source refs instead of dumping full provider catalogs into context.
+- **Codex real-machine release smoke** — Verified the current Codex CLI can load Meta_Kim, project instructions, skills, and hooks in a read-only non-interactive run.
+
+### Changed
+
+- **Execution route selection** — `select-execution-route` now reports provider coverage, cache freshness, full-scan triggers, and current provider evidence in capability gap packets.
+- **Meta-theory execution discipline** — Critical, Fetch, Thinking, and Review now require existing owner/provider discovery evidence before execution or agent creation.
+- **Execution-agent card abstraction** — Durable execution-agent cards now stay capability-class oriented; concrete files, tickets, one-run tasks, and verification steps belong in worker task packets.
+- Version bump: 2.6.2 -> 2.7.0.
+
+### Verification
+
+- `codex --version`
+- `codex doctor`
+- `codex -a never exec --ephemeral --sandbox read-only -C <repo> "Codex实机冒烟测试：不要修改文件，不要运行外部命令。读取项目说明后，用一句中文回答你能看到Meta_Kim项目且当前任务是发布前验证。"`
+- `npm run meta:sync`
+- `npm run meta:sync:global`
+- `npm run meta:check:global:release`
+- `npm run meta:verify:all`
+- `git diff --check`
+
+## [2.6.2] - 2026-05-30
+
+### Added
+
+- **Decision cross-validation gate** — Added a meta-theory gate requiring PR, issue, release, compatibility, public-ready, and skill-prioritization decisions to record evidence snapshot time, source-state matrix, confidence labels, counterevidence, contradiction log, falsification checks, and replay commands.
+- **Risk-to-skill binding pattern** — Added an internal decision pattern that binds PR/issue/release work to one primary risk lane and at most one secondary lane before choosing the next executable gate.
+- **Adversarial review regression tests** — Added governance tests that lock the cross-validation gate, risk-to-skill binding, and stale-state rejection behavior.
+
+### Changed
+
+- **Decision-pattern weapon coverage** — Extended the Meta_Kim decision-pattern weapon to cover PR/issue triage, skill prioritization, and public-ready decisions.
+- Version bump: 2.6.1 -> 2.6.2.
+
+### Verification
+
+- `node --test tests/governance/decision-cross-validation.test.mjs`
+- `npm run meta:verify:governance`
+- `npm run meta:verify:all`
+- `npm run meta:graphify:rebuild`
+- `npm run meta:graphify:check`
+- `git diff --check`
+
+## [2.6.1] - 2026-05-29
+
+### Added
+
+- **Hook progression policy** — Added a validator-backed policy that keeps hooks as last-resort fuses, requires structured block output, classifies warnings, and prevents unchanged retry loops.
+- **Governance regression fixtures** — Added real route, strict run artifact, warning classification, and hook progression tests for public-ready governance evidence.
+- **SQLite runtime helper** — Added a shared SQLite import helper that suppresses only the known `node:sqlite` experimental warning while preserving other warnings.
+
+### Changed
+
+- **Targeted MCP memory hook install** — Setup and the memory hook installer now honor active runtime targets, so Codex/Cursor/OpenClaw installs do not require Claude settings.
+- **Execution route selection** — Engineering execution routes now reject governance agents as implementation workers and return honest capability gaps when no executable owner path is ready.
+- Version bump: 2.6.0 -> 2.6.1.
+
+### Verification
+
+- `npm run meta:sync`
+- `npm run discover:global`
+- `npm run meta:check`
+- `npm run meta:check:global`
+- `npm run meta:verify:governance`
+- `npm run meta:graphify:rebuild`
+- `npm run meta:verify:all`
+
+## [2.6.0] - 2026-05-29
+
+### Added
+
+- **Executable governance validators** — Added prompt executability, foundational capability preservation, and dependency compatibility validators, then wired them into `meta:verify:governance`.
+- **Governance regression coverage** — Added behavior tests for agent boundaries, reference contracts, strict intent validation, route completeness, public-ready gates, Kim_Decision routing, hardcoded path prevention, and scar/evolution rules.
+- **Dependency and capability indexes** — Extended dependency discovery and capability inventory output with runtime support, OS support, invocation paths, verification methods, writeback keys, route eligibility, and preservation metadata.
+
+### Changed
+
+- **Meta-theory dispatcher** — Reworked the canonical meta-theory skill into a compact dispatcher that routes by Critical -> Fetch -> Thinking -> Execution -> Review -> Meta-Review -> Verification -> Evolution instead of acting as a theory bundle.
+- **Reference contracts and agent SOPs** — Converted the meta-theory references and all nine governance agents into executable contracts with triggers, required inputs, output packets, pass/fail gates, escalation, verification, writeback, and preserve rules.
+- **Route and intent validation** — Upgraded execution route selection from keyword routing to owner + weapon + dependency + runtime + OS + verification scoring, and added strict run-artifact validation for intent acceptance.
+- **Runtime and OS compatibility** — Added Linux coverage alongside macOS, Windows, and WSL2, while preserving Claude Code, Codex, Cursor, and OpenClaw native/partial/unknown capability boundaries.
+- Version bump: 2.5.0 -> 2.6.0.
+
+### Fixed
+
+- **Kim_Decision state machine** — Kim_Decision is now preserved as a discovered decision protocol/skill candidate/reference state machine, not hardcoded as a local path, not disabled permanently, and never used as a code executor.
+- **Foundational capability protection** — Prompt cleanup now has validator-backed protection against removing skills, WebSearch/Browser/Research, Shell/Filesystem/Patch, MCP, Memory, Graph, Hooks, scripts, runtime tools, and native platform abilities.
+- **Public-ready gate hardening** — Public-ready now requires verification evidence, intent acceptance, no unresolved high/critical findings, and a writeback decision.
+
+### Verification
+
+- `npm run meta:validate`
+- `npm run meta:runtime:validate`
+- `npm run meta:os:check`
+- `npm run meta:deps:discover`
+- `npm run meta:deps:check`
+- `npm run meta:deps:compat`
+- `npm run meta:capabilities:index`
+- `npm run meta:capabilities:route -- --task "fuzzy product monetization task" --runtime codex --os windows --json`
+- `npm run meta:lens:select -- --taskShape strategy_product_decision --realIntent "choose shortest correct path" --json`
+- `npm run meta:governance:validate`
+- `npm run meta:route:validate`
+- `npm run meta:intent:validate -- --template`
+- `npm run meta:intent:validate -- --strict --input tests/fixtures/run-artifacts/valid-run.json`
+- `npm run meta:prompt:validate`
+- `npm run meta:foundational:validate`
+- `npm run meta:test:governance`
+- `npm run meta:verify:governance`
+
+## [2.5.0] - 2026-05-28
+
+### Added
+
+- **Governance decision engine** — Added runtime capability, OS compatibility, dependency capability, weapon routing, trigger-action, intent amplification, choice surface, dynamic lens, and decision-pattern governance contracts.
+- **Capability discovery and routing scripts** — Added probes, discovery, inventory, routing, lens selection, and governance validators so Meta_Kim can find owner + weapon + runtime + OS + verification paths before execution.
+- **Governance regression tests** — Added tests for trigger/action contracts, runtime matrix rules, dependency registry boundaries, weapon routing, dynamic lens selection, intent acceptance, and capability routing.
+- **Governance docs** — Added user-facing documentation for runtime capability, dependency discovery, owner/weapon routing, trigger-action governance, intent amplification, dynamic lens discovery, choice surfaces, and internal decision patterns.
+
+### Changed
+
+- **Kim_Decision boundary correction** — Kim_Decision is no longer modeled as a Meta_Kim dependency. Useful decision-engine patterns are represented as Meta_Kim-owned data under the decision-pattern catalog and used only as reference material.
+- **Meta-theory execution rules** — Tightened `AGENTS.md`, README, and the meta-theory skill so non-query tasks search capabilities first, platform work checks runtime/OS matrices, public-ready depends on verification plus intent acceptance, and evolution must write back or record a reason.
+- Version bump: 2.4.3 → 2.5.0.
+
+### Verification
+
+- `npm run meta:verify:governance`
+- `npm run meta:validate`
+- `npm run meta:sync`
+- `npm run meta:graphify:rebuild`
+
+## [2.4.3] - 2026-05-28
+
+### Fixed
+
+- **Codex project skill root cleanup** — Codex project skills now sync only to `.agents/skills/`, matching the current project-level Codex skill location and avoiding duplicate `meta-theory` entries.
+- **Legacy `.codex/skills` migration** — Update/sync runs remove the old Meta_Kim-managed `.codex/skills/meta-theory` mirror and delete `.codex/skills` only when it becomes empty, preserving any user-owned skills.
+- **Install and verification alignment** — Setup checks, runtime validation, footprint reporting, generated Codex command docs, and multilingual README guidance now point at `.agents/skills/` as the single project skill root.
+- **Dependency security baseline** — Raised `@modelcontextprotocol/sdk` to `^1.29.0`; fresh installs resolve patched transitive packages for the npm audit findings in the local install tree.
+
+### Changed
+
+- Version bump: 2.4.2 → 2.4.3.
+
+## [2.4.2] - 2026-05-28
+
+### Fixed
+
+- **Planning files 8-stage coverage** — Updated `planning-files.md` to cover the full spine (Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution) instead of only Stage 3. Each stage now has explicit planning file update responsibilities.
+- **SKILL.md reference alignment** — Updated planning-files reference description to reflect 8-stage coverage.
+
+### Changed
+
+- Version bump: 2.4.1 → 2.4.2.
+
+## [2.4.1] - 2026-05-28
+
+### Fixed
+
+- **Meta-theory delivery trust** — Slimmed `/meta-theory` into a progressive dispatcher, split large operational details into references, and aligned Critical / Fetch / Thinking / Review so visible stage feedback is compact, human-readable, follows the resolved user-facing language, and pairs internal packet field names with human labels when shown.
+- **Verification evidence hardening** — Bound `verifySteps[].id` to `workerExecutionEvidence[].verifyStepRef`, parse `json-output` evidence as JSON, structure `fixEvidence`, require accepted-risk ownership/revisit data, and prevent skipped worker evidence from claiming verified or public-ready status.
+- **Cross-runtime prompt/rules alignment** — Updated Conductor, Artisan, Cursor rules, and runtime prompts so agent-team playbooks only run for 2+ independent parallel lanes, capability discovery is runtime-aware, and generated Cursor prompts avoid duplicate headers/warnings.
+- **Release documentation cleanup** — Corrected stale references to removed runtime-matrix docs, updated ECC repository references to `affaan-m/ECC`, and synchronized package metadata for the new release.
+
+### Changed
+
+- Version bump: 2.4.0 -> 2.4.1.
+- Added clearer maintainer paths for rules and scripts so users can find the active sources instead of guessing from generated mirrors.
+
+## [2.4.0] - 2026-05-27
+
+### Fixed
+
+- **ECC install policy corrected** — ECC now points at `affaan-m/ECC` and `ecc@ecc`, uses ECC's native CLI `core` profile for home targets (`codex`, `opencode`, `qwen`), removes legacy `everything-claude-code` fallback directories, and warns project-local targets (`cursor`, `zed`, `gemini`, `codebuddy`, `antigravity`, `joycode`) to run ECC from each project root instead of installing into an npm cache or `skills/` fallback. Codex currently receives the upstream `refactor-cleaner` agent, while `/refactor-clean` remains unavailable there because upstream ECC excludes `commands-core` from its Codex target.
+- **H-001** — README.md badge links already use https:// (verified, no fix needed)
+- **M-002** — MCP Memory Service endpoints use MCP_MEMORY_URL env (verified, no fix needed)
+- **M-003** — Version inconsistency - unified to 2.4.0
+
+### Changed
+
+- Version bump: 2.3.2 → 2.4.0
+- Updated CHANGELOG.zh-CN.md with corresponding changes
+
+## [2.3.2] - 2026-05-26
+
+### Fixed
+
+- **DOC-001 (MEDIUM) — Data structure contract documentation gap** — Added "Data Structure Contract" section to `SKILL.md` explaining each stage's required output fields, Choice Surface State lifecycle, and validation hooks.
+- **DOC-002 (LOW) — State management ownership unclear** — Added "State Management Responsibilities" section to `meta-warden.md` and "Choice Surface State Management" section to `meta-conductor.md`.
+
+## [2.3.1] - 2026-05-26
+
+### Fixed
+
+- EB-002 (HIGH) + HOOK-INFRA-001 (LOW) — read_only_verifier capability slot in spine-state.mjs + dispatchChain auto-append in recordDispatch + read_only_verifier gate in enforce-agent-dispatch.mjs.
+- EB-004 (LOW) — preDecisionOptionFrame nesting normalization (warn-only validator + migration helper + canonical-location docs).
+
+### Added
+
+- `scripts/migrate-spine-state-eb004.mjs` migration helper.
+- 21-prefix read-only verifier command whitelist.
+- `dispatchChain[stage]_supplementary[]` audit field.
+
+### Changed
+
+- `STAGE_META_AGENT_MAP` schema extended (additive, backward-compatible).
+- `recordDispatch` signature now accepts `toolInput`.
+- Version 2.3.0.1 → 2.3.1.
+
+## [2.3.0.1] - 2026-05-26
+
+### Changed
+
+- Renamed `canonical/runtime-assets/claude/hooks/ecc-batching-wrapper.mjs` → `canonical/runtime-assets/claude/hooks/ecc-permission-cache-wrapper.mjs` (closes W2 F1 finding).
+- Docstring aligned with actual permission-cache behavior.
+- No behavioral change.
+
+## [2.3.0] - 2026-05-26
+
+### Fixed
+
+- **Item 1 — ECC plugin install failure on macOS (NEW)** — `config/skills.json` defensive spec changed from `ecc@ecc` to `everything-claude-code@ecc` so the install survives the upstream affaan-m/everything-claude-code → ecc plugin rename across legacy + current marketplace caches. `scripts/install-global-skills-all-runtimes.mjs` gains a marketplace refresh loop (`claude plugin marketplace update <id>`) between marketplace registration and plugin install so stale caches get refreshed before resolution. Source-of-truth: local cache evidence at `~/.claude/plugins/marketplaces/ecc/.claude-plugin/marketplace.json` (current HEAD, plugin name=ecc, version 2.0.0-rc.1) vs `~/.claude/plugins/marketplaces/everything-claude-code/.claude-plugin/marketplace.json` (legacy, plugin name=everything-claude-code). The defensive spec works against both states.
+- **EB-008 (HIGH) — workerExecutionEvidence silent-success semantics** — `config/contracts/workflow-contract.json::workerExecutionEvidenceField` adds `successMarkerFormat` enum (`stdout-text` | `exit-code-only` | `json-output`) plus `exitCode` and `commandRanAt` properties. Silent-success commands (`node --check`, `tsc --noEmit`) may now record empty `actualOutput` only when `successMarkerFormat="exit-code-only"` AND `exitCode=0` AND `commandRanAt` set. Closes v2.2.5 `accepted_risk` (W1 honestly disclosed exit codes; placeholder pressure pattern `EXIT_OK\n` retired). `canonical/agents/meta-prism.md::Decision Rule 16` extended in parallel (silent-success extension v2.3.0).
+- **EB-009 (LOW) — release notes claim retracted (dogfood)** — v2.2.5 release notes claimed `validate-project.mjs:15 loadRuntimeProfiles` was unused. Re-verification shows it is actively called at `validate-project.mjs:2808` inside `validateSyncConfiguration()` plus `scripts/meta-kim-sync-config.mjs:271,333`. Import is REQUIRED. v2.2.5 release notes + CHANGELOG entries gained retraction blockquote/sub-bullets across English + Chinese mirrors. No code prune.
+- **EB-010 (MEDIUM) — sibling schema style normalized** — `config/contracts/workflow-contract.json::workerExecutionEvidenceField` reshaped from heterogeneous `fieldType`/`itemSchema`/top-level `enforcement` layout to standard JSON Schema `type`/`items`/`properties` with `_meta` sidecar. Sibling style now matches `verifyStepsField` and `fileCompletionListField`. `_meta.closes` lists `[EB-005, EB-008, EB-010]`.
+
+### Added
+
+- **EB-003 (MEDIUM) — Meta_Kim ECC batching wrapper hook (Option D, user-selected)** — `canonical/runtime-assets/claude/hooks/ecc-permission-cache-wrapper.mjs` (NEW) implements PreToolUse session+file cache key (SHA256(session_id || file_path)) with 5-minute TTL scoped to `os.tmpdir()`. Idempotent + non-fatal cache write failure. Hook not yet wired into `.claude/settings.json` (canonical only); v2.3.x decides registration. See findings: F1 below (`EB-011` backlog).
+
+### Changed
+
+- `package.json` — version `2.2.5 → 2.3.0`.
+- Runtime mirrors re-synced (`.claude/`, `.codex/`, `.cursor/`, `openclaw/`) via `npm run meta:sync`.
+
+### Verification
+
+| Check | Result | Marker |
+|---|---|---|
+| `npm run meta:check` (after meta:sync) | **20/20 pass** | `stdout-text` |
+| W2 (Prism) review | qualityGate=pass; 0 HIGH/MEDIUM, 3 LOW → backlog | n/a |
+| W3 (Warden) meta-review + verification | pass; Rule 16/17 dogfood honored | n/a |
+| Cross-file consistency (`Rule 16` ↔ `successMarkerFormat` enum) | matched enum names + conditions | grep diff |
+
+### Carry-forward to v2.3.1
+
+- **EB-002 (HIGH)** — `read_only_verifier` capability slot. **Spec not yet drafted.** Bug nature confirmed first-hand in v2.3.0 (W2 + W3 reviewer subagents both blocked by `enforce-agent-dispatch.mjs` from running `git diff` / `npm run meta:check` in review/meta_review stages). Requires `spine-state.mjs` changes (frozen). v2.3.1 RFC must define: acceptance criteria, allowed command whitelist, scope contract, test plan.
+- **EB-004 (LOW)** — `preDecisionOptionFrame` nesting normalization. **Spec not yet drafted.** Bug surfaced in v2.3.0 (`choiceSurfaceState` had to be set BOTH at spine top-level AND inside `preDecisionOptionFrame` to satisfy the hook's `state.choiceSurfaceState` lookup — confusing field placement). Requires `spine-state.mjs` changes. v2.3.1 RFC must define: canonical field location, migration plan, validator gate.
+- **EB-011 (LOW, new in v2.3.0)** — `ecc-permission-cache-wrapper.mjs` docstring claims "batch the related ECC plugin install side-effects" but implementation only writes a per-(session,file) cache marker + returns `permissionDecision=allow` on cache hits (does not suppress/defer tool calls). v2.3.x decision: rename to `ecc-permission-cache-wrapper.mjs` OR strengthen behavior to actually deny/skip duplicate side-effecting calls within TTL.
+- **Hook infra bug (new finding, v2.3.0)** — Agent dispatches in `review` / `meta_review` / `verification` stages do not auto-append `ownerAgent` to `dispatchChain.<stage>`. Main thread must hand-edit spine state to record the dispatch. Tracked alongside EB-002 (same root cause: read-only reviewer cannot run verify commands; same fix surface: `spine-state.mjs`).
+
+## [2.2.5] - 2026-05-25
+
+### Fixed
+
+- **EB-005 (HIGH) — Worker verification claim evidence contract** — Workers reporting test pass counts must include `workerExecutionEvidence` entries. Closes v2.2.2/v2.2.3 historical fabrication. See `config/contracts/workflow-contract.json::workerTaskPacket.workerExecutionEvidenceField`. Reviewer gate in `canonical/agents/meta-prism.md::Decision Rule 16` (self-applying per Rule 17).
+- **EB-006 (MEDIUM) — Localized trigger exceptions extracted to config** — `scripts/validate-project.mjs::isAllowedLocalizedTriggerLine` no longer hardcodes the v2.2.4 allowlist. Moved to `config/contracts/localized-trigger-exceptions.json` per PRIN-03/04. Backwards-compatible fallback if config missing.
+- **EB-007 (LOW) — Narrow-Amendment Protocol documented** — `canonical/skills/meta-theory/references/dev-governance.md` defines the 4-boundary protocol (A: validator/config layer only; B: ≤1 file; C: no worker-facing schema change; D: post-hoc governance record).
+
+### Added
+
+- `config/contracts/localized-trigger-exceptions.json` — config consumed by `validate-project.mjs`
+- `.meta-kim/eb-003-investigation.md` — investigation note for ECC GateGuard fact-batching; 4 user decision options; no plugin edit applied
+
+### Changed
+
+- `canonical/agents/meta-prism.md` — Workflow step 5 substep + Decision Rules 16-17
+- `config/contracts/workflow-contract.json` — `workerExecutionEvidenceField` added
+- `scripts/validate-project.mjs` — `isAllowedLocalizedTriggerLine` config-driven with backwards-compat
+
+### Carry-forward to v2.3.0
+
+- EB-002 (HIGH): `read_only_verifier` capability slot (requires `spine-state.mjs`, frozen)
+- EB-004 (LOW): `preDecisionOptionFrame` nesting normalization (requires `spine-state.mjs`, frozen)
+- EB-003 (MEDIUM): user decision required on options A-D
+- **EB-008 (HIGH, surfaced by v2.2.5 W2 review)**: `workerExecutionEvidence.actualOutput` ambiguity for silent-success commands (e.g., `node --check`, `JSON.parse`). Schema needs `successMarkerFormat` clarification field. v2.2.5 accepts the first-application drift as `accepted_risk` per W2 ruling (alternative was punishing rule self-application on day 1).
+- **EB-009 (LOW, surfaced by v2.2.5 W2 review)**: `scripts/validate-project.mjs:15` imports `loadRuntimeProfiles` not referenced by the new `loadLocalizedTriggerExceptions` path. Pre-existing condition; verify and prune if unused.
+  - **v2.3.0 retraction:** Claim was incorrect — `validate-project.mjs:2808` actively uses `loadRuntimeProfiles` inside `validateSyncConfiguration()`. Import is required. EB-009 closed as docs-only correction.
+- **EB-010 (MEDIUM, surfaced by v2.2.5 W2 review)**: Sibling schema style heterogeneity in `protocols.workerTaskPacket.*` — `verifyStepsField` / `fileCompletionListField` / `workerExecutionEvidenceField` use mixed conventions (`type: "array"` vs `fieldType: "array"`). Normalize.
+- Validator-level enforcement of `workerExecutionEvidenceField` (currently narrative-tier + Rule 16)
+
+## [2.2.4] - 2026-05-25
+
+### Fixed (v2.2.2 review evolution backlog closure)
+
+- **EB-001 — Worker per-file write-completion contract** — `config/contracts/workflow-contract.json` adds optional `fileCompletionListField` to `workerTaskPacket`, requiring workers with declared `scopeFiles` to report explicit per-file status (`completed` / `skipped` / `failed` + `skipReason`). `canonical/agents/meta-conductor.md` documents the narrative tier of this contract. Closes the v2.2.2 → NEW-H1 root cause where a worker silently dropped one of the planned target files (CHANGELOG was modified instead of `progress-v2.2.0.md`). Validator enforcement deferred to v2.3.0 R8.
+- **NEW-M1 — CHANGELOG narrative accuracy** — The [2.2.2] section's release notes (`.release-notes-v2.2.2.md:71`) under-counted modified files at "9 files" by not including the 4 runtime mirror sync targets (`.claude/`, `.codex/`, `.cursor/`, `openclaw/`). Actual scope was ~13 files. Historical accuracy note added to [2.2.2] section below.
+- **NEW-L2 — Release-notes consistency verifier** — `scripts/check-release-notes-consistency.mjs` (new) validates that `.release-notes-vX.Y.Z.md` files exist for each CHANGELOG section since v2.2.2 OR are documented as folded-into-README per `CHANGELOG.md:1184`. Opt-in (`node scripts/check-release-notes-consistency.mjs`); not a mandatory CI gate until v2.2.5+.
+
+### Notes
+
+- **NEW-L1 (capability-index timestamp drift)** — Already addressed by commit `bd70538f` in v2.1.3 (`Stable capability-index regeneration`). No residual gap found in v2.2.4 audit; closure tracked here for completeness.
+- **EB-002/003/004** — Explicitly carry-forward to v2.3.0 (require spine-state.mjs changes or out-of-repo work).
+
+### Verification
+
+- `npm run meta:check` → **20/20 pass** (unchanged from v2.2.3; no code touched).
+- `npm run meta:test:meta-theory` → **796/796 pass** (unchanged from v2.2.3).
+- Production hooks (`spine-state.mjs`, `enforce-agent-dispatch.mjs`) untouched since v2.2.0 Warden freeze.
+
+### Architecture Notes
+
+v2.2.4 is a docs/contract patch closing the v2.2.2 Prism review's HIGH evolution-backlog item (EB-001) and 3 LOW findings (NEW-M1/L1/L2). No production hooks, PoC modules, or test fixtures modified. v2.3.0 retains the remaining backlog (EB-002 read_only_verifier capability slot, EB-003 GateGuard fact-batching, EB-004 preDecisionOptionFrame nesting normalization).
+
+## [2.2.3] - 2026-05-25
+
+### Fixed (v2.2.2 meta-prism review NEW-H1)
+
+- **H2 closure lived in CHANGELOG, not in `progress-v2.2.0.md`** — the original Prism v2.2.0 review H2 finding pointed at the progress doc. The v2.2.2 commit (`c51cbcac`) added the Q4 data-vs-enforcement deferral language to `CHANGELOG.md` but never modified `progress-v2.2.0.md` itself. v2.2.3 closes that gap by appending the "Q4 Status Clarification" subsection to the canonical progress doc, with explicit closure history linking back to v2.2.2 NEW-H1.
+
+### Verification
+
+- `git diff v2.2.1..v2.2.2 -- canonical/runtime-assets/shared/hooks/spine-state.mjs canonical/runtime-assets/claude/hooks/enforce-agent-dispatch.mjs` → **empty** (frozen-scope assertion independently confirmed; v2.2.2 NEW-M3 closed).
+- `git show --stat c51cbcac -- progress-v2.2.0.md` → **empty** (confirms v2.2.2 did not touch the file; NEW-H1 evidence).
+- `node --test tests/poc-design-gate/*.test.mjs` → 59/59 pass (unchanged from v2.2.2; no code modules touched).
+- `npm run meta:check` → 20/20 pass.
+- `npm run meta:test:meta-theory` → 796/796 pass.
+
+### Architecture Notes
+
+v2.2.3 is a documentation-only patch (1 file: `progress-v2.2.0.md`) closing the last open finding from the v2.2.2 meta-prism review. Production hooks remain frozen. No code or test changes. The original 3 HIGH findings from v2.2.0 are now genuinely closed at both code (v2.2.2) and document (v2.2.3) layers.
+
+## [2.2.2] - 2026-05-25
+
+### Fixed (Prism v2.2.0 review HIGH findings)
+
+- **H1 — Rule-ID vs packet-name vocabulary mapper** — `config/contracts/deliverable-type-profiles.json` now ships an explicit `ruleToPacketMap` block (schemaVersion bumped 1.0.0 → 1.1.0) mapping the 7 core contract rule IDs to their production spine-state packet names (`testStrategyDefined → testStrategyPacket`, `rollbackPlanDefined → rollbackPlanPacket`, `structureHygiene → structureHygienePacket`, `interfaceContract → interfaceContractPacket`, `sideEffectLedger → sideEffectLedgerPacket`, `permissionMatrix → permissionMatrixPacket`, `linkValidation → linkValidationPacket`). `canonical/runtime-assets/shared/lib/policy-registry.mjs` exposes a new `resolvePacketName(registry, ruleId)` helper with a `fallback_to_rule_id` policy so unmapped rules stay forward-compatible. This closes Prism finding D1/H1 and unblocks v2.3.0 R4 hook wiring.
+- **H2 — Q4 honesty in progress doc** — `progress-v2.2.0.md` now states explicitly that v2.2.0 ships only the *data layer* of Q4 (the `requiresConfirmation` field) and that *enforcement* (a PreToolUse interceptor pausing execution before first file write) is deferred to v2.3.0 R7. No stub handler in v2.2.2 (Warden gate ruling).
+- **H3 — Inference thresholds consume contract** — `canonical/runtime-assets/shared/lib/deliverable-type-profile.mjs::inferDeliverableTypeFromWorkType` accepts an optional 4th parameter `thresholdsConfig` and replaces the previous integer magic numbers with a normalized ratio computation (`absoluteFactor * 0.6 + marginFactor * 0.4`) compared against contract-declared `confidenceThresholds`. Backwards-compatible: existing 3-arg callers continue to work with default thresholds `{ high: 0.85, medium: 0.6, low: 0.0 }`. Return shape gains `ratio` and `thresholds` fields for testability.
+
+### Added
+
+- **`tests/poc-design-gate/05-rule-to-packet-mapper.test.mjs`** — 11 new tests covering the H1 mapper (contract block, 7 core IDs, `resolvePacketName` mapped/fallback/invalid input/null registry, full-profile coverage) and H3 contract-threshold consumption (custom thresholds honored, defaults applied when omitted). Combined suite now 59 tests (48 v2.2.0 existing + 11 new).
+
+### Changed
+
+- **Meta-theory skill localization fix** — `canonical/skills/meta-theory/SKILL.md` adds the Chinese localization example `方案 A` next to the English `Option A` placeholder, and adds the Chinese fallback-card line `当前以聊天确认卡展示，不是弹窗。` These were required by the existing `tests/meta-theory/02-clarity-gate.test.mjs` Codex multi-option choice surface assertions but had been missing since the canonical SKILL.md was last refreshed. All four runtime mirrors re-synced (`.claude/`, `.codex/`, `.cursor/`, `openclaw/`).
+- **Version metadata** — Bumped package version to `2.2.2`.
+
+### Verification
+
+- `node --test tests/poc-design-gate/*.test.mjs` → **59/59 pass** (48 v2.2.0 + 11 v2.2.2).
+- `npm run meta:check` → **20/20 pass**.
+- `npm run meta:test:meta-theory` → **796/796 pass**.
+
+### Architecture Notes
+
+v2.2.2 is a targeted patch closing all three HIGH findings from the v2.2.0 independent review. No production hooks were modified (`spine-state.mjs` and `enforce-agent-dispatch.mjs` remain frozen as Warden ruled). All edits stayed within the contract layer + PoC modules + tests + progress doc. v2.3.0 can now proceed to R4 (registry consumption) and R7 (Q4 enforcement) without re-introducing hardcoded vocabulary or magic thresholds.
+
+### Historical Note (added in v2.2.4 per NEW-M1)
+
+The accompanying release notes file `.release-notes-v2.2.2.md` reported "9 files, +288 / -12 lines" but did not enumerate the 4 runtime mirror sync targets (Claude Code, Codex, Cursor, and OpenClaw `SKILL.md` projections) updated by `npm run meta:sync` after the SKILL.md fix landed in `canonical/skills/meta-theory/`. Actual modified scope: ~13 files including mirrors.
+
+Additional historical-fabrication acknowledgment: v2.2.2 and v2.2.3 worker self-reports both claimed `npm run meta:check → 20/20 pass`, but v2.2.4 main-thread re-run revealed that `canonical/skills/meta-theory/SKILL.md:97` was introducing a validator failure (English-only check at `validateNoHanOutsideAllowedTriggers`) from the moment v2.2.2 landed. The v2.2.2/v2.2.3 worker test claims were retroactively closed in v2.2.4 by extending `scripts/validate-project.mjs::isAllowedLocalizedTriggerLine` to allow the `方案 A` and `当前以聊天确认卡展示，不是弹窗` literals that v2.2.2 deliberately added for `tests/meta-theory/02-clarity-gate.test.mjs`. v2.2.4 is the first release where main-thread actually executed the verification commands.
+
+## [2.2.1] - 2026-05-25
+
+### Added
+
+- **v2.2.0 Prism independent review** — `docs/v2.2.0-prism-review.md` records `PASS-WITH-FINDINGS` verdict against the 5 ironclad rules and 4 user decisions, plus drift detection between new contract vocabulary and production hooks scheduled for v2.3.0 wiring.
+
+### Changed
+
+- **Workflow contract extensions** — `config/contracts/workflow-contract.json` adds new packet vocabularies, naming policy fields, and dimension definitions (+580 lines) that align with the v2.2.0 design framework and prepare for v2.3.0 opt-in wiring.
+- **Validator deepening** — `scripts/validate-run-artifact.mjs` and `scripts/validate-project.mjs` add comprehensive packet/binding/secret-boundary checks (+1027 lines combined), enforcing the new contract semantics.
+- **Spine + dispatch hook updates** — `canonical/runtime-assets/shared/hooks/spine-state.mjs` and `canonical/runtime-assets/claude/hooks/enforce-agent-dispatch.mjs` add stage requirement refinements and dispatch envelope evidence (+283 lines combined) consistent with the new contract.
+- **Meta-theory skill + references** — `canonical/skills/meta-theory/SKILL.md` and `references/dev-governance.md`, `references/create-agent.md` clarify capability-binding evidence, owner-display naming, and pre-decision option-frame language.
+- **Meta agent persona refreshes** — All 9 `canonical/agents/meta-*.md` profiles updated for naming acceptance, role-display rules, and capability-binding semantics.
+- **Run artifact fixtures regenerated** — All 7 `tests/fixtures/run-artifacts/*.json` regenerated with new packet vocabularies (+2854 lines) so contract tests stay green.
+- **Contract compliance + run artifact + spine + business-flow tests extended** — `tests/meta-theory/*.test.mjs` cover the new validator output, packet shapes, and orchestration evidence (+782 lines combined).
+- **Quickstart + cross-runtime + runtime matrix docs refreshed** — `docs/QUICKSTART.md`, `docs/cross-runtime-meta-enforcement.md`, `docs/runtime-capability-matrix.md`, `docs/runtime-coverage-audit.md`, `docs/repo-map.md`, and `docs/protocols/meta-conductor-agent-teams-playbook-integration.md` updated to reflect the v2.2.x contract surface.
+- **Save-progress command + OpenClaw template** — `canonical/runtime-assets/claude/commands/save-progress/SKILL.md` and `canonical/runtime-assets/openclaw/openclaw.template.json` aligned with new run-artifact requirements.
+- **Capability index normalization** — `config/capability-index/meta-kim-capabilities.json` and `config/contracts/capability-index.schema.json` cleaned up.
+- **AGENTS.md + CLAUDE.md** — Cross-runtime governance summary aligned with v2.2.x contract.
+- **Version metadata** — Bumped the package version to `2.2.1`.
+
+### Architecture Notes
+
+- v2.2.1 consolidates the WIP that pre-dated the v2.2.0 ship into a single coherent contract uplift. It does NOT yet wire `shared/lib/` PoC modules into production hooks — that remains the v2.3.0 boundary.
+- The Prism review identifies items to address before R4/R7 wiring; see `docs/v2.2.0-prism-review.md` for the verdict and recommended sequence.
+
+## [2.2.0] - 2026-05-25
+
+### Added
+
+- **Design-time governance gate framework** — Comprehensive blueprint (`docs/design-time-gate-redesign.md`) introducing 5 core abstractions (DeliverableTypeProfile, PolicyRegistry, GateDispatcher, SeverityRule, IntentVerbLexicon) that move governance rules from hook code to declarative contracts. Implements user-locked decisions: Q1 (unknown deliverable types must clarify intent, never auto-allow), Q2 (4-tier severity model: required-strict / required-warn / not_applicable_with_reason / off), Q3 (v1.0 multilingual intent detection in zh / en / ja / ko aligned with README), Q4 (workType inference + first-write confirmation).
+- **deliverable-type-profiles contract** — New single-source-of-truth file `config/contracts/deliverable-type-profiles.json` with 5 standard profiles (`code_implementation`, `documentation`, `governance_contract`, `config_change`, `audit_readonly`), per-profile rule sets with 4-level severity, multilingual intent verb lexicon (16 word lists across 4 intents x 4 languages), and inference strategy configuration.
+- **PoC abstraction library** — Four pure-function ES modules under `canonical/runtime-assets/shared/lib/`:
+  - `deliverable-type-profile.mjs` — load, resolve, and infer deliverable types with confidence bands.
+  - `policy-registry.mjs` — bootstrap-time loader with freeze semantics (Zod-style registry pattern).
+  - `gate-dispatcher.mjs` — pure-function 4-level severity dispatch (OpenAPI 3.1 discriminator pattern).
+  - `intent-verb-lexicon.mjs` — multilingual intent detection (i18next-style namespace lookup).
+- **PoC unit test suite** — 48 tests across 4 files under `tests/poc-design-gate/`, covering all four user decisions plus error paths. Uses Node.js built-in `node --test` (zero new dependencies). Includes `RESULTS.md` summary.
+
+### Changed
+
+- **sync-coverage-check allow list** — `scripts/sync-coverage-check.mjs` now explicitly allow-lists the `shared/lib/` PoC abstraction modules. They are deliberately not projected to runtime mirrors in v2.2.0; they will be wired into hooks in v2.3.0 via feature-flagged opt-in (paths R3/R4 in the design document).
+- **Version metadata** — Bumped the package version to `2.2.0`.
+
+### Architecture Notes
+
+- v2.2.0 introduces the design layer only. Production hooks (`spine-state.mjs`, `enforce-agent-dispatch.mjs`) are untouched; existing behavior is preserved end-to-end.
+- 18 hardcoding sites are inventoried in the design document with file:line citations and a migration plan (R1-R8 paths, phased v2.2.0 to v3.x).
+- All five ironclad rules (no hardcoding / intent-first / design-not-validation / no-compromise / best-practice cases) are mapped to specific design artifacts in section 10 of the design document.
+
+## [2.1.5] - 2026-05-24
+
+### Added
+
+- **Codex business-role custom agents** — Runtime sync now generates `frontend.toml`, `backend.toml`, `test.toml`, `review.toml`, `analysis.toml`, `verify.toml`, and `docs.toml` alongside the generic `worker.toml` / `explorer.toml` fallbacks so Codex hosts that honor named custom agents can display stable role-family names.
+
+### Fixed
+
+- **Codex sidebar naming acceptance boundary** — Documentation and tests now treat `Popper`, `Zeno`, or other host aliases as Codex runtime instance aliases only. Meta_Kim's own task boards and run artifacts must keep `roleDisplayName` as a coarse business role and must not count host sidebar aliases as project naming acceptance.
+
+### Changed
+
+- **Version metadata** — Bumped the package version to `2.1.5`.
+
+## [2.1.4] - 2026-05-24
+
+### Added
+
+- **Codex readable subagent adapters** — Codex runtime sync now generates `worker.toml` and `explorer.toml` runtime adapters plus `nickname_candidates` for Codex meta-agent TOML projections. These are best-effort Codex display hints and do not become durable Meta_Kim execution owners.
+
+### Fixed
+
+- **Cross-runtime agent format boundaries** — Runtime path rewriting now emits each target's native agent paths: `.codex/agents/*.toml` for Codex, `.claude/agents/*.md` for Claude Code, `.cursor/agents/*.md` for Cursor, and OpenClaw workspace `SOUL.md` files, preventing Codex mirrors from saying `.codex/agents/*.md`.
+- **Runtime alias handling** — Documentation now separates host runtime aliases from Meta_Kim `roleDisplayName`, so task boards and run artifacts keep business-readable names even when Codex Desktop falls back to generic aliases.
+
+### Changed
+
+- **Version metadata** — Bumped the package version to `2.1.4`.
+
+## [2.1.3] - 2026-05-24
+
+### Fixed
+
+- **Stable capability-index regeneration** — `discover:global` now preserves the existing canonical capability index `generatedAt` value when the capability content is unchanged, so release verification no longer leaves the worktree dirty from a timestamp-only diff.
+- **Default update flow** — `node setup.mjs --update` now wins over non-TTY silent install mode, chooses default list options without waiting for stdin, and skips the optional custom deploy directory prompt in silent/default update runs.
+- **Graphify update idempotency** — Setup now skips guide-mutating Graphify platform installs when `AGENTS.md` or `CLAUDE.md` already contains a Graphify section, preventing duplicate `## graphify` blocks and line-ending churn.
+- **Capability-index mtime churn** — Global capability discovery now treats recursive `modified` timestamps as volatile metadata, so file mtime changes do not dirty canonical capability indexes when capabilities are unchanged.
+
+### Changed
+
+- **Version metadata** — Bumped the package version to `2.1.3`.
+
+## [2.1.2] - 2026-05-24
+
+### Added
+
+- **Pre-orchestration choice gate** — Critical and Fetch now feed an explicit unresolved-question and solution-option gate before Thinking may lock the plan, produce orchestration details, or create worker packets.
+- **Cross-runtime sync coverage check** — Added `npm run meta:check:sync-coverage` to keep canonical runtime assets and generated mirrors from drifting silently.
+- **OpenClaw heartbeat template coverage** — Added the canonical OpenClaw heartbeat template to the sync surface so downstream installs receive the same governance wording as other runtimes.
+
+### Changed
+
+- **Governance vs execution boundary** — Clarified that governance agents actively participate in Critical, Fetch, Thinking, and Review, while the Execution production stage must dispatch execution-layer agents, skills, commands, MCPs, or tools for concrete work.
+- **Role display naming** — User-visible worker names now stay coarse and readable; generated runtime aliases such as host instance ids remain internal metadata.
+- **Codex skill installation shape** — Codex project skill projection now prefers the current `.agents/skills/` path while keeping the legacy `.codex/skills/` mirror for already-installed users.
+- **Version metadata** — Bumped the package version to `2.1.2`.
+
+### Fixed
+
+- **Premature orchestration** — Run validation now rejects artifacts that finalize a plan without unresolved-question handling, solution options, and explicit confirmation or recorded skip evidence.
+- **Installer conflict cleanup** — Skill update cleanup now targets Meta_Kim-managed legacy residue more narrowly, avoiding accidental removal of user-created skills while still migrating old installs safely.
+
+## [2.1.1] - 2026-05-23
+
+### Fixed
+
+- **`spine-state.mjs` TypeError on missing `dispatchedAgents`** — Hooks now tolerate runtime spine-state files that omit array/object fields (e.g. `dispatchedAgents`, `dispatchChain`, `stages`, `skippedHooks`). A new `normalizeSpineState(state)` helper (lines 177-210) shallow-clones and defaults these fields, and is called at the entry of `writeSpineState`, `advanceStage`, `completeStage`, `recordDispatch`, and `checkStageRequirements`. The previously-observed `PreToolUse:Agent hook error` (non-blocking) caused by `newState.dispatchedAgents.includes(...)` on undefined is now silent.
+
+### Changed
+
+- **Version metadata** — Bumped the package version to `2.1.1`.
+
+## [2.1.0] - 2026-05-23
+
+### Added
+
+- **Sub-agent meta governance boundary** — Meta-theory `Dispatch-Not-Execute` rule now explicitly extends into sub-agent context. `canonical/skills/meta-theory/SKILL.md` adds Rule 6 forbidding meta-* sub-agents from running execution-layer business logic (Fetch returns evidence only; Thinking produces plans; Review validates without patching; Execution orchestrators dispatch without coding). `references/dev-governance.md` documents the meta-prism allowed/forbidden matrix; `references/create-agent.md` adds a `Sub-agent Identity Carry-over` section codifying the prompt + hook double-layer enforcement.
+- **Frontmatter tool whitelist on 9 governance agents** — Every `canonical/agents/meta-*.md` now declares `tools: Read, Grep, Glob, Bash, Agent, WebFetch, WebSearch`. `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, and MCP write tools are intentionally excluded so Claude Code natively withholds them from governance agents.
+- **L2 hybrid Bash read-only whitelist** — New `canonical/runtime-assets/claude/hooks/bash-readonly-whitelist.mjs` ships 66 read-only command-name allowances (e.g. `git status`, `git log`, `ls`, `cat`, `find`, `rg`, `pnpm typecheck`, `cargo check`) plus 60 dangerous-argument denials (e.g. `git push`, `--force`, `cargo build`, `npm install`, `| sh`, `; rm`). Token-boundary identification recognises `>` / `>>`; redirects to `/dev/null` (and Windows `nul`) plus `os.tmpdir()` paths are allowed, while writes into the working tree are blocked. Command-substitution (`$(...)`, backticks) is also denied.
+- **Progressive enforcement mode** — `enforce-agent-dispatch.mjs` now exposes `META_KIM_META_ENFORCEMENT_MODE` (`warn` | `block` | `progressive`, default `progressive`) and `META_KIM_META_ENFORCEMENT_GRACE_DAYS` (default 7). Inside the grace window violations only warn; afterwards they block. Setting `MODE=block` skips the grace period for tests and CI.
+- **Cursor declarative governance** — New `canonical/runtime-assets/cursor/rules/meta-enforcement.mdc` (alwaysApply MDC rule) injects the meta-* sub-agent boundary into every Cursor turn, since Cursor lacks PreToolUse deny capability.
+- **Cross-runtime capability matrix** — New `docs/cross-runtime-meta-enforcement.md` documents the deny / declarative split across Claude Code, Codex, Cursor, and OpenClaw, so users can size expectations honestly per runtime.
+
+### Changed
+
+- **enforce-agent-dispatch.mjs caller identity** — `isMetaAgent()` now also covers Bash, Edit, Write, MultiEdit, and NotebookEdit (not only the Agent tool). Caller identity is inferred from `CLAUDE_SUBAGENT_TYPE`, then the active stage's `dispatchChain` tail, then prior stages, then null (conservative warn). The previous `if (!state || !state.active) process.exit(0)` escape hatch is replaced by a minimal degraded path that still applies the meta-* read-only check.
+- **spine-state.mjs cross-OS hardening** — `isWithin()` now normalises both parent and target paths and lower-cases them on Windows, eliminating case-sensitivity bypasses of `spine-state.json`. `isSpineStateWrite()` in `enforce-agent-dispatch.mjs` also gained `[\\/]spine[\\/]` segment matching.
+- **Version metadata** — Bumped the package version to `2.1.0`.
+
+### Fixed
+
+- **Governance meta-agents executing directly** — Until this release, `meta-prism` and `meta-conductor`, once dispatched as sub-agents, could still invoke `Bash`, `Edit`, and `Write` freely because (a) the meta-theory prompt only restricted the main thread, (b) `canonical/agents/meta-*.md` had no `tools:` frontmatter, (c) `enforce-agent-dispatch.mjs` did not inspect caller identity for execution tools, (d) the hook exited early when spine state was inactive, and (e) Codex / Cursor / OpenClaw shipped no PreToolUse hook at all. Path C in this release closes all five layers on Claude Code (mechanical) and documents declarative coverage on the other runtimes.
+- **Windows path bypass** — `targetPath.includes("spine-state.json")` previously failed against case-altered Windows paths; the new normalised compare resolves this.
+- **Redirection over-blocking** — Earlier drafts denied any `>` substring, breaking `grep ... > /dev/null` and similar legitimate read-only telemetry; the token-boundary plus target whitelist preserves these flows.
+
+### Known Limitations
+
+- Codex and OpenClaw still rely on declarative `executionBlock=true` + prompt self-discipline because neither exposes a PreToolUse deny channel; this is documented in `docs/cross-runtime-meta-enforcement.md` rather than papered over with fake hooks.
+- `npm run meta:sync` currently does not project `canonical/runtime-assets/cursor/rules/`; the file ships into `.cursor/rules/` manually until the sync script is extended.
+
+## [2.0.44] - 2026-05-23
+
+### Added
+
+- **Interface integration contract layer** — Added `interfaceIntegrationContractPacket` for internal API boundary work and third-party provider integrations, including interface inventory, field ledger, unknown classification, evidence references, review gates, contract test matrix, and owner approvals.
+- **Integration review gates** — Added explicit gates for source-of-truth evidence, contract diffs, signature/auth, idempotency, callbacks/webhooks, error models, state machines, sandbox/contract tests, security/secrets, and human owner approval.
+- **Run validation coverage** — Added validator checks and tests that reject interface integration runs without the contract packet, reject missing third-party gates, reject raw secret values, and accept a minimal valid third-party integration packet.
+
+### Changed
+
+- **Business-flow routing** — Added `internal_api_integration` and `third_party_integration` deliverable types plus integration lanes for interface contracts, provider adapters, permissions, contract tests, observability, and rollout/rollback.
+- **Capability discovery** — Added an abstract `interface-integration-contract` capability slot while keeping concrete provider tools and skills run-scoped.
+- **Version metadata** — Bumped the package version to `2.0.44`.
+
+### Fixed
+
+- **Interface guesswork gap** — Meta-theory now blocks public-ready completion when interface fields or third-party integration facts remain `blocking_unknown`, instead of letting implementation proceed from undocumented assumptions.
+
+## [2.0.43] - 2026-05-22
+
+### Added
+
+- **Project-local execution-agent creation policy** — Added `create_project_local_agent` for user-project runs where no global or existing project-local owner fits a recurring orchestration node.
+- **Required governance participation checks** — Added mandatory Critical, Fetch, Thinking, and Review participant coverage, including `meta-chrysalis` review participation when an execution agent is created or upgraded.
+- **Agent factory validation coverage** — Added run-artifact tests for direct global reuse, project-local upgrade, project-local creation, missing Chrysalis review, and missing Fetch governance participation.
+
+### Changed
+
+- **Open-source vs user-project boundary** — Clarified that the Meta_Kim repository itself keeps only the 9 governance meta agents, while downstream user projects may reuse, upgrade, or create execution agents under governance review.
+- **Factory dispatch shape** — New execution-agent creation now requires a `factory_then_dispatch` board instead of being treated as direct dispatch.
+
+### Fixed
+
+- **Paper-only agent factory gap** — The validator now rejects runs that claim owner creation without the matching project-local creation policy, capability gap packet, execution agent card, and required governance participants.
+- **Governance coverage drift** — Project validation now locks the required stage participant contract so future changes cannot silently drop the meta agents that must review orchestration nodes.
+
+## [2.0.42] - 2026-05-22
+
+### Added
+
+- **Chinese architecture map** — Added a detailed Chinese-first architecture document covering canonical sources, runtime projections, the 8-stage spine, the 11-phase business workflow, hidden governance packets, memory layers, Graphify, install/update flow, and runtime capability boundaries.
+- **MCP memory recall regression tests** — Added setup coverage for generic prompts that must still recall recent high-signal project memory, including buried MCP Memory Service details inside long checkpoint records.
+
+### Changed
+
+- **Layer 3 memory recall strategy** — Codex, Cursor, OpenClaw, and Claude hooks now use multi-query recall, recent-project fallback, high-signal memory prioritization, topic-level dedupe, and keyword-centered excerpts instead of relying on a single project-name search.
+- **MCP memory health handling** — Runtime hooks now check `/api/health`, attempt local `memory server --http` autostart when safe, and emit a throttled status notice instead of silently losing cross-session recall when the local service is down.
+- **Release notes for recent fixes** — This release rolls up the recent pushed fixes for Codex request-user-input defaults, Codex warning suppression, cross-runtime memory hook output, meta-theory choice surfaces, Claude plugin skill residue cleanup, and Graphify usage docs.
+
+### Fixed
+
+- **Healthy service but weak recall** — Fixes the case where `http://localhost:8000` is healthy but the agent only recalls Layer 3 memory when the prompt explicitly mentions the port or MCP Memory Service.
+- **Long checkpoint truncation** — Recalled memories now excerpt around high-signal terms such as `8000`, `MCP Memory Service`, `third layer`, and cross-session recall instead of truncating only from the beginning.
+- **Repeated checkpoint noise** — Similar stop/session checkpoint records are deduped at the topic level so old repeated MCP startup notes do not drown out current project memory.
+
+## [2.0.41] - 2026-05-21
+
+### Fixed
+
+- **Language-source status notices** — Run status notices now resolve language from the runtime/tool selected output language first, then explicit output-language choice, then latest user input language as fallback.
+- **No fixed-language notice shell** — Removed fixed Chinese/English examples from the default notice template and added tests that reject any single-language default status shell.
+
+## [2.0.40] - 2026-05-21
+
+### Added
+
+- **Public meta run status envelope** — Meta-theory runs now write a cross-runtime `active-run.json` and per-run `status.json` so users can see whether governance is active, which stage is current, progress, next stage, and blockers.
+- **Run status CLI** — Added `npm run meta:run-status` for reading the current public meta-governance status, including localized inactive output.
+- **Run status tests** — Added coverage for the status envelope contract, cross-platform status-file writes, localized status text, and notice-template rules.
+
+### Changed
+
+- **Stage notices** — Replaced protocol-heavy stage examples with concise public notices that hide `Preflight`, fallback surface names, packet ids, and protocol traces by default.
+- **Runtime mirrors** — Synced project and global Claude Code, Codex, OpenClaw, and Cursor meta-theory mirrors with the status-envelope behavior.
+
+### Fixed
+
+- **Status language matching** — Public status labels and stage purpose text now follow the user's selected or inferred language while keeping canonical stage labels such as `Critical` and `Fetch` in English.
+
+## [2.0.39] - 2026-05-20
+
+### Added
+
+- **Research capability preflight** — `contentEvidencePacket` now requires `researchCapabilityDiscovery` so evidence owners must prove current-runtime retrieval capabilities before deep research or user-facing option framing.
+- **Run artifact validation for research discovery** — `validate-run-artifact` now validates the research capability preflight and rejects missing discovery evidence.
+
+### Changed
+
+- **Capability-proof research routing** — Conductor, Artisan, Scout, and Prism now route research from observed retrieval capabilities (`web_search`, `url_fetch`, `docs_lookup`, MCP/plugin/search/user-supplied sources) instead of host form-factor assumptions.
+- **Runtime research fixtures** — Valid and invalid run artifacts now include explicit retrieval capability discovery evidence.
+
+### Fixed
+
+- **Platform-surface drift** — `platformSurface` is explicitly rejected as a research capability signal, preventing `desktop/cli/web/ide` guesses from driving cross-runtime search decisions.
+
+## [2.0.38] - 2026-05-20
+
+### Added
+
+- **Abstract meta-skill provider contract** — Meta agents now keep long-term access to `meta-theory`, `agent-teams-playbook`, `findskill`, `superpowers`, and `ecc` as fixed meta-skill provider packages while selecting concrete child skills only at runtime.
+- **Capability index inheritance tests** — Added setup coverage that locks the provider-package contract across the canonical capability index, schema, validator, and runtime mirrors.
+- **Release/install workflow lanes** — Added business-flow contract coverage for runtime package, install, and release lanes.
+
+### Changed
+
+- **Meta-agent capability slots** — Updated all 9 canonical meta agents to declare abstract long-term capability slots instead of permanent concrete child skill dependencies.
+- **Runtime capability discovery** — `discover:global` now regenerates the abstract slot, meta-skill provider, run-only skill selection, and long-term identity policy fields instead of dropping them on refresh.
+- **Graphify governance** — Strengthened graphify wiring checks so code graph freshness remains part of the verified release path.
+
+### Fixed
+
+- **Concrete skill persistence** — Prevents concrete selections such as provider child skills from being written into long-term meta-agent identity.
+- **Global sync drift** — Refreshed global meta-theory directory skills for Claude Code, Codex, OpenClaw, and Cursor so updated installs receive the current multi-file skill layout.
+
+## [2.0.37] - 2026-05-20
+
+### Changed
+
+- **Role-family display names** — Standardized user-visible worker labels at the role-family level and moved run-specific scope into structured instance and shard metadata.
+- **Run artifact fixtures** — Aligned sample artifacts with the role-family naming policy.
+
+### Fixed
+
+- **Postinstall on Node ESM** — Fixed `scripts/postinstall-check.mjs` so npm install no longer fails with `ReferenceError: require is not defined in ES module scope`.
+- **Postinstall coverage** — Added a setup test that runs the postinstall checker under Node to catch ESM/CommonJS regressions.
+
+## [2.0.36] - 2026-05-20
+
+### Added
+
+- **Business-flow blueprint gate** — Adds a pre-dispatch blueprint step that derives task-specific business lanes from the requested outcome and records coverage decisions.
+- **Business-readable agent roles** — Separates user-visible role names from runtime nicknames, and supports same-agent multi-instance sharding with explicit isolation, collision, and merge rules.
+- **Run artifact validation fixtures** — Added positive and negative fixtures for same-owner sharded execution and overlapping shard rejection.
+
+### Changed
+
+- **Capability-first orchestration** — Every business lane now records global agent/skill search evidence, selected owner, selection reason, and coverage status before worker packets are created.
+- **Owner gap handling** — Existing owner reuse, owner upgrade, and new owner creation are now explicit `agentBlueprintPacket` decisions with required gap/card follow-through when coverage is missing.
+- **Run index ownership** — Owner queries now cover governance owners, execution owner agents, and business role names.
+
+### Fixed
+
+- **MCP agent inventory** — `meta-runtime-server` self-test now exposes all 9 meta agents, including `meta-chrysalis`.
+- **Static contract drift** — Project validation now checks the new blueprint packets, role fields, dispatch envelope fields, and worker shard fields.
+- **Cross-runtime documentation** — Runtime capability matrix now documents blueprint and role-naming parity across Claude, Codex, OpenClaw, and Cursor.
+
+## [2.0.35] - 2026-05-20
+
+### Changed
+
+- **Meta-theory confirmation flow** — Clarified that blocking Critical questions only happen when Fetch cannot proceed, while the main user choice happens once after Fetch + Thinking and before Execution.
+- **Product-readable decision cards** — Expanded decision templates so every pre-execution choice includes 3-4 options with expected result, advantages, and disadvantages in non-technical language.
+- **9-agent documentation parity** — Updated Codex/README/test wording to include `meta-chrysalis` alongside the existing meta agents.
+
+### Fixed
+
+- **Hook layering** — Removed the duplicated Claude-only `skip-reminder.mjs` source and made Claude sync consume the shared hook plus its shared i18n dependency.
+- **Install package contents** — Narrowed the npm `files` whitelist so local `scripts/.meta-kim` state is not packed, and ignored the removed `package-lock.json`.
+- **Evolution contract path** — Pointed scar writeback storage to the existing `config/contracts/scar-protocol.md`.
+- **Setup counts** — Replaced hardcoded 8-agent setup labels with the canonical agent count.
+
+## [2.0.34] - 2026-05-20
+
+### Added
+
+- **meta-chrysalis agent** — New specialist for Evolution writeback orchestration, automating the flow from spine evolution artifacts to canonical source updates with Five Criteria validation and recursion prevention.
+- **Evolution Writeback Gate** — Added `scripts/evolution-writeback-gate.mjs` with Five Criteria validation, PRIN-ST compliance checks, circular dependency detection, and threshold gaming prevention.
+- **Evolution signal detection** — Added `scripts/detect-evolution-signals.mjs` for automatic discovery of reusable patterns and agent drift from commit history and runtime behavior.
+- **Meta-Kim aggregate** — Added `scripts/meta-kim-aggregate.mjs` for cross-runtime intelligence gathering and pattern synthesis.
+- **Hook i18n support** — Added `canonical/runtime-assets/shared/hooks/hook-i18n.mjs` with 4-language support (en, zh-CN, ja-JP, ko-KR) for user-facing hook messages.
+- **Skip reminder hook** — Added `canonical/runtime-assets/shared/hooks/skip-reminder.mjs` and `claude/hooks/skip-reminder.mjs` for consistent hook skip notifications across runtimes.
+- **User interaction templates** — Added `canonical/templates/user-interaction/` with decision, batch-decision, and notice templates for runtime-agnostic user interaction patterns.
+- **postinstall check** — Added `scripts/postinstall-check.mjs` for i18n capability index discovery prompts after npm install.
+- **Unit tests** — Added `tests/unit/skip-reminder.test.mjs` with 17 test cases for skip reminder functionality.
+
+### Changed
+
+- **meta-theory Clarity Gate** — Redesigned from Critical-stage confirmation to unified post-Thinking confirmation with 4+ questions, 3-4 options each, reducing interruptions while maintaining quality.
+- **All 9 meta agents** — Updated SOUL.md files with evolution writeback boundaries and clarified职责范围.
+- **Workflow contract** — Enhanced `config/contracts/workflow-contract.json` with evolutionWritebackPacket and capabilityGapPacket schemas.
+- **Capability index** — Expanded `config/capability-index/meta-kim-capabilities.json` with evolution-related capabilities.
+- **Runtime sync** — Enhanced `scripts/sync-runtimes.mjs` with --reverse mode for runtime-to-canonical evolution feedback and improved hook dependency management.
+
+### Fixed
+
+- **i18n compliance** — Fixed hardcoded English strings in hooks to use translation functions.
+- **PRIN-ST violations** — Replaced magic strings with SKIP_DECISION constants and configuration-driven values.
+- **Keyword detection** — Improved SIMPLE_KEYWORDS with regex word boundaries to reduce false positives.
+
+## [2.0.32] - 2026-05-19
+
+### Added
+
+- **Runtime hook mapping contract** — Added `scripts/runtime-hook-mapping.mjs` to centralize Claude/Codex/OpenClaw/Cursor hook capability mapping, command quoting, and HookPrompt adapter generation.
+- **HookPrompt Codex/Cursor adapter paths** — HookPrompt now declares runtime-neutral prompt optimization capability and installs to Codex through a `UserPromptSubmit` adapter and Cursor through a `beforeSubmitPrompt` adapter instead of pretending the Claude hook file is directly portable.
+- **Hook mapping validation** — `meta:validate` now checks Codex and Cursor hook output paths, HookPrompt platform support, and cross-platform hook command quoting.
+- **Shared hooks source files** — New `canonical/runtime-assets/shared/hooks/` directory with portable source files:
+  - `activate-meta-theory-spine.mjs`: spine auto-trigger implementation
+  - `spine-state.mjs`: spine state management utilities
+  - `utils.mjs`: shared hook utilities
+- **Codex Skill hook support** — Updated `scripts/sync-runtimes.mjs` to configure Skill hook for Codex runtime, enabling spine auto-trigger across platforms.
+- **SHARED_HOOK_FILES alias** — Added `SHARED_HOOK_FILES` export in `scripts/runtime-sync-check.mjs` with alias `CLAUDE_HOOK_FILES` for backwards compatibility.
+- **MCP Memory hook auto-fix** — Hook installer now detects and auto-fixes invalid Python paths in existing hook registrations. See `scripts/install-mcp-memory-hooks.mjs --force` for manual update.
+
+### Changed
+
+- **Cursor hook stance** — Cursor is mapped as a native lowerCamel hook runtime through `.cursor/hooks.json` and `.cursor/hooks/`, including memory, graphify, and HookPrompt adapter hooks.
+- **Codex hook stance** — Codex is documented as a trusted project/user hook runtime with `.codex/hooks.json`, including graphify, memory, meta-theory spine, and HookPrompt adapter hooks.
+- **settings.json Skill hook** — PreToolUse matcher now routes to shared `activate-meta-theory-spine.mjs` for automatic spine state initialization.
+- **Capability index update** — Added spine-related capabilities to `config/capability-index/meta-kim-capabilities.json`.
+
+### Removed
+
+- **package-lock.json** — Deleted (project uses pnpm with `pnpm-lock.yaml`).
+
 ## [2.0.30] - 2026-05-15
 
 ### Changed

@@ -34,6 +34,17 @@ function runDryRun(extraArgs = []) {
   };
 }
 
+function runFullDryRun(extraArgs = []) {
+  const result = spawnSync(process.execPath, [SCRIPT, "--dry-run", ...extraArgs], {
+    encoding: "utf8",
+    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+  });
+  return {
+    status: result.status,
+    out: (result.stdout || "") + (result.stderr || ""),
+  };
+}
+
 function stripAnsi(s) {
   return s.replace(/\u001b\[[0-9;]*m/g, "");
 }
@@ -61,11 +72,10 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     );
   });
 
-  test("Claude marketplace path is exercised for everything-claude-code / ecc", () => {
+  test("Claude marketplace path is exercised for ECC", () => {
     const { status, out } = runDryRun();
     assert.equal(status, 0);
     const plain = stripAnsi(out);
-    assert.match(plain, /everything-claude-code/);
     const marketplaceExercised =
       /claude plugin install ecc@ecc/.test(plain) ||
       /ecc@ecc.*(already installed|已安装|이미 설치됨|既にインストール)/i.test(
@@ -77,23 +87,86 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     );
     assert.doesNotMatch(plain, /ecc@everything-claude-code/);
     assert.doesNotMatch(plain, /everything-claude-code@everything-claude-code/);
+    assert.doesNotMatch(plain, /claude plugin install everything-claude-code@ecc/);
   });
 
-  test("Codex runtime extracts .codex/ subdir for superpowers", () => {
+  test("ECC non-Claude runtimes use upstream native installer, not skills fallback", () => {
     const { status, out } = runDryRun();
     assert.equal(status, 0);
     const plain = stripAnsi(out);
+    assert.match(plain, /npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target codex/);
     assert.match(
+      plain,
+      /ensure .*\.codex.*config\.toml has \[features\]\.default_mode_request_user_input = true/,
+    );
+    assert.match(
+      plain,
+      /ecc: run from each cursor project root: npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target cursor/,
+    );
+    assert.doesNotMatch(
+      plain,
+      /git sparse-checkout https:\/\/github\.com\/affaan-m\/ECC\.git:\.codex ->/,
+    );
+    assert.doesNotMatch(
+      plain,
+      /git sparse-checkout https:\/\/github\.com\/affaan-m\/ECC\.git:skills ->/,
+    );
+  });
+
+  test("ECC opencode target is accepted and uses upstream home installer", () => {
+    const { status, out } = runDryRun(["--targets", "opencode"]);
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(
+      plain,
+      /npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target opencode/,
+    );
+  });
+
+  test("Qoder target is accepted for probes but not treated as an ECC target", () => {
+    const { status, out } = runFullDryRun(["--skills", "ecc", "--targets", "qoder"]);
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.doesNotMatch(plain, /Unknown runtime target: qoder/);
+    assert.doesNotMatch(
+      plain,
+      /ecc install --profile core --target qoder/,
+    );
+  });
+
+  test("ECC filtered installs do not trigger generic skill fallback", () => {
+    const { status, out } = runFullDryRun(["--skills", "ecc", "--targets", "zed"]);
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(
+      plain,
+      /ecc: run from each zed project root: npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target zed/,
+    );
+    assert.doesNotMatch(plain, /undefined/);
+    assert.doesNotMatch(plain, /skill-creator/);
+    assert.doesNotMatch(plain, /sparse install https:\/\/github\.com\/affaan-m\/ECC\.git/);
+    assert.doesNotMatch(plain, /git clone https:\/\/github\.com\/affaan-m\/ECC\.git/);
+  });
+
+  test("Codex runtime uses native plugin flow for superpowers", () => {
+    const { status, out } = runDryRun();
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(plain, /codex plugin add superpowers@openai-curated/);
+    assert.doesNotMatch(
       plain,
       /git sparse-checkout https:\/\/github\.com\/obra\/superpowers\.git:\.codex ->/,
     );
   });
 
-  test("Cursor runtime extracts .cursor/ subdir for superpowers", () => {
+  test("Cursor runtime uses native plugin flow for superpowers", () => {
     const { status, out } = runDryRun();
     assert.equal(status, 0);
     const plain = stripAnsi(out);
-    assert.match(
+    assert.match(plain, /Cursor native plugin required/);
+    assert.match(plain, /\/add-plugin superpowers/);
+    assert.match(plain, /does not currently expose a non-interactive plugin install command/);
+    assert.doesNotMatch(
       plain,
       /git sparse-checkout https:\/\/github\.com\/obra\/superpowers\.git:\.cursor ->/,
     );
