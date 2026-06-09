@@ -16,21 +16,17 @@ description: |
 # Meta-Theory Dispatcher
 
 ## Purpose
-
 Run Meta_Kim as an executable governance system, not a theory essay. The main thread locks intent, gathers evidence, chooses route, delegates bounded work, reviews, verifies, and synthesizes. It must not become a generic implementation worker for non-trivial work.
 
 ## Trigger
-
-Activate when the user calls `/meta-theory`, names meta-theory, asks for governance, multi-file execution, agent design, capability discovery, runtime/platform compatibility, public-ready validation, complex debugging, or durable evolution writeback.
+Activate from ordinary natural-language durable work, not only from command words. If the user asks to plan and start work, organize priorities, produce repair suggestions, build a verification checklist, fix a non-trivial issue, handle multi-file execution, run review/verification, or resolve subjective/taste-dependent quality, classify the entry and choose the governed route automatically. Explicit `/meta-theory`, `meta-theory`, or `元理论` mentions are maintainer shortcuts, not required human behavior.
 
 ## Path classification
-
 - `fast_path`: read-only query, no mutation, no durable artifact. Output may be direct, but evidence claims still need source.
 - `standard_path`: ordinary executable work. Use the 8-stage spine and capability-first route.
 - `regulated_path`: governance, security, runtime, dependency, release, public-ready, or cross-platform work. Require full spine, Review, Meta-Review, Verification, and Evolution.
 
 ## Canonical spine
-
 Critical -> Fetch -> Thinking -> Execution -> Review -> Meta-Review -> Verification -> Evolution.
 
 You are the DISPATCHER, not the executor. Use Agent tool / `Agent(...)` dispatch only after Fetch evidence and Thinking owner resolution prove the route.
@@ -54,9 +50,9 @@ Important: Architecture Type Distinction. Meta Architecture means agent governan
 | # | Stage | Action | Interaction |
 |---|---|---|---|
 | 1 | Critical | clarify intent first, lock user pain, value, success criteria, non-goals, permissions, and Architecture Type; for wishful or ambiguous input, enter Critical-Fetch intent loop: translate intent -> read context -> enrich intent -> present IntentCard for user confirmation (up to `criticalFetchLoopMax` rounds) | If a required intent dimension is missing and the answer changes route, scope, risk, or non-goal, set `choiceSurfaceState = critical_clarification_allowed` and ask before proceeding. Do not present execution options during Critical. Present an IntentCard after context-enriched intent translation; user confirms or corrects through the runtime adapter's verified choice surface, or a chat decision card fallback. |
-| 2 | Fetch | gather online/web and local evidence, confirm the problem, extract material claims, run targeted read-only baseline verification when it changes the route, and list candidate solutions with sources | If evidence suggests multiple valid paths with different trade-offs, surface the options in the user's language before Thinking. |
-| 3 | Thinking | determine needed execution capabilities across agents, skills, commands, MCP capabilities, and tools; match existing capabilities; create or upgrade only for gaps; plan DAG/parallel/serial lanes with `mergeOwner` | Present at least 2 candidate paths with a recommended default. Ask the user to confirm the chosen path before Execution. |
-| 4 | Execution | run multi-agent work using skills, commands, MCP capabilities, and tools from Thinking artifacts | No interaction unless route-changing discovery occurs mid-execution — then pause and inform. |
+| 2 | Fetch | gather online/web and local evidence, confirm the problem, list candidate solutions with sources, extract material claims, run targeted read-only baseline verification when it changes the route, discover retrieval capabilities, complete a multi-type capability inventory before Thinking, and build a change fact card before any file mutation | If evidence suggests multiple valid paths with different trade-offs, surface the options in the user's language before Thinking. If current external facts or third-party capability claims matter, `meta-scout` or an equivalent evidence owner must finish source-backed research before Thinking. |
+| 3 | Thinking | determine needed execution capabilities across governance agents, execution agents, skills, scripts, commands, MCP capabilities/providers/tools, runtime tools, plugins/connectors, retrieval capabilities, dependency/external packages, and run-scoped workerTasks; match existing capabilities; create or upgrade only for gaps; bind the file delivery contract; plan DAG/parallel/serial lanes with `mergeOwner` | Present at least 2 candidate paths with a recommended default. Ask the user to confirm the chosen path before Execution. |
+| 4 | Execution | run multi-agent work using the agents, skills, scripts, commands, MCP capabilities, runtime tools, plugins/connectors, retrieval capabilities, dependencies, and tools selected by Thinking artifacts | No interaction unless route-changing discovery occurs mid-execution — then pause and inform. |
 | 5 | Review | meta-prism checks upstream Critical, Fetch, Thinking, and result quality | If review finds issues that require user preference (quality vs speed trade-off), ask before proceeding. |
 | 6 | Meta-Review | meta-warden verifies Review standard and public-ready gate | No interaction. Internal governance check. |
 | 7 | Verification | run real tests with fresh evidence and `verificationPacket.fixEvidence` | No interaction. Run checks and record evidence. |
@@ -104,37 +100,45 @@ Dispatch to `meta-prism` and `meta-warden`; optional `meta-scout`, `meta-sentine
 
 ## Type E: Orchestration / Business Flow / Release
 
-Dispatch to `meta-conductor` for business-flow blueprint and parallel lane orchestration, then `meta-warden` for synthesis. Thinking to Execution may use `agent-teams-playbook` only when there are 2+ independent parallel worker lanes / two or more parallel worker lane candidates. Independent sub-tasks must be parallelized when safe; avoid fake parallelism.
+Dispatch to `meta-conductor` for dynamic business-flow blueprint and parallel lane orchestration, then `meta-warden` for synthesis. Conductor must classify the user's natural-language intent, choose lanes by evidence and dependency signals, record omitted lanes with reasons, and only then fan out worker tasks. Thinking to Execution may use `agent-teams-playbook` only when there are 2+ independent parallel worker lanes / two or more parallel worker lane candidates. Independent sub-tasks must be parallelized when safe; avoid fake parallelism.
+
+Routine Type E release work defaults to lightweight smoke when the change is low-risk prompt/docs/governance wording, changelog, or version metadata. Use `meta:release:smoke` plus `git diff --check`, then commit/tag/publish without upgrading to full live gates unless risk or the user asks. Release-grade Type E is reserved for install/update, global sync, hooks, runtime matrix, provider registry, dependency compatibility, probes, package contents, security-sensitive behavior, or explicit full/live evidence requests; detailed evidence chains live in `dev-governance.md`, `owner-resolution.md`, and `verification-evidence.md`. Validators, gates, and hooks are protection, not the engine; if they patch missing route evidence after the fact, return to Thinking before public-ready or release.
 
 ## Dispatch Self-Check
 Before Stage 4, record the minimum Protocol-first Dispatch evidence: intent, Fetch evidence, a Thinking route, selected owner, owner loadout, memory strategy, and Review standard. Preferred artifacts are `runHeader`, `dispatchBoard`, `businessFlowBlueprintPacket`, `agentBlueprintPacket`, `ownerDiscoveryPacket`, and `workerTaskPackets`, but hooks must not require every optional field before useful work can continue. `agentInvocationState`: `idle -> discovered -> matched -> dispatched -> returned/escalated`. `workerTaskPackets` should include `dependsOn`, `parallelGroup`, and `mergeOwner` when the task has multiple lanes; single-lane work may record a compact task node. `ownerDiscoveryPacket` should list repo canonical owners, runtime mirror owners, project runtime agents, local global agents, reusable skill/command/hook/rule/prompt/MCP/plugin/tool providers, and the Critical / Fetch / Thinking / Review governance-stage owners checked before any create or upgrade decision. Option Exploration is MANDATORY when materially different paths exist: compare ≥2 solution paths with Pros / Cons or Decision Record, or record `no_branching_choice` with evidence. Apply Skip-Level Self-Reflection Gate and Escalation Signals before dispatch.
 
 ## Fetch Evidence Inventory
 
-Research -> Inventory -> Thinking Handoff. Thinking determines needed execution capabilities, then match existing capabilities, then create or upgrade only for gaps. Fetch material claims include version, price, third-party, platform, and tool assertions. If current facts matter, set `contentEvidencePacket.researchRequired = true`, run `researchCapabilityDiscovery`, and prefer `web_search`, `url_fetch`, `docs_lookup`, or `browser_open`. If research is blocked, return `blocked` with `user_fallback` rather than guessing. Run Command discovery by package.json script scan and npm run inventory. Apply DRY conflict detection: overlap detect, duplicate reject, and keep one owner per capability. Skill selection ROI = (Task Coverage x Usage Frequency) / (Context Cost + Learning Curve).
+Research -> Inventory -> Thinking Handoff. Fetch first records the question, source requirements, retrieval capability readiness, and multi-type capability inventory. Thinking determines needed execution capabilities after Fetch, matches existing capabilities, and creates or upgrades only for gaps. Fetch material claims include version, price, third-party, platform, current web state, dependency, provider, and tool assertions. If current facts matter, set `contentEvidencePacket.researchRequired = true`, run `researchCapabilityDiscovery`, and prefer `web_search`, `url_fetch`, `docs_lookup`, `browser_open`, `mcp_search`, or `plugin_search` before route design. If research is blocked, return `blocked` with `user_fallback` rather than guessing. Run command/script discovery by package.json script scan and npm run inventory. Apply DRY conflict detection: overlap detect, duplicate reject, and keep one owner per capability. Capability selection ROI = (Task Coverage x Usage Frequency) / (Context Cost + Learning Curve).
 
 Fetch discovery minimum checklist: before Thinking, search at least these locations (even if results are empty):
-- `~/.claude/agents/` and `.claude/agents/` (global and project-local agents)
-- `.claude/skills/` (project-local skills)
-- `.mcp.json` / MCP server inventory
-- `config/capability-index/*.json`
-- `package.json` scripts
+- canonical sources and capability indexes: `canonical/agents/`, `canonical/skills/`, `canonical/runtime-assets/`, `config/capability-index/*.json`, and runtime capability-index mirrors
+- Claude Code project and global inventories: `.claude/agents/`, `.claude/skills/`, `.claude/commands/`, `.claude/hooks/`, `.claude/settings.json`, `~/.claude/agents/`, `~/.claude/skills/`, `~/.claude/commands/`, `~/.claude/hooks/`, and `~/.claude/settings.json`
+- Codex project and global inventories: `.codex/agents/`, `.agents/skills/`, `.codex/commands/`, `.codex/hooks/`, `.codex/hooks.json`, `.codex/config.toml`, `~/.codex/agents/`, `~/.codex/skills/`, `~/.codex/commands/`, `~/.codex/hooks/`, `~/.codex/hooks.json`, `~/.codex/config.toml`, and `~/.agents/skills/`
+- Cursor project and global inventories: `.cursor/agents/`, `.cursor/skills/`, `.cursor/rules/`, `.cursor/prompts/`, `.cursor/hooks/`, `.cursor/hooks.json`, `.cursor/mcp.json`, `~/.cursor/agents/`, `~/.cursor/skills/`, `~/.cursor/rules/`, `~/.cursor/prompts/`, `~/.cursor/hooks/`, and `~/.cursor/hooks.json`
+- OpenClaw project and global inventories: `openclaw/workspaces/`, `openclaw/skills/`, `openclaw/hooks/`, `openclaw/openclaw.template.json`, `~/.openclaw/openclaw.json`, `~/.openclaw/workspace-*`, `~/.openclaw/skills/`, `~/.openclaw/hooks/`, and `~/.agents/skills/`
+- runtime package and command providers: `package.json` scripts, local scripts, runtime commands, hooks, validators, prompts/rules, setup/status/doctor/sync/install routes
+- `.mcp.json`, runtime MCP config such as `.codex/config.toml` and `.cursor/mcp.json`, MCP server/tool inventory, and connector/plugin inventories
+- `config/runtime-capability-matrix.json`, `config/os-compatibility-matrix.json`, `config/capability-index/dependency-project-registry.json`, and dependency/external package registries
+- retrieval capability inventory: `web_search`, `url_fetch`, `docs_lookup`, `browser_open`, `mcp_search`, `plugin_search`, `local_only`, and user-supplied source paths
 
-Pass condition: `fetchPacket.capabilityDiscovery.searchLog` exists with checked sources and results.
+Pass condition: `fetchPacket.capabilityDiscovery.searchLog` exists with checked sources and results, including empty or unavailable source entries; `fetchPacket.capabilityDiscovery.capabilityInventory` covers all capability types and all runtime-specific paths that affect the route; and planned file mutation records `fileChangeFactCard`; detailed schema lives in `dev-governance.md`.
 
 Fetch angle decomposition: for research or analysis tasks (when `contentEvidencePacket.researchRequired = true`), decompose the core question into N semantically distinct search angles before searching. Each angle must target a different aspect; rephrasing the same angle is forbidden. Output: `contentEvidencePacket.searchAngles = [{angle, keywords, expectedCoverage}]`. Default N=3; increase for complex multi-domain questions.
 
-Execution-agent identity must stay abstract and provider-first. Durable `executionAgentCard` content may describe a reusable capability class, boundaries, abstract dependencies, inputs, and outputs; it must not contain repo paths, file lists, tickets, one-run work instructions, `todayTask`, `scopeFiles`, `deliverableLink`, or `verifySteps`. Match existing agents, skills, commands, hooks, rules/prompts, MCP tools, runtime tools, and plugins before creating or upgrading an execution agent. Put concrete work in `workerTaskPackets`, `capabilityBindings`, and `orchestrationTaskBoardPacket` only. If a card cannot be written without concrete task binding, return to Thinking and reuse an existing owner/provider or emit `capabilityGapPacket`.
+Graphify knowledge policy: Graphify is an agent capability, not a context dump. At run start, use existing `graphify-out/GRAPH_REPORT.md`, `graphify-out/graph.json`, or wiki indexes as navigation if present; do not run a global freshness check or rebuild just because a graph exists. Use graph queries and subgraph slices to locate relevant modules, concepts, and file anchors, then verify route-changing claims against source files. Inject only worker-relevant graph slices, short hints, and file anchors; never inject the full `graph.json`, full `GRAPH_REPORT.md`, or broad graph dumps into every worker. After code, canonical, contract, or runtime-facing doc mutation, rebuild Graphify in Verification/Evolution; reserve `meta:graphify:check` for verification, release, public-ready, or explicit graph validation.
+
+Execution-agent identity must stay abstract and provider-first. Durable `executionAgentCard` content may describe a reusable capability class, boundaries, abstract dependencies, inputs, and outputs; it must not contain repo paths, file lists, tickets, one-run work instructions, `todayTask`, `scopeFiles`, `deliverableLink`, or `verifySteps`. Match existing agents, skills, commands, hooks, rules/prompts, MCP tools, runtime tools, and plugins before creating or upgrading an execution agent. Put concrete work in `workerTaskPackets`, `capabilityBindings`, and `orchestrationTaskBoardPacket` only. If a card cannot be written without concrete task binding, return to Thinking and reuse an existing owner/provider or emit `capabilityGapPacket`. When `GapDecision = create_agent`, require a `GeneratedAgentSpec` review artifact with flow position, handoff, loadout slots, scoped memory, gap policy, verification policy, install projection, and identity-cleanliness proof before any agent file is written.
 
 Capability scan UX: full global scans happen on install, update, explicit refresh, missing cache, cache older than 14 days, missing required provider, or high-risk provider routes. Normal execution reads cached global inventory, performs a lightweight project scan, shows only counts/top candidates/source refs, and avoids dumping full provider definitions into chat. If the last full scan is older than 2 weeks, tell the user this run will update first to match newly added content and reach the best capability route, then refresh before execution.
 
 ## Warden Entry Gate
 
-`/meta-theory` enters through `meta-warden` entry gate, then `meta-conductor` owns the evidence lane and sequencing, `meta-scout` owns external evidence, and `meta-prism` audits Critical, Fetch, and Thinking quality before output polish. All meta agents are dispatch targets: `meta-warden`, `meta-conductor`, `meta-scout`, `meta-artisan`, `meta-genesis`, `meta-sentinel`, `meta-librarian`, `meta-prism`, `meta-chrysalis`.
+Governed meta-theory entry enters through `meta-warden` entry gate, whether it was triggered by ordinary natural language or by an explicit maintainer shortcut. Then `meta-conductor` owns the evidence lane and sequencing, `meta-scout` owns external evidence, and `meta-prism` audits Critical, Fetch, and Thinking quality before output polish. All meta agents are dispatch targets: `meta-warden`, `meta-conductor`, `meta-scout`, `meta-artisan`, `meta-genesis`, `meta-sentinel`, `meta-librarian`, `meta-prism`, `meta-chrysalis`.
 
 ## Product Reasoning Contract
 
-Translate the surface request into the real product problem. Compare minimal fix against ten-x path challenge and path shift. Final user-facing closure states chosen rationale, why changed / why change, what changed, where changed, user impact, and verification.
+Translate the surface request into the real product problem. Compare minimal fix against ten-x path challenge and path shift. Final user-facing closure states the root goal, what this run did, whether it still fits the root direction, whether delivery is complete or partial, chosen rationale, why changed / why change, what changed, where changed, user impact, verification, complexity added or avoided, remaining limits, deferred work, and next action.
 
 ## Decision Cross-Validation Gate
 
@@ -150,11 +154,17 @@ Stage updates must be compact, human, and in the resolved user language. Record 
 
 Public status surface uses `runStatusEnvelope`, `publicLabels`, `.meta-kim/state/{profile}/active-run.json`, and `.meta-kim/state/{profile}/runs/{runId}/status.json`. Apply runtime/tool selected output language first, then latest input language. Do not hardcode labels. The public notice must not expose internal protocol fields such as `Preflight` or `conversation_fallback` unless debug is requested.
 
+User experience truth boundary: users should not need to run `npm` scripts, inspect JSON, or know packet names to understand a governed run. Internal artifacts such as `ownerDiscoveryPacket`, `orchestrationTaskBoardPacket`, `workerTaskPackets`, and command output are evidence, not the user experience itself. When reporting orchestration, show compact localized notices for progress, route, owner handoff, blockers, and verification, and explicitly avoid claiming that users can experience a feature when it only exists as an internal artifact or maintainer-only command.
+
+Natural-language trigger rule: the user does not need to ask for stages, agents, skills, MCPs, commands, packets, or reports. If a normal human task triggers meta-theory, the dispatcher must automatically translate the internal route into a plain-language stage plan: what this stage does, what capability/loadout will be used, what result the user will see, and what starts next. Technical names may appear only as a compact backing loadout for traceability; the primary explanation must read like an operation handoff, not a protocol dump.
+
 Interactive execution communication: during multi-stage work, the dispatcher must report progress to the user at natural transition points — not only at the pre-decision gate. Report triggers: (1) Fetch complete — brief evidence summary and route impact, (2) Thinking complete — chosen path and trade-offs, (3) each Execution phase complete — what was done and what remains, (4) Review findings that change scope — surface them immediately, (5) route-changing discovery mid-execution — pause and inform. Each report is a compact notice (max 3 bullets), not a full packet dump. If the discovery changes scope, owner, or risk, upgrade the notice to a Decision card requiring user input. This "communicate while working" pattern keeps the user informed and in control without requiring them to ask for status.
 
-## Business-flow capability matrix
+## Dynamic business-flow capability matrix
 
-Fetch expands executable deliverables into a Business-flow capability matrix covering product, UX, UI, frontend, backend, database, motion, accessibility, browser QA, performance, feedback, and evolution lanes. Thinking selects owners, dependencies, and merge owner per lane.
+Fetch expands executable deliverables into a Business-flow capability matrix by intent signals, not by a fixed template. The candidate lane universe may include product, research, content, UX, UI, frontend, backend, database, integration, security, motion, accessibility, browser QA, performance, release, feedback, and evolution. Thinking selects only the lanes justified by the current task, records omitted lanes with reasons, binds dependencies and merge owner per selected lane, and uses fan-out / synthesize / adversarial verification when the task has independent work streams.
+
+Selected dynamic lanes must synthesize project-scoped agent profiles from the current project profile and capability requirements. Thinking records them in `projectAgentBlueprintPacket` with `ownerMode = project-agent-profile`, a pinned `capabilityProfileId`, `capabilityLoadout`, `roleSoulPolicy`, project memory strategy, `externalEvidencePolicy`, `localBaselineComparison`, and `knowledgeGraphPolicy`. Current external claims such as platform rules, provider/API capability, dependency versions, pricing, compliance, security, release, or third-party workflow feasibility require source-backed Fetch evidence through `web_search`, `url_fetch`, `docs_lookup`, `browser_open`, `mcp_search`, or equivalent runtime retrieval before route lock; if that evidence is unavailable, block or return to Fetch instead of guessing. Every selected lane must also compare against local reality before dispatch: canonical agents/skills/contracts, capability indexes, runtime mirrors, package scripts, MCP configs, OS/runtime matrices, project memory, and graph navigation slices when available. Execution then creates only run-scoped worker instances from those profiles. Capability updates change the capability profile for future runs; in-flight workers keep the pinned profile. A synthesized profile becomes a durable high-quality project agent file only through `GapDecision = create_agent` plus the Type B `GeneratedAgentSpec` review path.
 
 ## Evolution target map
 
@@ -172,8 +182,8 @@ Fetch expands executable deliverables into a Business-flow capability matrix cov
 | Stage | Required packet | Pass condition |
 |---|---|---|
 | Critical | `intentPacket`, `taskClassification` | outcome, success criteria, non-goals, permissions, blocking unknowns recorded |
-| Fetch | `fetchPacket`, `foundationalCapabilityPreservationPacket`, `dependencyCapabilityAuditPacket` | evidence changes route/risk/owner/verification or records no-impact |
-| Thinking | `dispatchBoard`, `workerTaskPackets`, `routeScoreBreakdown` | selected route has owner + weapon + dependency policy + runtime + OS + verification owner |
+| Fetch | `fetchPacket`, `foundationalCapabilityPreservationPacket`, `dependencyCapabilityAuditPacket`, `fileChangeFactCard` when mutation is planned | evidence changes route/risk/owner/verification or records no-impact; planned file changes have purpose, consumer, overlap, data-shape, and user-instruction evidence |
+| Thinking | `dispatchBoard`, `workerTaskPackets`, `routeScoreBreakdown` | selected route has owner + weapon + dependency policy + runtime + OS + verification owner; worker tasks bind target files to their consumer and delivery contract |
 | Execution | `workerResultPackets`, `workerExecutionEvidence` | bounded tasks produce declared artifacts and evidence |
 | Review | `reviewPacket.findings` | upstream Critical/Fetch/Thinking and output quality are reproducibly checked |
 | Meta-Review | review-standard checks on `reviewPacket` | Review catches native/foundational/dependency/intent/public-ready/evolution risks |
@@ -221,6 +231,7 @@ Execution may start only when the key behavior gate is true (or degraded mode is
 - Owner has a usable loadout: skill, command, MCP capability, runtime tool, normal tool, or abstract prompt.
 - Runtime/OS support is not known-unsupported; unknown or partial support is recorded with a probe/degraded route.
 - Memory strategy exists (`project_only`, `cross_project_readonly`, `none-with-reason`, or equivalent).
+- For file mutation, `fileChangeFactCard` exists and each target file has a consumer/distribution path, overlap decision, and data-shape note when applicable.
 - Review standard is known. Verification owner, rollback, dependency eligibility, and detailed packet fields are required for public-ready, not as universal hook blockers.
 
 Worker output schema validation: when `workerTaskPacket.output` defines an expected structure, the dispatcher (or receiving agent) must validate the worker result against that structure before accepting it. On mismatch, the worker retries (up to 2 attempts) before reporting failure. Record `workerResultPacket.schemaValidationAttempts = [{attempt, passed, violationDetail}]`. This prevents format drift between Thinking's output contract and Execution's actual return.
@@ -232,6 +243,7 @@ Review must check upstream chain before output polish:
 - Critical locked the right user outcome and success criteria.
 - Fetch evidence changed or justified the route.
 - Thinking selected owner + weapon + dependency + runtime + OS + verification.
+- Planned file changes were justified by `fileChangeFactCard`; no new file exists only because the worker found a convenient place to write.
 - Execution evidence is reproducible.
 - No foundational capability or runtime-native ability was deleted or downgraded.
 - No reference-only dependency entered execution.
@@ -241,6 +253,8 @@ Adversarial verify pattern: when Review runs for `regulated_path` or when the us
 ## Verification gate
 
 Do not claim verified unless a command, log, artifact, or human acceptance record supports the claim. Command pass is not `userGoalDone`. Template validation is not strict run validation.
+
+Live and release-grade evidence are stricter than structural checks; smoke, config validation, UI/systemMessage output, auth-present checks, and skipped/needsAuth states cannot be relabeled as live pass. Routine low-risk releases may ship after the smoke path the user selected; release-grade claims wait for the evidence chain in `verification-evidence.md`.
 
 ## Evolution gate
 
@@ -266,11 +280,9 @@ Load only references needed for the run:
 - `meta-theory.md`: background only; do not load as execution contract unless theory terms are disputed.
 
 ## User-facing compact output rule
-
 Use the user's language. For Chinese input, output Chinese stage summaries. Each visible stage summary should be at most three bullets unless final reporting requires more.
 
 ## No fake owner
-
 Reject `general-purpose`, temporary fallback, runtime nickname, missing owner, or governance agent as implementation worker. Return to Thinking with a `capabilityGapPacket`.
 
 ## No general-purpose fallback

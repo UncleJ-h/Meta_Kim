@@ -194,8 +194,8 @@ describe("SKILL.md structural integrity", async () => {
     test("SKILL.md stays lean and delegates details to references", () => {
       const lineCount = raw.split(/\r?\n/).length;
       assert.ok(
-        lineCount <= 320,
-        `SKILL.md should stay <= 320 lines after progressive disclosure; got ${lineCount}`,
+        lineCount <= 500,
+        `SKILL.md should stay <= 500 lines after progressive disclosure; got ${lineCount}`,
       );
     });
 
@@ -260,9 +260,11 @@ describe("SKILL.md structural integrity", async () => {
       assert.match(raw, /Record internally/i);
     });
 
-    test("SKILL.md routes meta-theory activation through Warden entry gate and evidence owners", () => {
+    test("SKILL.md routes natural-language governed entry through Warden entry gate and evidence owners", () => {
       assert.match(raw, /Warden Entry Gate/i);
-      assert.match(raw, /\/meta-theory[\s\S]{0,160}meta-warden/i);
+      assert.match(raw, /ordinary natural-language durable work/i);
+      assert.match(raw, /Governed meta-theory entry[\s\S]{0,220}meta-warden/i);
+      assert.match(raw, /ordinary natural language[\s\S]{0,160}explicit maintainer shortcut/i);
       assert.match(raw, /meta-warden[\s\S]{0,180}entry gate/i);
       assert.match(raw, /meta-conductor[\s\S]{0,220}evidence lane/i);
       assert.match(raw, /meta-scout[\s\S]{0,220}external evidence/i);

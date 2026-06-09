@@ -48,6 +48,10 @@ Discovery order:
 
 Owner-resolution branches: existing owner, upgrade existing owner, create owner, or capability gap. Temporary fallback owner is forbidden. Missing capability blocks, returns to Thinking, or queues a `capabilityGapPacket` for Scout.
 
+Default execution route proof: for a real execution demand, the route must naturally resolve the full provider chain before mutation. Evidence must name the selected execution owner, the checked execution-agent sources, the agent creation capability or reason no creation is needed, the selected skill and checked skill sources, the skill creation capability or reason no creation is needed, the MCP provider or no-impact reason, the command/runtime tool, and the verification owner plus verification method. This proof belongs to Fetch and Thinking, not to a validator after Execution.
+
+Change facts before mutation: for any non-trivial, new-file, data-file, runtime-facing, or hook-gated file change, Fetch creates `fileChangeFactCard` before Execution. It records target files, the consumer/caller/distribution path, same-purpose overlap search and reuse decision, data fields/structure/date formats with redacted or synthetic examples when relevant, and the current user instruction verbatim. Thinking binds those facts into `workerTaskPackets` so Execution writes files because they have a delivery contract, not because the worker needed somewhere to put output.
+
 Step 1.7 Business-flow capability matrix: for executable deliverables, Fetch expands the work into product, UX, UI, frontend, backend, database, auth/security, motion, accessibility, browser QA, performance, release, install, feedback, and evolution lanes. Each lane records needed capability, owner candidates, dependency, and omission reason. Interface Integration Contract Layer adds `interfaceIntegrationContractPacket` for `third_party_integration` and internal integration work: interface_contract, provider_adapter, permission, contract_test, observability, rollout_rollback, blocking_unknown, and auth/signature evidence.
 
 User-visible agent naming: `roleDisplayName` is a short business role such as frontend, backend, test, review, analysis, verify, or docs. Runtime nicknames and random personal aliases belong only in `runtimeInstanceAlias`. Put shard detail in `roleInstanceId` or `shardScope`, not the visible role name.
@@ -145,6 +149,7 @@ Stage 4 may not start before:
 - `taskClassification`
 - `fetchPacket`
 - `contentEvidencePacket`
+- `fileChangeFactCard` when file mutation is planned
 - `preDecisionOptionFrame`
 - `dispatchEnvelopePacket`
 - `dispatchBoard`
@@ -169,11 +174,15 @@ Dispatch from Thinking artifacts and selected capabilities. Execution may be par
 
 Surgical hygiene: touch only files required by the task, remove only unused code caused by the change, and preserve unrelated user changes.
 
+If a write-time hook blocks with a request for file facts, return to Fetch/Thinking, present the `fileChangeFactCard` in user-facing language, and retry the same operation. Do not disable the hook, invent fake callers, or retry unchanged without the facts.
+
 ## Review
 
 Review validates owner coverage, protocol compliance, quality, security where selected, UX where selected, and AI-slop risks in agent/system definitions.
 
 Reviewers must be able to perform read-only inspection and allowed validation commands. A review that cannot inspect evidence is not a real review.
+
+Review must also check that each new or changed file has a recorded target, consumer/distribution path, overlap decision, and data-shape note where relevant.
 
 ## Verification
 
@@ -189,6 +198,15 @@ Verification uses fresh evidence, not "I tested it" claims. For every "verified"
 `accepted_risk` can close only with `riskOwner`, `riskReason`, and `expiryOrRevisitTrigger`; public-ready must stay false unless the release gate explicitly permits that risk.
 
 Insufficient evidence -> mark `INSUFFICIENT_EVIDENCE`, return to Verification, or reopen Review.
+
+Live evidence classification:
+
+- `structural_smoke`: config, schema, projection, matrix, or startup checks. Useful, but not live.
+- `ui_warning_or_system_message`: visible warning, prompt injection surface, or UI/systemMessage output. Useful, but not live unless the runtime proves it entered model/tool context and affected the invocation artifact.
+- `skipped_or_needs_auth`: honest incomplete state with blocker and retry path. Never a pass.
+- `runtime_live_pass`: a real target-runtime invocation produced a recoverable assistant/tool artifact and passed runtime-specific scoring.
+
+Do not combine categories to imply a stronger category. If Claude, Codex, or OpenClaw live is requested, each declared target must be either `runtime_live_pass` or explicitly incomplete; structural smoke cannot substitute for live.
 
 ## Rollback Protocol
 
@@ -216,6 +234,8 @@ Undefined behavior defaults to silence/pause and escalates to Warden.
 ## Summary And Public Display
 
 Public display requires verified run, summary closure, single primary deliverable, closed deliverable chain, and consolidated deliverable. Do not show public-ready when verification is incomplete.
+
+Release/publication closure has two modes. Routine low-risk patch/minor releases use the maintainer smoke path: projection sync, default capability-discovery smoke, meta-theory tests, whitespace diff check, changelog/release notes, commit, tag, push, and publish. Upgrade to the stricter release-grade chain only when the change touches install/update, global sync, hooks, runtime matrix, provider registry, dependency compatibility, runtime probes, package contents, security-sensitive behavior, or the user asks for full/live evidence. Release-grade closure records all-runtime update scope, project sync evidence, global sync evidence, global hooks evidence when hooks are in scope, runtime matrix validation, provider registry validation, dependency compatibility, runtime probe evidence or blocker, real execution-demand route proof, live runtime evidence for declared live targets, changelog/release-note readiness, security audit evidence, and Warden approval.
 
 ## Evolution
 

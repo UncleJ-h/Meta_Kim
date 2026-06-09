@@ -2,6 +2,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { GOVERNANCE_OWNERS, OS_TARGETS, RUNTIMES, classifyTaskShape, exists, readJson, repoPath, scoreRoute, stateDir, supportScore, toPosix } from "./governance-lib.mjs";
+import { CAPABILITY_GAP_DECISION_CONTRACT, decideCapabilityGap } from "./capability-gap-mvp.mjs";
 
 function argValue(name, fallback = null) {
   const index = process.argv.indexOf(name);
@@ -35,6 +36,74 @@ const intentContract = await readJson("config/governance/intent-amplification-co
 function textContains(entry, terms) {
   const text = JSON.stringify(entry).toLowerCase();
   return terms.some((term) => text.includes(term));
+}
+
+function taskContainsAny(terms) {
+  return terms.some((term) => taskText.includes(term));
+}
+
+function implicitScriptCapabilityGapRequested() {
+  const recurrenceSignal = taskContainsAny([
+    "repeat",
+    "recurring",
+    "repeatedly",
+    "every time",
+    "stable",
+    "每次",
+    "反复",
+    "重复",
+    "稳定",
+  ]);
+  const deterministicSignal = taskContainsAny([
+    "mechanical",
+    "testable",
+    "local",
+    "deterministic",
+    "json summary",
+    "json report",
+    "stage outputs",
+    "verification owner",
+    "decision output",
+    "blocked gate reason",
+    "机械",
+    "可测试",
+    "本地",
+    "自动整理",
+    "检测缺失",
+  ]);
+  const noAgentSignal = taskContainsAny([
+    "no new agent",
+    "no agent identity",
+    "不需要新 agent",
+    "不需要新agent",
+    "不需要新 agent 身份",
+    "不需要新长期身份",
+  ]);
+  return recurrenceSignal && deterministicSignal && noAgentSignal;
+}
+
+function explicitCapabilityGapRequested() {
+  return [
+    "capability gap",
+    "missing capability",
+    "missing dependency",
+    "imaginary provider",
+    "unknown provider",
+    "no provider",
+    "create skill",
+    "create agent",
+    "create script",
+    "create mcp",
+    "缺能力",
+    "能力缺口",
+    "缺少能力",
+    "缺少依赖",
+    "不存在的 provider",
+    "创建 skill",
+    "创建 agent",
+    "创建 script",
+    "创建 mcp",
+  ].some((term) => taskText.includes(term)) || implicitScriptCapabilityGapRequested();
 }
 
 function taskTerms() {
@@ -144,6 +213,25 @@ async function projectRuntimeAgents() {
       });
     }
   }
+  const openclawWorkspaces = repoPath("openclaw/workspaces");
+  if (await exists(openclawWorkspaces)) {
+    const entries = await fs.readdir(openclawWorkspaces, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const soulPath = path.join("openclaw/workspaces", entry.name, "SOUL.md");
+      if (!(await exists(repoPath(soulPath)))) continue;
+      const id = entry.name;
+      const layer = id.startsWith("meta-") ? "meta" : "execution";
+      agents.push({
+        id,
+        layer,
+        source: "project_runtime_agent_inventory",
+        runtime: "openclaw",
+        sourceRef: toPosix(soulPath),
+        executionBlock: layer === "meta",
+      });
+    }
+  }
   return agents;
 }
 
@@ -192,6 +280,42 @@ async function projectCapabilityProviders() {
   for (const spec of providerSpecs) {
     providers.push(...await scanProjectFiles(spec));
   }
+  if (await exists(repoPath(".codex/hooks.json"))) {
+    providers.push({
+      id: "codex-hooks-json",
+      type: "hooks",
+      source: "project_runtime_hook_config_inventory",
+      runtime: "codex",
+      sourceRef: ".codex/hooks.json",
+    });
+  }
+  for (const file of [
+    { id: "claude-settings-json", runtime: "claude_code", sourceRef: ".claude/settings.json" },
+    { id: "cursor-hooks-json", runtime: "cursor", sourceRef: ".cursor/hooks.json" },
+    { id: "openclaw-template-json", runtime: "openclaw", sourceRef: "openclaw/openclaw.template.json" },
+  ]) {
+    if (await exists(repoPath(file.sourceRef))) {
+      providers.push({
+        id: file.id,
+        type: "hooks",
+        source: "project_runtime_hook_config_inventory",
+        runtime: file.runtime,
+        sourceRef: file.sourceRef,
+      });
+    }
+  }
+  if (await exists(repoPath("package.json"))) {
+    const packageJson = await readJson("package.json");
+    for (const scriptName of Object.keys(packageJson.scripts ?? {})) {
+      providers.push({
+        id: `package-script:${scriptName}`,
+        type: "commands",
+        source: "package_script_inventory",
+        runtime: "shared",
+        sourceRef: `package.json#scripts.${scriptName}`,
+      });
+    }
+  }
   for (const file of [
     { id: "repo-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "shared", sourceRef: ".mcp.json" },
     { id: "cursor-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "cursor", sourceRef: ".cursor/mcp.json" },
@@ -225,9 +349,35 @@ const localGlobalCapabilityProviders = localGlobalCapabilityProvidersAll.slice(0
 const localGlobalSkillProviders = localGlobalCapabilityProvidersAll
   .filter((provider) => provider.type === "skills")
   .slice(0, 60);
-const runtimeToolProviders = (capabilityInventory.capabilities ?? [])
+const discoveredRuntimeToolProviders = (capabilityInventory.capabilities ?? [])
   .filter((capability) => capability.type === "runtime_tool")
   .map((entry) => compactCapabilityProvider(entry, "local_runtime_capability_inventory", "runtimeTools"));
+const runtimeToolProviders = uniqueById([
+  ...discoveredRuntimeToolProviders,
+  ...[
+    {
+      id: "shell_command",
+      type: "runtimeTools",
+      source: "runtime_tool_provider_inventory",
+      platformId: runtime,
+      sourceRef: `${runtime}:shell_command`,
+    },
+    {
+      id: "apply_patch",
+      type: "runtimeTools",
+      source: "runtime_tool_provider_inventory",
+      platformId: runtime,
+      sourceRef: `${runtime}:apply_patch`,
+    },
+    {
+      id: "filesystem",
+      type: "runtimeTools",
+      source: "runtime_tool_provider_inventory",
+      platformId: runtime,
+      sourceRef: `${runtime}:filesystem`,
+    },
+  ],
+]);
 const capabilityProviderCoverage = {
   repoCanonical: Object.fromEntries(["skills", "commands", "hooks", "mcpServers", "mcpTools", "plugins", "rules", "prompts", "runtimeTools"].map((type) => [type, capabilityEntries(repoCapabilityIndex, type).length])),
   projectRuntimeLightScan: Object.fromEntries(["skills", "commands", "hooks", "mcpServers", "rules", "prompts", "runtimeTools"].map((type) => [type, type === "runtimeTools" ? runtimeToolProviders.length : projectRuntimeCapabilityProviders.filter((provider) => provider.type === type).length])),
@@ -301,7 +451,7 @@ const ownerDiscoveryPacket = {
   ],
   governanceStages,
   repoCanonicalAgents: repoCanonicalAgents.slice(0, 20),
-  projectRuntimeAgents: projectRuntimeAgentCandidates.slice(0, 30),
+  projectRuntimeAgents: projectRuntimeAgentCandidates.slice(0, 80),
   localGlobalAgents: localGlobalAgents.slice(0, 30),
   repoCanonicalSkillProviders: repoCanonicalSkillProviders.slice(0, 30),
   projectRuntimeSkillProviders: projectRuntimeSkillProviders.slice(0, 40),
@@ -312,6 +462,21 @@ const ownerDiscoveryPacket = {
   runtimeToolProviders: runtimeToolProviders.slice(0, 40),
   capabilityProviderCoverage,
   globalInventoryFreshness,
+  capabilityDiscoverySearchLog: [
+    { source: "repo_canonical_capability_index", checked: true, sourceRef: "config/capability-index/meta-kim-capabilities.json" },
+    { source: "runtime_mirror_capability_indexes", checked: true, sourceRef: ".claude/.codex/.cursor/openclaw capability-index mirrors" },
+    { source: "claude_project_inventory", checked: true, sourceRef: ".claude/agents; .claude/skills; .claude/commands; .claude/hooks; .claude/settings.json" },
+    { source: "codex_project_inventory", checked: true, sourceRef: ".codex/agents; .agents/skills; .codex/commands; .codex/hooks; .codex/hooks.json; .codex/config.toml; .mcp.json; package.json scripts" },
+    { source: "cursor_project_inventory", checked: true, sourceRef: ".cursor/agents; .cursor/skills; .cursor/rules; .cursor/prompts; .cursor/hooks; .cursor/hooks.json; .cursor/mcp.json" },
+    { source: "openclaw_project_inventory", checked: true, sourceRef: "openclaw/workspaces; openclaw/skills; openclaw/hooks; openclaw/openclaw.template.json" },
+    { source: "local_global_inventory_cache", checked: true, sourceRef: ".meta-kim/state/default/capability-index/global-capabilities.json" },
+    { source: "claude_global_inventory", checked: true, sourceRef: "~/.claude/agents; ~/.claude/skills; ~/.claude/commands; ~/.claude/hooks; ~/.claude/settings.json" },
+    { source: "codex_global_inventory", checked: true, sourceRef: "~/.codex/agents; ~/.codex/skills; ~/.codex/commands; ~/.codex/hooks; ~/.codex/hooks.json; ~/.codex/config.toml; ~/.agents/skills" },
+    { source: "cursor_global_inventory", checked: true, sourceRef: "~/.cursor/agents; ~/.cursor/skills; ~/.cursor/rules; ~/.cursor/prompts; ~/.cursor/hooks; ~/.cursor/hooks.json; ~/.cursor/mcp.json" },
+    { source: "openclaw_global_inventory", checked: true, sourceRef: "~/.openclaw/openclaw.json; ~/.openclaw/workspace-*; ~/.openclaw/skills; ~/.openclaw/hooks; ~/.agents/skills" },
+    { source: "mcp_inventory", checked: true, sourceRef: ".mcp.json; .cursor/mcp.json; .codex/config.toml; MCP server/tool inventory" },
+    { source: "runtime_tools", checked: true, sourceRef: `${runtime}:shell_command; ${runtime}:apply_patch; ${runtime}:filesystem` },
+  ],
   candidateReusableCapabilityProviders: uniqueById([
     ...repoCanonicalCapabilityProviders,
     ...projectRuntimeCapabilityProviders,
@@ -323,20 +488,54 @@ const ownerDiscoveryPacket = {
   evidenceRefs: [
     "config/capability-index/meta-kim-capabilities.json",
     ".codex/agents",
+    ".codex/commands",
+    ".codex/hooks",
+    ".codex/hooks.json",
+    ".codex/config.toml",
     ".claude/agents",
+    ".claude/commands",
+    ".claude/hooks",
+    ".claude/settings.json",
     ".cursor/agents",
+    ".cursor/hooks",
+    ".cursor/hooks.json",
+    ".cursor/mcp.json",
+    ".cursor/rules",
     ".agents/skills",
     ".claude/skills",
     ".cursor/skills",
     "openclaw/skills",
-    ".claude/hooks",
-    ".codex/hooks",
-    ".cursor/rules",
+    "openclaw/hooks",
+    "openclaw/workspaces",
+    "openclaw/openclaw.template.json",
     "config/runtime-capability-matrix.json",
     ".meta-kim/state/default/capability-inventory.json",
     ".mcp.json",
-    ".cursor/mcp.json",
-    ".codex/config.toml",
+    "package.json",
+    "scripts",
+    "~/.codex/agents",
+    "~/.codex/skills",
+    "~/.codex/commands",
+    "~/.codex/hooks",
+    "~/.codex/hooks.json",
+    "~/.codex/config.toml",
+    "~/.agents/skills",
+    "~/.claude/agents",
+    "~/.claude/skills",
+    "~/.claude/commands",
+    "~/.claude/hooks",
+    "~/.claude/settings.json",
+    "~/.cursor/agents",
+    "~/.cursor/skills",
+    "~/.cursor/rules",
+    "~/.cursor/prompts",
+    "~/.cursor/hooks",
+    "~/.cursor/hooks.json",
+    "~/.cursor/mcp.json",
+    "~/.openclaw/openclaw.json",
+    "~/.openclaw/workspace-*",
+    "~/.openclaw/skills",
+    "~/.openclaw/hooks",
     ".meta-kim/state/default/capability-index/global-capabilities.json",
     "config/contracts/workflow-contract.json",
   ],
@@ -587,6 +786,42 @@ const capabilityGapPacket = recommendedRoute ? null : {
   missing: rankedRoutes[0]?.blockedReasons?.length ? rankedRoutes[0].blockedReasons : ["owner_weapon_dependency_route"],
   returnToStage: "Thinking",
 };
+const capabilityGapDetected = !recommendedRoute || explicitCapabilityGapRequested();
+const capabilityGapDecision = capabilityGapDetected
+  ? (() => {
+      const result = decideCapabilityGap(task, {
+        currentProvidersChecked: ownerDiscoveryPacket.evidenceRefs,
+        requestedCapability: task || capabilityGapPacket?.gap || "Capability gap route decision",
+        insufficiencyReason: capabilityGapPacket?.gap ?? "Task explicitly asks for a capability-gap decision before Execution.",
+        riskIfUnresolved:
+          "A normal route may hide a missing capability, fake owner, missing verifier, or unauthorized provider path.",
+        requiredEvidence: CAPABILITY_GAP_DECISION_CONTRACT.requiredEvidenceKeys,
+      });
+      return {
+        detected: true,
+        source: recommendedRoute ? "explicit_gap_signal" : "missing_recommended_route",
+        decision: result.gapDecision.decision,
+        gapDecision: result.gapDecision,
+        decisionEvidence: result.decisionEvidence,
+        decisionOutput: result.decisionOutput,
+        candidateWriteback: result.candidateWriteback,
+        generatedAgentSpec: result.generatedAgentSpec,
+        workerTaskPacket: result.workerTaskPacket,
+        blockedReason: result.blockedReason,
+        graphPath: result.graphPath,
+        acceptance: {
+          requiredEvidenceCovered: result.decisionEvidence.status === "pass",
+          missingEvidence: result.decisionEvidence.missingEvidence,
+          forbiddenBehaviors: result.decisionEvidence.decisionRule.forbiddenBehaviors,
+        },
+      };
+    })()
+  : null;
+const capabilityGapBlocksExecution = Boolean(
+  capabilityGapDecision &&
+    (capabilityGapDecision.decision === "blocked_or_needs_approval" ||
+      capabilityGapDecision.decisionEvidence?.status !== "pass"),
+);
 const userChoiceNeeded = Boolean(recommendedRoute && recommendedRoute.score >= 70 && recommendedRoute.score < 85);
 const decisionCard = userChoiceNeeded ? {
   recommendedDefault: recommendedRoute.id,
@@ -604,14 +839,20 @@ const decisionCard = userChoiceNeeded ? {
 } : null;
 const routeExecutionGate = {
   canPreviewRoute: true,
-  canEnterExecution: Boolean(recommendedRoute?.score >= 85) && !globalInventoryFreshness.refreshRequiredBeforeExecution,
+  canEnterExecution:
+    Boolean(recommendedRoute?.score >= 85) &&
+    !globalInventoryFreshness.refreshRequiredBeforeExecution &&
+    !capabilityGapBlocksExecution,
   blockedBy: [
     ...(!recommendedRoute ? ["missing_recommended_route"] : []),
     ...(recommendedRoute && recommendedRoute.score < 85 ? ["route_requires_confirmation_or_more_fetch"] : []),
     ...(globalInventoryFreshness.refreshRequiredBeforeExecution ? ["global_capability_inventory_refresh_required"] : []),
+    ...(capabilityGapBlocksExecution ? ["capability_gap_decision_blocks_execution"] : []),
   ],
   returnToStage: !recommendedRoute
     ? "Thinking"
+    : capabilityGapBlocksExecution
+      ? "Thinking"
     : recommendedRoute.score < 85 || globalInventoryFreshness.refreshRequiredBeforeExecution
       ? "Fetch"
       : null,
@@ -620,6 +861,8 @@ const routeExecutionGate = {
     ? "No executable route is available; Execution must not start until owner, provider, runtime, OS, and verification binding are resolved."
     : recommendedRoute.score < 85
       ? "Route preview is available, but Execution needs confirmation or stronger provider evidence before starting."
+      : capabilityGapBlocksExecution
+        ? "Capability-gap decision requires approval, stronger evidence, or return to Thinking before Execution."
       : globalInventoryFreshness.refreshRequiredBeforeExecution
         ? "Cached provider evidence is missing or older than 14 days; route preview is allowed, but Execution must refresh capability discovery first."
         : "Cached provider evidence is fresh enough and the route has execution-grade owner/provider/verification binding.",
@@ -645,6 +888,8 @@ const output = {
   osFilterResult: { requested: osArg, applied: osTarget, unsupported: !OS_TARGETS.includes(osTarget) },
   rankedRoutes,
   recommendedRoute,
+  capabilityGapDetected,
+  capabilityGapDecision,
   routeExecutionGate,
   userChoiceNeeded,
   decisionCard,

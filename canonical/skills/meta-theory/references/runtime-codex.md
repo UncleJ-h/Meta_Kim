@@ -1,6 +1,8 @@
 # Codex Runtime Adapter
 
-In Codex, `/meta-theory` is authorization to use available subagent/delegation tools. Only claim delegation when a real tool was called successfully.
+In Codex, `/meta-theory` is authorization to use available subagent/delegation tools when the user explicitly requests governed subagent work or the active user request names Critical / Fetch / Thinking / Review with meta-theory. Only claim delegation when a real tool was called successfully.
+
+Codex must not self-degrade to "single-thread dispatcher" merely because it is running in Codex App. If `spawn_agent` / subagent tooling is exposed, Thinking may select it after Fetch evidence and the dispatcher must show which temporary workers were spawned. If the tool is absent or fails, record `subagentCapabilityStatus=unavailable` and a concrete `degradationReason`.
 
 ## Honest Subagent Contract
 
@@ -10,19 +12,39 @@ If `spawn_agent` / `Agent` equivalent is unavailable:
 - record the blocked reason
 - continue only for read-only degraded analysis or ask before degraded executable work
 
+If `spawn_agent` is available and the user explicitly authorized subagents:
+
+- use it for independent, bounded worker or review lanes after Thinking creates `workerTaskPackets`
+- keep each worker's write scope disjoint when it edits files
+- show the dispatch board before or alongside dispatch
+- distinguish temporary `runtimeInstanceAlias` from durable `roleDisplayName` and `ownerAgent`
+- do not describe the temporary subagent prompt as the created/iterated project agent
+
+## Codex Durable Agent Projection
+
+Codex project-retained agents use `.codex/agents/<agent>.toml` with a stable `name`, `description`, and `developer_instructions`. When `GapDecision.decision=create_agent` or the user asks to iterate an agent, Codex must produce or update a durable project-local agent candidate for this TOML surface after Warden/user approval. Temporary `spawn_agent` workers only execute the factory/review tasks; they do not satisfy the durable agent deliverable.
+
+For cross-tool compatibility, every durable project-agent candidate must include:
+
+- formal tool projection targets from `config/sync.json` and `config/runtime-compatibility-catalog.json`
+- abstract loadout slots instead of concrete one-run skill/command choices
+- no Windows absolute paths, current file lists, tickets, `todayTask`, `scopeFiles`, `deliverableLink`, or `verifySteps` in identity
+
+Other formal tool projections follow `config/sync.json` and `config/runtime-compatibility-catalog.json`; keep `needs_probe`, `partial`, or `reference_only` statuses as evidence instead of promoting them by wording.
+
 ## Choice Surfaces
 
 Use native `request_user_input` only when exposed, and only with a valid 1-3 question payload that offers meaningful options. Otherwise use a short chat decision card. Do not call a chat fallback a popup.
 
 If `request_user_input` returns API 400 or another host validation error, do not retry blindly. Fall back once to a localized markdown decision card, record `choiceSurfaceFallback=api_error`, and wait for the user's answer in chat.
 
-Visible Decision cards need at least two meaningful options and a recommended default. Notices can stay concise.
+Visible Decision cards need at least two meaningful options and a recommended default. Critical clarification can appear before Fetch when the user's wording is too ambiguous to collect the right evidence. Notices can stay concise.
 
 Fetch/content evidence must precede Thinking/pre-decision option framing. Targeted read-only baseline verification such as existing test or validator runs belongs to Fetch when it changes the route; it does not belong to Critical. Once the run starts collecting repo evidence through Fetch-class inspection, the spine should progress into Fetch even if no planning file has been written yet. At the transition from Thinking to Execution, present one Decision only when the answer changes scope, owner, risk, or acceptance. After Thinking completes, BEFORE any Execution, ask the user only if the route branches. DO NOT ask confirmation during Critical/Fetch/Thinking/Review just to satisfy a ritual.
 
 Read-only status is not a choice-surface skip reason by itself. `queryBypass` says the run is a pure query / inspection path with no mutation, durable artifact, execution dispatch, or handoff; it does not prove that user choice is unnecessary. If a read-only analysis still has materially different routes, scopes, risks, owners, or acceptance standards, ask. If there is no branch-changing choice, record `no_branching_choice` or an explicit auto-proceed rationale instead of citing read-only status.
 
-Critical clarification is separate from execution confirmation: ask early when the user's expression fails the intent completeness framework, not because the model believes it knows the true human intent. Required dimensions are outcome, audience/value, success criteria, scope, constraints/permissions/safety, evidence freshness, and output format. If a missing or conflicting dimension changes route, scope, risk, acceptance, owner, permission, or non-goal, set `choiceSurfaceState = critical_clarification_allowed` and ask before Fetch, Thinking, or Execution. Ask later before executing a dispatch plan only when the plan has meaningful branches.
+Critical clarification is separate from execution confirmation: ask early when the user's expression fails the intent completeness framework, not because the model believes it knows the true human intent. Required dimensions are outcome, audience/value, success criteria, scope, constraints/permissions/safety, evidence freshness, and output format. If a missing or conflicting dimension changes route, scope, risk, acceptance, owner, permission, or non-goal, set `choiceSurfaceState = critical_clarification_allowed` and ask before Fetch, Thinking, or Execution. Subjective quality or non-measurable adjective requests such as "good", "bad", "beautiful", "ugly", "doesn't look good", "smooth", "not smooth", "professional", "premium", "advanced", "clean", "simple", "fast", "slow", "hard to use", "feels off", or localized equivalents require Critical clarification when the target, quality dimension, acceptance standard, or allowed scope is unclear. Ask later before executing a dispatch plan only when the plan has meaningful branches.
 
 Decision cards include: AI understanding, AI additions, Capability route, Candidate paths.
 
