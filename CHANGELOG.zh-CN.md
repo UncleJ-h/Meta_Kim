@@ -6,6 +6,61 @@
 
 更新说明只解释“改了什么、为什么重要”。过细的内部任务编号、低价值 backlog id 和实现流水账不放在这里；需要精确证据时，请看 Git 历史、测试、生成报告和 PRD 产物。
 
+## [2.8.13] - 2026-06-10
+
+### 修复
+
+- **Codex App 原生控制保护** - Meta_Kim 现在会在运行 ECC Codex home installer 前保护用户已有的 `~/.codex/config.toml`。这次问题是因为发现 ECC 的 Codex 安装路径会把它自己的 reference `config.toml` 覆盖到用户的 Codex App 配置上，进而导致 Codex 的 Computer Use 和 Chrome 插件连接失效。
+- **ECC 配置合并安全性** - ECC upstream installer 运行后，Meta_Kim 会用用户原始 Codex 配置作为最终基底，只把 ECC 新增项 add-only 合进去，再恢复 Codex App 的 Browser、Chrome 和 Computer Use 原生插件配置。这样不会丢用户已有的 MCP servers、hooks、agents、projects、profiles 和其它全局 Codex 设置。
+- **Windows Codex App 恢复** - Windows 安装路径现在会修复 Codex App 原生控制面：保持 `windows.sandbox = "unelevated"`，启用 `features.js_repl`，移除失效的 `.codex/.tmp/bundled-marketplaces/openai-bundled` marketplace source，并在存在时保留 Computer Use notification helper。
+
+### 验证
+
+- `node --test tests/setup/codex-config-merge.test.mjs`
+- `node --test tests/setup/install-plugin-bundles.test.mjs`
+- `npm run meta:release:smoke`
+- `npm run meta:verify:all`
+- `npm run meta:graphify:rebuild`
+- `git diff --check`
+
+## [2.8.12] - 2026-06-10
+
+### 修复
+
+- **Codex HookPrompt 模型上下文** - Codex 的 HookPrompt adapter 现在输出 `hookSpecificOutput.additionalContext`，不再把优化结果包成 `systemMessage`。这修复了“hook 确实执行了、界面或日志能看到，但模型没有稳定吃到优化提示词”的问题。
+- **Codex 记忆上下文** - Meta_Kim shared memory hook 在 Codex 里也改用和 Claude Code 一样的模型可见上下文包；Cursor 继续使用自己的 `prompt` 包，UI 提示仍保持独立。
+
+### 变更
+
+- **HookPrompt 依赖路径** - Meta_Kim 会优先查找 HookPrompt 源项目提供的 Codex adapter，再回退到 Claude hook 实现，和依赖项目的新结构对齐。
+
+### 验证
+
+- `node test-hook.js`（在 `D:/KimProject/HookPrompt`）
+- `node --test tests/setup/sync-runtimes-manifest.test.mjs tests/setup/mcp-memory-hooks.test.mjs`
+- `node scripts/install-global-skills-all-runtimes.mjs --update --skills hookprompt --targets codex`
+- `codex exec --dangerously-bypass-hook-trust --skip-git-repo-check --sandbox read-only --cd D:/KimProject/课程素材 "帮我做个小红书营销自动发布器，先别改文件，先说你理解到什么"`
+- `npm run meta:release:smoke`
+- `git diff --check`
+
+## [2.8.11] - 2026-06-09
+
+### 变更
+
+- **全局和项目级 Hook 策略** - Meta_Kim 现在明确区分项目级治理 hook 和全局可复用 hook。派工强校验、Graphify 上下文、meta-theory spine 这类强治理能力默认留在项目级；全局安装只放记忆保存、HookPrompt、OpenClaw memory bridge 这类安全可复用入口。
+
+### 修复
+
+- **Cursor 全局 HookPrompt** - Cursor 全局 `beforeSubmitPrompt` 现在会注册 HookPrompt adapter，和 Codex 全局 `UserPromptSubmit` 的策略对齐；严格 provider 验证也会同时检查 Codex 和 Cursor。
+- **Hook 能力清单** - provider registry 现在把 Codex 和 Cursor 的 HookPrompt adapter 分开建模，项目投影和全局安装会按各自 runtime 与 hook 事件验证。
+
+### 验证
+
+- `node scripts/install-global-skills-all-runtimes.mjs --skills hookprompt --targets cursor`
+- `node scripts/validate-provider-capabilities.mjs --strict-global-hooks --json`
+- `node --test tests/setup/install-cross-platform.test.mjs`
+- `node --test tests/governance/provider-capabilities.test.mjs`
+
 ## [2.8.10] - 2026-06-09
 
 ### 新增

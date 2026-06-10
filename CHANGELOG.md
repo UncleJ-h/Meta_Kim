@@ -6,6 +6,61 @@ This file is the reader-facing release history for Meta_Kim.
 
 The changelog explains what changed and why it matters. It intentionally avoids long internal task ledgers, low-signal backlog ids, and implementation trivia. When exact evidence is needed, use the repository history, tests, generated reports, and PRD artifacts.
 
+## [2.8.13] - 2026-06-10
+
+### Fixed
+
+- **Codex App Native Controls Protection** - Meta_Kim now protects a user's existing `~/.codex/config.toml` before running the ECC Codex home installer. The issue was discovered because ECC's Codex install path can copy its reference `config.toml` over the user's Codex App configuration, which can break the Codex Computer Use and Chrome plugin links.
+- **ECC Config Merge Safety** - After the upstream ECC installer runs, Meta_Kim restores the user's original Codex config as the base, merges ECC additions add-only, and then restores the Codex App Browser, Chrome, and Computer Use native plugin settings. This avoids losing user MCP servers, hooks, agents, projects, profiles, and other global Codex settings.
+- **Windows Codex App Recovery** - Windows installs now repair the Codex App native control surface by keeping `windows.sandbox = "unelevated"`, enabling `features.js_repl`, removing stale `.codex/.tmp/bundled-marketplaces/openai-bundled` marketplace sources, and preserving the Computer Use notification helper when it exists.
+
+### Verification
+
+- `node --test tests/setup/codex-config-merge.test.mjs`
+- `node --test tests/setup/install-plugin-bundles.test.mjs`
+- `npm run meta:release:smoke`
+- `npm run meta:verify:all`
+- `npm run meta:graphify:rebuild`
+- `git diff --check`
+
+## [2.8.12] - 2026-06-10
+
+### Fixed
+
+- **Codex HookPrompt Model Context** - Codex HookPrompt adapters now emit `hookSpecificOutput.additionalContext` instead of `systemMessage`. This fixes the case where HookPrompt ran and produced visible hook output, but the optimized prompt was not reliably injected into the model context.
+- **Codex Memory Context** - Shared Meta_Kim memory hooks now use the same model-visible context envelope on Codex as Claude Code, while Cursor keeps its `prompt` envelope and UI-only notices remain separate.
+
+### Changed
+
+- **HookPrompt Dependency Path** - Meta_Kim now looks for HookPrompt's Codex adapter before falling back to the Claude hook implementation, matching the upstream dependency layout.
+
+### Verification
+
+- `node test-hook.js` in `D:/KimProject/HookPrompt`
+- `node --test tests/setup/sync-runtimes-manifest.test.mjs tests/setup/mcp-memory-hooks.test.mjs`
+- `node scripts/install-global-skills-all-runtimes.mjs --update --skills hookprompt --targets codex`
+- `codex exec --dangerously-bypass-hook-trust --skip-git-repo-check --sandbox read-only --cd D:/KimProject/课程素材 "帮我做个小红书营销自动发布器，先别改文件，先说你理解到什么"`
+- `npm run meta:release:smoke`
+- `git diff --check`
+
+## [2.8.11] - 2026-06-09
+
+### Changed
+
+- **Global and Project Hook Strategy** - Meta_Kim now separates project-level governance hooks from global reusable hooks. Strong governance hooks such as dispatch enforcement, Graphify context, and meta-theory spine stay project-scoped by default, while global installs focus on safe reusable entry points such as memory save, HookPrompt, and the OpenClaw memory bridge.
+
+### Fixed
+
+- **Cursor HookPrompt Global Install** - Cursor global `beforeSubmitPrompt` now receives the HookPrompt adapter just like Codex global `UserPromptSubmit`, and strict provider validation checks both runtimes.
+- **Hook Capability Inventory** - The provider registry now models Codex and Cursor HookPrompt adapters separately, so project projection and global install evidence are checked against the right runtime and hook event.
+
+### Verification
+
+- `node scripts/install-global-skills-all-runtimes.mjs --skills hookprompt --targets cursor`
+- `node scripts/validate-provider-capabilities.mjs --strict-global-hooks --json`
+- `node --test tests/setup/install-cross-platform.test.mjs`
+- `node --test tests/governance/provider-capabilities.test.mjs`
+
 ## [2.8.10] - 2026-06-09
 
 ### Added
