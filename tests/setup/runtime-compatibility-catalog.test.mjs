@@ -30,6 +30,16 @@ describe("runtime compatibility catalog", () => {
     assert.deepEqual(sorted(projectionIds), sorted(syncManifest.supportedTargets));
   });
 
+  test("direct-enter defaults select only the primary Claude Code and Codex path", () => {
+    assert.deepEqual(syncManifest.defaultTargets, ["claude", "codex"]);
+
+    const byId = new Map(catalog.products.map((product) => [product.id, product]));
+    assert.equal(byId.get("claude").formalProjection.isDefaultTarget, true);
+    assert.equal(byId.get("codex").formalProjection.isDefaultTarget, true);
+    assert.equal(byId.get("openclaw").formalProjection.isDefaultTarget, false);
+    assert.equal(byId.get("cursor").formalProjection.isDefaultTarget, false);
+  });
+
   test("non-projection products cannot claim sync/profile/layout support", () => {
     const supportedTargets = new Set(syncManifest.supportedTargets);
     const defaultTargets = new Set(syncManifest.defaultTargets);
@@ -79,6 +89,81 @@ describe("runtime compatibility catalog", () => {
     assert.ok(
       qoder.evidence.filter((entry) => entry.type === "official_docs").length >= 4,
     );
+  });
+
+  test("candidate probes are surface-mapped without becoming formal projections", () => {
+    const candidates = new Map(
+      catalog.products
+        .filter((product) => product.tier === "candidate_probe")
+        .map((product) => [product.id, product]),
+    );
+    const requiredCandidates = [
+      "qoder",
+      "trae",
+      "kiro",
+      "windsurf",
+      "cline",
+      "roo-code",
+      "continue",
+    ];
+    const requiredSurfaces = [
+      "instruction_context",
+      "skill_workflow",
+      "agent_mode",
+      "hook_automation",
+      "mcp_tooling",
+      "command_cli",
+      "memory_context",
+      "permission_safety",
+    ];
+
+    assert.equal(catalog.decisionBoundary.noFormalClaimFromSurfaceMatch, true);
+    for (const surface of requiredSurfaces) {
+      assert.ok(catalog.surfaceTaxonomy[surface], surface);
+    }
+    for (const id of requiredCandidates) {
+      const product = candidates.get(id);
+      assert.ok(product, id);
+      assert.equal(syncManifest.supportedTargets.includes(id), false, id);
+      assert.equal(product.formalProjection.hasRuntimeProfile, false, id);
+      assert.equal(product.formalProjection.hasProjectionLayout, false, id);
+      assert.equal(product.dependencyInstall.ecc.support, "not_supported", id);
+      assert.ok(product.compatibilitySurfaces.includes("mcp_tooling"), id);
+      assert.ok(
+        product.evidence.filter((entry) => entry.type === "official_docs").length >= 2,
+        id,
+      );
+      assert.match(product.decision, /candidate_probe only/i, id);
+    }
+  });
+
+  test("current official evidence keeps Qoder paths and Cline skill primitive fresh", () => {
+    const byId = new Map(catalog.products.map((product) => [product.id, product]));
+    const qoder = byId.get("qoder");
+    const cline = byId.get("cline");
+
+    assert.ok(qoder);
+    assert.ok(cline);
+    for (const ref of [
+      "https://docs.qoder.com/en/cli/Skills",
+      "https://docs.qoder.com/en/cli/subagent",
+      "https://docs.qoder.com/en/cli/hooks",
+      "https://docs.qoder.com/en/cli/mcp-servers",
+    ]) {
+      assert.ok(
+        qoder.evidence.some((entry) => entry.ref === ref),
+        `missing Qoder evidence ${ref}`,
+      );
+    }
+    assert.ok(cline.compatibilitySurfaces.includes("skill_workflow"));
+    assert.match(cline.genericCompatibility.skillPath, /\.cline\/skills/);
+    assert.ok(
+      cline.evidence.some(
+        (entry) => entry.ref === "https://docs.cline.bot/customization/skills",
+      ),
+    );
+    assert.match(cline.decision, /rules, skills, CLI, and MCP/);
+    assert.match(cline.decision, /candidate_probe only/);
   });
 
   test("formal projection wording preserves support and self-test boundaries", () => {

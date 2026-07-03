@@ -55,7 +55,35 @@ describe("37 — Research preparation layer", () => {
       assert.ok(packet.searchAngles.length >= 3);
       assert.ok(packet.sourceList.length >= 3);
       assert.ok(packet.sourceList.every((source) => source.credibility && source.freshness));
+      assert.ok(packet.sourceQualityLadder.includes("primary_official_docs"));
+      assert.ok(
+        packet.sourceQualityLadder.includes("community_or_forum_evidence_only_with_label"),
+      );
+      assert.ok(packet.deepReadTargets.length >= 3);
+      assert.ok(packet.keyInformationTargets.length >= 2);
+      assert.ok(packet.iterationPlan.length >= 2);
+      assert.ok(packet.iterationLog.length >= 1);
+      assert.ok(packet.claimEvidenceCards.length >= 1);
+      assert.match(packet.stopCondition, /Stop/);
+      assert.match(packet.decisionUpdateRule, /decisionImpactMap/);
+      assert.equal(packet.claimAttributionPolicy.materialClaimsNeedSource, true);
+      assert.equal(packet.claimAttributionPolicy.singleSourceClaims, "flag_unverified");
+      assert.equal(packet.claimAttributionPolicy.snippetsOnly, "candidate_discovery_only");
+      assert.ok(
+        packet.originalSynthesisPolicy.required.includes(
+          "rename to Meta_Kim-native packet language",
+        ),
+      );
+      assert.ok(
+        packet.originalSynthesisPolicy.forbidden.includes("copying third-party prompt text"),
+      );
       assert.ok(packet.decisionImpactMap.every((impact) => impact.changesThinkingRoute));
+      assert.ok(
+        item.validation.checks.keyInfoOk &&
+          item.validation.checks.iterationOk &&
+          item.validation.checks.claimCardsOk &&
+          item.validation.checks.decisionUpdateOk,
+      );
       assert.match(packet.plainLanguageSummary, /研究/);
     }
 

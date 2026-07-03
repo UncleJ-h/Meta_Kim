@@ -12,7 +12,7 @@ const SCRIPT = path.join(
   "install-global-skills-all-runtimes.mjs",
 );
 
-function runDryRun(extraArgs = []) {
+function runDryRun(extraArgs = [], extraEnv = {}) {
   const result = spawnSync(
     process.execPath,
     [
@@ -25,7 +25,13 @@ function runDryRun(extraArgs = []) {
     ],
     {
       encoding: "utf8",
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        META_KIM_LANG: "en",
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        ...extraEnv,
+      },
     },
   );
   return {
@@ -37,7 +43,12 @@ function runDryRun(extraArgs = []) {
 function runFullDryRun(extraArgs = []) {
   const result = spawnSync(process.execPath, [SCRIPT, "--dry-run", ...extraArgs], {
     encoding: "utf8",
-    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      META_KIM_LANG: "en",
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+    },
   });
   return {
     status: result.status,
@@ -90,11 +101,24 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     assert.doesNotMatch(plain, /claude plugin install everything-claude-code@ecc/);
   });
 
+  test("Claude update mode refreshes canonical ECC plugin instead of relying on manual host fixes", () => {
+    const { status, out } = runDryRun(["--update"]);
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(
+      plain,
+      /claude plugin update ecc@ecc/,
+      "expected Meta_Kim update path to update the installed ECC plugin",
+    );
+    assert.doesNotMatch(plain, /claude plugin update ecc@everything-claude-code/);
+    assert.doesNotMatch(plain, /claude plugin update everything-claude-code@everything-claude-code/);
+  });
+
   test("ECC non-Claude runtimes use upstream native installer, not skills fallback", () => {
     const { status, out } = runDryRun();
     assert.equal(status, 0);
     const plain = stripAnsi(out);
-    assert.match(plain, /npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target codex/);
+    assert.match(plain, /npx --yes --package ecc-universal@latest ecc install --profile core --target codex/);
     assert.match(
       plain,
       /preserve existing .*\.codex.*config\.toml before ECC upstream installer and restore it with add-only ECC merge/,
@@ -105,7 +129,11 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     );
     assert.match(
       plain,
-      /ecc: run from each cursor project root: npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target cursor/,
+      /protect .*\.codex.*AGENTS\.md from ECC upstream installer/,
+    );
+    assert.match(
+      plain,
+      /ecc: project-local installer skipped during global update; run from each cursor project root: npx --yes --package ecc-universal@latest ecc install --profile core --target cursor/,
     );
     assert.doesNotMatch(
       plain,
@@ -123,7 +151,7 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     const plain = stripAnsi(out);
     assert.match(
       plain,
-      /npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target opencode/,
+      /npx --yes --package ecc-universal@latest ecc install --profile core --target opencode/,
     );
   });
 
@@ -144,12 +172,44 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     const plain = stripAnsi(out);
     assert.match(
       plain,
-      /ecc: run from each zed project root: npx --yes --package ecc-universal@2\.0\.0-rc\.1 ecc install --profile core --target zed/,
+      /ecc: project-local installer skipped during global update; run from each zed project root: npx --yes --package ecc-universal@latest ecc install --profile core --target zed/,
     );
     assert.doesNotMatch(plain, /undefined/);
     assert.doesNotMatch(plain, /skill-creator/);
     assert.doesNotMatch(plain, /sparse install https:\/\/github\.com\/affaan-m\/ECC\.git/);
     assert.doesNotMatch(plain, /git clone https:\/\/github\.com\/affaan-m\/ECC\.git/);
+  });
+
+  test("unknown --skills filter skips optional skill suite without installing generic fallback", () => {
+    const { status, out } = runFullDryRun([
+      "--skills",
+      "does-not-exist",
+      "--targets",
+      "claude,codex",
+    ]);
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(plain, /Unknown skill id|No skill repositories matched/i);
+    assert.doesNotMatch(plain, /skill-creator/);
+    assert.doesNotMatch(plain, /git clone https:\/\/github\.com\//);
+    assert.doesNotMatch(plain, /sparse install https:\/\/github\.com\//);
+    assert.match(plain, /ensure .*\.codex.*config\.toml preserves Codex App Browser\/Chrome\/Computer Use native controls/);
+  });
+
+  test("empty --skills filter means no selected third-party skill repos, not all repos", () => {
+    const { status, out } = runFullDryRun([
+      "--skip-plugins",
+      "--skills",
+      "",
+      "--targets",
+      "claude,codex",
+    ]);
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(plain, /No third-party skill repos selected/i);
+    assert.doesNotMatch(plain, /git clone https:\/\/github\.com\//);
+    assert.doesNotMatch(plain, /sparse install https:\/\/github\.com\//);
+    assert.doesNotMatch(plain, /skill-creator/);
   });
 
   test("Codex runtime uses native plugin flow for superpowers", () => {
@@ -167,13 +227,26 @@ describe("installPluginBundlesForNonClaudeRuntimes (dry-run e2e)", () => {
     const { status, out } = runDryRun();
     assert.equal(status, 0);
     const plain = stripAnsi(out);
-    assert.match(plain, /Cursor native plugin required/);
+    assert.match(plain, /Cursor native plugin manual step/);
     assert.match(plain, /\/add-plugin superpowers/);
     assert.match(plain, /does not currently expose a non-interactive plugin install command/);
     assert.doesNotMatch(
       plain,
       /git sparse-checkout https:\/\/github\.com\/obra\/superpowers\.git:\.cursor ->/,
     );
+  });
+
+  test("plugin handoff and ECC project-local notices honor zh-CN i18n", () => {
+    const { status, out } = runDryRun([], { META_KIM_LANG: "zh-CN" });
+    assert.equal(status, 0);
+    const plain = stripAnsi(out);
+    assert.match(plain, /插件包 \/ 原生插件交接/);
+    assert.match(plain, /全局更新不会写入项目本地安装/);
+    assert.match(plain, /Cursor 原生插件需手动安装/);
+    assert.match(plain, /保留现有 .*\.codex.*config\.toml/);
+    assert.match(plain, /保护 .*\.codex.*AGENTS\.md 不被 ECC 上游安装器覆盖/);
+    assert.doesNotMatch(plain, /Cursor native plugin manual step/);
+    assert.doesNotMatch(plain, /project-local installer skipped during global update/);
   });
 
   test("OpenClaw runtime falls back to skills/ for superpowers", () => {

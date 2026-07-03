@@ -13,7 +13,7 @@ Capability-first dispatch order:
 
 existing owner -> owner upgrade -> create owner -> `capabilityGapPacket`.
 
-Degraded path: when no Agent dispatch exists and no owner matches, record `capabilityGapPacket` with `currentAgentsChecked`, `currentProvidersChecked`, and `degradationReason`. Enter `controlState=degraded`. The dispatcher may self-execute only with `degradedFlag: true` and `surfaceState=internal-ready`.
+Degraded path: when no Agent dispatch exists and no owner matches, record `capabilityGapPacket` with `currentAgentsChecked`, `currentProvidersChecked`, and `degradationReason`. Enter `controlState=degraded`. The dispatcher may self-execute only with `degradedFlag: true`, `publicReadinessState=internal-ready`, and runtime `surfaceState=notice` or `silent`.
 
 Do not use temporary fallback owners. Do not persist concrete child skills into long-term agent identity; keep concrete skill/provider selection run-scoped.
 
@@ -46,7 +46,7 @@ If cache freshness could change the route, show one short user-facing hint with 
 
 ## Agent Teams Playbook
 
-Use `agent-teams-playbook` after Thinking and before Execution only when there are 2+ independent parallel worker lanes. It advises parallelization; it does not replace Critical, Fetch, Thinking, owner selection, or verification planning.
+Use `agent-teams-playbook` after Thinking and before Execution when there are 2+ executable worker lanes whose DAG dependencies, collision boundaries, workspace isolation, and external-write policy prove safe fan-out. Record `not_required` when there are fewer than 2 executable lanes, and record partial/degraded rather than pass when independence is not proven. It advises bounded fan-out and runtime-capacity wave sizing; it does not replace Critical, Fetch, Thinking, owner selection, or verification planning. A selected playbook provider remains `selected_not_invoked` unless a live Skill/Agent Team/spawn_agent call is attached as evidence.
 
 ## Use when
 

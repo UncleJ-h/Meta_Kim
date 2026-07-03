@@ -20,6 +20,75 @@ const FORMAL_TOOL_PROFILES = Object.freeze(loadFormalToolProfiles());
 const FORMAL_TOOL_NAMES = Object.freeze(FORMAL_TOOL_PROFILES.map((profile) => profile.label));
 const AGENT_PROJECTION_PROFILES = Object.freeze(loadAgentProjectionProfiles());
 
+export const INSTALL_STATUS_CLASSES = Object.freeze([
+  "success",
+  "skipped",
+  "manual",
+  "failed",
+]);
+
+export const INSTALL_STATUS_NEXT_ACTION = Object.freeze({
+  success: "continue",
+  skipped: "continue unless the skipped optional capability is needed",
+  manual: "perform the named manual action, then rerun the check",
+  failed: "fix the reported cause before declaring install or update complete",
+});
+
+export const INSTALL_STATUS_MESSAGE_CLASSES = Object.freeze({
+  okUpdated: "success",
+  warnGitUsableDespiteError: "success",
+  okArchiveInstalled: "success",
+  okCloned: "success",
+  okBasename: "success",
+  allUpToDate: "success",
+  pluginUpdated: "success",
+  codexConfigRestoredAfterEcc: "success",
+  codexGlobalAgentsRestoredAfterEcc: "success",
+  codexGlobalAgentsQuarantinedAfterEcc: "success",
+  codexChoiceSurfacePreserved: "success",
+  codexChoiceSurfaceRestored: "success",
+  okRemovedObsolete: "success",
+
+  skipExists: "skipped",
+  skipAlreadyInstalled: "skipped",
+  labelUpToDate: "skipped",
+  skillsFilterEmpty: "skipped",
+  skillsFilterNoMatches: "skipped",
+  warnManifestMissing: "skipped",
+  skipGraphifyInstalled: "skipped",
+  graphifyInstallSkippedGuideExists: "skipped",
+  noteSettingsNotAffected: "skipped",
+
+  codexNativePluginManualStep: "manual",
+  cursorNativePluginManualStep: "manual",
+  upstreamProjectLocalSkipped: "manual",
+  codexNativePluginAutoInstallIncomplete: "manual",
+  warnClaNotFound: "manual",
+  pythonNotFound: "manual",
+  pythonNotFoundGraphify: "manual",
+  pythonInstallHint: "manual",
+  pythonInstallHintGraphify: "manual",
+  warnStagingLocked: "manual",
+
+  failManifestLoad: "failed",
+  warnGitInstallFailed: "failed",
+  warnPluginFailed: "failed",
+  warnArchiveFailed: "failed",
+  warnReplaceFailed: "failed",
+  reverseModeValidationFailed: "failed",
+  reverseModeAborted: "failed",
+  warnGraphifySkillFailed: "failed",
+  warnGraphifyPipFailed: "failed",
+});
+
+export function installStatusClassForMessageKey(messageKey) {
+  return INSTALL_STATUS_MESSAGE_CLASSES[messageKey] ?? null;
+}
+
+export function installStatusNextAction(statusClass) {
+  return INSTALL_STATUS_NEXT_ACTION[statusClass] ?? null;
+}
+
 /** Align with setup.mjs LANG_ARG_ALIASES so `--lang zh` resolves to zh-CN. */
 const LANG_ALIASES = { zh: "zh-CN", ja: "ja-JP", ko: "ko-KR" };
 function normalizeLangCode(code) {
@@ -75,6 +144,8 @@ const STRINGS = {
       `Using proxy for git: ${url} (from ${source})`,
     proxyStrippedHint:
       "Loopback proxy env stripped. Use --proxy <url> or set META_KIM_GIT_PROXY to configure proxy.",
+    warnIgnoringLoopbackProxyEnv: (entries) =>
+      `Ignoring loopback proxy env for install: ${entries.join(", ")}`,
     // sync-runtimes.mjs — incremental summary + --check
     canonicalMissingWarn: (filePath) =>
       `[sync-runtimes] Skipping missing canonical file: ${filePath}`,
@@ -97,6 +168,8 @@ const STRINGS = {
     syncRuntimesCheckStale: "Generated runtime assets are out of date:",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "Runtime assets are up to date.",
+    syncRuntimesCheckSourceRepoProjectionAbsent: (count) =>
+      `Source repository check passed: project runtime projections are intentionally absent here (${count} generated project file(s) skipped). Run project bootstrap in a target project to materialize project-local assets.`,
     // Reverse mode strings
     reverseModeIntro: "Scanning runtime projections for evolution signals...",
     reverseModeNoSignals: "No evolution signals detected. Runtime projections match canonical sources.",
@@ -127,6 +200,7 @@ const STRINGS = {
     allUpToDate: (label) => `All ${label} up to date`,
     // Plugins
     pluginsHeader: "--- Claude Code plugins (user scope) ---",
+    checkingPluginMarketplaces: "Checking plugin marketplaces...",
     warnClaNotFound:
       "claude CLI not found on PATH — skip plugin install. Install Claude Code CLI, then re-run with --plugins-only.",
     warnPluginFailed: (spec, code) =>
@@ -136,6 +210,7 @@ const STRINGS = {
     labelCannotCheckGitHub: "cannot reach GitHub — skipping version check",
     labelUsingLocalRecord: (v) => `using local record: ${v}`,
     installingPlugin: (spec) => `Installing plugin: ${spec}`,
+    updatingPlugin: (spec) => `Updating plugin: ${spec}`,
     pluginUpdateVersionMismatch: (spec, installedVer, specVer) =>
       `[UPDATE] ${spec} version mismatch: installed ${installedVer}, manifest ${specVer} — reinstalling`,
     pluginUpdateUnknownVersion: (spec) =>
@@ -172,6 +247,51 @@ const STRINGS = {
     done: "Done.",
     noteCodexOpenclaw:
       "Note: Codex/Cursor native plugins must be installed through their host plugin UI; non-native runtimes use skill-directory fallbacks.",
+    upstreamNativeInstallersHeader: "Upstream native installers",
+    pluginBundlesHeader: "Plugin bundles / native plugin handoff",
+    upstreamNativeInstall: (id, runtimeId) =>
+      `${id}: upstream native install for ${runtimeId}`,
+    upstreamProjectLocalSkipped: (id, runtimeId, commandText) =>
+      `${id}: project-local installer skipped during global update; run from each ${runtimeId} project root: ${commandText}`,
+    upstreamCodexConfigPreserveDryRun: (configPath) =>
+      `preserve existing ${configPath} before ECC upstream installer and restore it with add-only ECC merge`,
+    upstreamCodexGlobalAgentsPreserveDryRun: (agentsPath) =>
+      `protect ${agentsPath} from ECC upstream installer: restore user-authored content or quarantine the ECC baseline if it appears globally`,
+    upstreamInstallerFailureReason: (commandText) =>
+      `Run ${commandText} directly to see the upstream installer output.`,
+    codexNativeControlsDryRun: (configPath, requestUserInputFeature) =>
+      `ensure ${configPath} preserves Codex App Browser/Chrome/Computer Use native controls ([features].${requestUserInputFeature}, [features].js_repl, Windows sandbox/notify, openai-bundled marketplace/plugins)`,
+    codexConfigBackupBeforeEcc: (backupPath) =>
+      `Backed up Codex config before ECC upstream installer: ${backupPath}`,
+    codexConfigRestoredAfterEcc: (configPath) =>
+      `Restored user Codex config after ECC upstream installer with add-only ECC merge: ${configPath}`,
+    codexGlobalAgentsBackupBeforeEcc: (backupPath) =>
+      `Backed up Codex global AGENTS.md before ECC upstream installer: ${backupPath}`,
+    codexGlobalAgentsRestoredAfterEcc: (agentsPath) =>
+      `Restored user Codex global AGENTS.md after ECC upstream installer: ${agentsPath}`,
+    codexGlobalAgentsQuarantinedAfterEcc: (agentsPath, backupPath) =>
+      `Quarantined ECC baseline from Codex global AGENTS.md: ${agentsPath}; backup: ${backupPath}`,
+    codexChoiceSurfacePreserved: (configPath) =>
+      `Codex choice surface and App native controls preserved: ${configPath}`,
+    codexConfigBackupBeforeChoiceSurface: (backupPath) =>
+      `Backed up Codex config before restoring choice surface and App native controls: ${backupPath}`,
+    codexChoiceSurfaceRestored: (configPath) =>
+      `Restored Codex choice surface, Windows-safe notify, and App native controls: ${configPath}`,
+    codexNativePluginManualStep: (pluginId) =>
+      `Codex native plugin manual step: run "codex plugin add ${pluginId}@openai-curated" or install it from /plugins.`,
+    cursorNativePluginManualStep: (pluginId) =>
+      `Cursor native plugin manual step: run /add-plugin ${pluginId} in Cursor Agent chat, or install it from Cursor's plugin marketplace. Cursor CLI does not currently expose a non-interactive plugin install command.`,
+    codexPluginAlreadyInstalled: (pluginSpec) =>
+      `Codex plugin ${pluginSpec} already installed`,
+    codexNativePluginAutoInstallIncomplete: (pluginSpec) =>
+      `Optional Codex native plugin auto-install did not complete: codex plugin add ${pluginSpec}. Install it from /plugins or rerun the command manually.`,
+    staleClaudePluginRecordRemoved: (skillId, recordKey) =>
+      `${skillId}: removing stale Claude plugin record ${recordKey}`,
+    graphifyInstallSkippedGuideExists: (platformName) =>
+      `graphify ${platformName} install skipped (guide already has Graphify section)`,
+    usingActiveVenv: (venvPath) => `Using active venv: ${venvPath}`,
+    venvTooOldFallback: (venvPath, versionText) =>
+      `Venv at "${venvPath}" has ${versionText} (need 3.10+). Falling back to system Python.`,
     activeTargets: (targets) => `Active runtime targets: ${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim repo (canonical source root): ${root}`,
     logSaved: (path) => `Full log saved to: ${path}`,
@@ -295,6 +415,8 @@ const STRINGS = {
       `为 git 配置代理：${url}（来源：${source}）`,
     proxyStrippedHint:
       "已移除回环代理环境变量。使用 --proxy <url> 或设置 META_KIM_GIT_PROXY 环境变量来配置代理。",
+    warnIgnoringLoopbackProxyEnv: (entries) =>
+      `已忽略安装流程中的回环代理环境变量：${entries.join(", ")}`,
     canonicalMissingWarn: (filePath) =>
       `[sync-runtimes] 跳过缺失的 canonical 源文件：${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync（本轮增量写入摘要）──",
@@ -316,6 +438,8 @@ const STRINGS = {
     syncRuntimesCheckStale: "生成的工具端镜像已过期：",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "工具端镜像已是最新。",
+    syncRuntimesCheckSourceRepoProjectionAbsent: (count) =>
+      `源仓库自检通过：项目级工具端投影在这里按预期保持未生成（已跳过 ${count} 个应生成的项目文件）。需要项目本地资产时，请在目标项目中运行 project bootstrap。`,
     // Reverse mode strings
     reverseModeIntro: "扫描工具端镜像以检测演进信号...",
     reverseModeNoSignals: "未检测到演进信号。工具端镜像与 canonical 源一致。",
@@ -344,6 +468,7 @@ const STRINGS = {
     okBasename: (name, dest) => `[OK] ${name} -> ${dest}`,
     allUpToDate: (label) => `全部就绪 — ${label}`,
     pluginsHeader: "--- Claude Code 插件（用户范围）---",
+    checkingPluginMarketplaces: "正在检查插件市场...",
     warnClaNotFound:
       "未找到 claude CLI — 跳过插件安装。请先安装 Claude Code CLI，然后运行 --plugins-only。",
     skipAlreadyInstalled: (name) => `${name} — 已安装`,
@@ -351,6 +476,7 @@ const STRINGS = {
     labelCannotCheckGitHub: "无法连接 GitHub — 跳过版本检测",
     labelUsingLocalRecord: (v) => `使用本地记录：${v}`,
     installingPlugin: (spec) => `正在安装插件：${spec}`,
+    updatingPlugin: (spec) => `正在更新插件：${spec}`,
     warnPluginFailed: (spec, code) =>
       `[WARN] 插件安装失败：${spec}（退出码 ${code}）`,
     pluginUpdateVersionMismatch: (spec, installedVer, specVer) =>
@@ -381,6 +507,51 @@ const STRINGS = {
     done: "完成。",
     noteCodexOpenclaw:
       "注意：Codex/Cursor 原生插件必须通过宿主插件 UI 安装；没有原生插件入口的工具端才使用技能目录回退。",
+    upstreamNativeInstallersHeader: "上游原生安装器",
+    pluginBundlesHeader: "插件包 / 原生插件交接",
+    upstreamNativeInstall: (id, runtimeId) =>
+      `${id}：正在为 ${runtimeId} 运行上游原生安装`,
+    upstreamProjectLocalSkipped: (id, runtimeId, commandText) =>
+      `${id}：全局更新不会写入项目本地安装；请在每个 ${runtimeId} 项目根目录运行：${commandText}`,
+    upstreamCodexConfigPreserveDryRun: (configPath) =>
+      `保留现有 ${configPath}；ECC 上游安装后用只追加合并恢复`,
+    upstreamCodexGlobalAgentsPreserveDryRun: (agentsPath) =>
+      `保护 ${agentsPath} 不被 ECC 上游安装器覆盖：用户原文会恢复；全局 ECC 基线会备份并隔离`,
+    upstreamInstallerFailureReason: (commandText) =>
+      `请直接运行 ${commandText} 查看上游安装器输出。`,
+    codexNativeControlsDryRun: (configPath, requestUserInputFeature) =>
+      `确保 ${configPath} 保留 Codex App Browser/Chrome/Computer Use 原生控制（[features].${requestUserInputFeature}、[features].js_repl、Windows sandbox/notify、openai-bundled marketplace/plugins）`,
+    codexConfigBackupBeforeEcc: (backupPath) =>
+      `ECC 上游安装前已备份 Codex 配置：${backupPath}`,
+    codexConfigRestoredAfterEcc: (configPath) =>
+      `已在 ECC 上游安装后用只追加合并恢复用户 Codex 配置：${configPath}`,
+    codexGlobalAgentsBackupBeforeEcc: (backupPath) =>
+      `ECC 上游安装前已备份 Codex 全局 AGENTS.md：${backupPath}`,
+    codexGlobalAgentsRestoredAfterEcc: (agentsPath) =>
+      `已在 ECC 上游安装后恢复用户 Codex 全局 AGENTS.md：${agentsPath}`,
+    codexGlobalAgentsQuarantinedAfterEcc: (agentsPath, backupPath) =>
+      `已隔离 Codex 全局 AGENTS.md 中的 ECC 基线：${agentsPath}；备份：${backupPath}`,
+    codexChoiceSurfacePreserved: (configPath) =>
+      `Codex 选择界面和 App 原生控制已保留：${configPath}`,
+    codexConfigBackupBeforeChoiceSurface: (backupPath) =>
+      `恢复选择界面和 App 原生控制前已备份 Codex 配置：${backupPath}`,
+    codexChoiceSurfaceRestored: (configPath) =>
+      `已恢复 Codex 选择界面、Windows 安全通知和 App 原生控制：${configPath}`,
+    codexNativePluginManualStep: (pluginId) =>
+      `Codex 原生插件需手动安装：运行 "codex plugin add ${pluginId}@openai-curated"，或在 /plugins 中安装。`,
+    cursorNativePluginManualStep: (pluginId) =>
+      `Cursor 原生插件需手动安装：在 Cursor Agent 聊天中运行 /add-plugin ${pluginId}，或从 Cursor 插件市场安装。Cursor CLI 当前没有非交互式插件安装命令。`,
+    codexPluginAlreadyInstalled: (pluginSpec) =>
+      `Codex 插件 ${pluginSpec} 已安装`,
+    codexNativePluginAutoInstallIncomplete: (pluginSpec) =>
+      `可选 Codex 原生插件自动安装未完成：codex plugin add ${pluginSpec}。请从 /plugins 安装或手动重试。`,
+    staleClaudePluginRecordRemoved: (skillId, recordKey) =>
+      `${skillId}：正在移除过时的 Claude 插件记录 ${recordKey}`,
+    graphifyInstallSkippedGuideExists: (platformName) =>
+      `跳过 graphify ${platformName} install（指南中已有 Graphify 章节）`,
+    usingActiveVenv: (venvPath) => `使用当前 venv：${venvPath}`,
+    venvTooOldFallback: (venvPath, versionText) =>
+      `venv "${venvPath}" 当前为 ${versionText}（需要 3.10+），改用系统 Python。`,
     activeTargets: (targets) => `当前启用的工具端：${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim 仓库（正典源根目录）：${root}`,
     logSaved: (path) => `完整日志已保存至：${path}`,
@@ -495,6 +666,8 @@ const STRINGS = {
       `git プロキシ設定: ${url}（来源: ${source}）`,
     proxyStrippedHint:
       "ループバックプロキシ環境変数を削除しました。--proxy <url> または META_KIM_GIT_PROXY 環境変数でプロキシを設定してください。",
+    warnIgnoringLoopbackProxyEnv: (entries) =>
+      `インストール用のループバックプロキシ環境変数を無視しました: ${entries.join(", ")}`,
     canonicalMissingWarn: (filePath) =>
       `[sync-runtimes] 欠落している canonical ファイルをスキップ: ${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync（増分書き込み要約）──",
@@ -516,6 +689,8 @@ const STRINGS = {
     syncRuntimesCheckStale: "生成されたランタイム資産が古くなっています:",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "ランタイム資産は最新です。",
+    syncRuntimesCheckSourceRepoProjectionAbsent: (count) =>
+      `Source repository check passed: project runtime projections are intentionally absent here (${count} generated project file(s) skipped). Run project bootstrap in a target project to materialize project-local assets.`,
     // Reverse mode strings
     reverseModeIntro: "ランタイム投影から進化信号をスキャン中...",
     reverseModeNoSignals: "進化信号は検出されませんでした。ランタイム投影は canonical ソースと一致しています。",
@@ -544,6 +719,7 @@ const STRINGS = {
     skipExists: (path) => `存在 ${path}`,
     okBasename: (name, dest) => `[OK] ${name} -> ${dest}`,
     pluginsHeader: "--- Claude Code プラグイン（ユーザー範囲）---",
+    checkingPluginMarketplaces: "プラグインマーケットプレイスを確認中...",
     warnClaNotFound:
       "claude CLI が見つかりません — プラグインインストールをスキップ。Claude Code CLI をインストール後、--plugins-only を再実行してください。",
     skipAlreadyInstalled: (name) => `${name} — インストール済み`,
@@ -552,6 +728,7 @@ const STRINGS = {
       "GitHub に接続できません — バージョンチェックをスキップ",
     labelUsingLocalRecord: (v) => `ローカルレコードを使用：${v}`,
     installingPlugin: (spec) => `プラグインをインストール中：${spec}`,
+    updatingPlugin: (spec) => `プラグインを更新中：${spec}`,
     warnPluginFailed: (spec, code) =>
       `[WARN] プラグインインストール失敗：${spec}（終了 ${code}）`,
     pluginUpdateVersionMismatch: (spec, installedVer, specVer) =>
@@ -584,6 +761,51 @@ const STRINGS = {
     done: "完了。",
     noteCodexOpenclaw:
       "注意：Codex/Cursor のネイティブプラグインは各ホストのプラグイン UI からインストールしてください。ネイティブ入口がないランタイムのみスキルディレクトリにフォールバックします。",
+    upstreamNativeInstallersHeader: "上流ネイティブインストーラー",
+    pluginBundlesHeader: "プラグインバンドル / ネイティブプラグイン引き渡し",
+    upstreamNativeInstall: (id, runtimeId) =>
+      `${id}: ${runtimeId} 向け上流ネイティブインストールを実行中`,
+    upstreamProjectLocalSkipped: (id, runtimeId, commandText) =>
+      `${id}: グローバル更新ではプロジェクトローカルインストールを変更しません。各 ${runtimeId} プロジェクトルートで実行してください: ${commandText}`,
+    upstreamCodexConfigPreserveDryRun: (configPath) =>
+      `既存の ${configPath} を保持し、ECC 上流インストール後に追加のみのマージで復元します`,
+    upstreamCodexGlobalAgentsPreserveDryRun: (agentsPath) =>
+      `${agentsPath} を ECC 上流インストーラーから保護します。ユーザー内容は復元し、グローバル ECC ベースラインはバックアップして隔離します`,
+    upstreamInstallerFailureReason: (commandText) =>
+      `上流インストーラー出力を確認するには ${commandText} を直接実行してください。`,
+    codexNativeControlsDryRun: (configPath, requestUserInputFeature) =>
+      `${configPath} が Codex App Browser/Chrome/Computer Use のネイティブ制御（[features].${requestUserInputFeature}, [features].js_repl, Windows sandbox/notify, openai-bundled marketplace/plugins）を保持することを確認します`,
+    codexConfigBackupBeforeEcc: (backupPath) =>
+      `ECC 上流インストール前に Codex 設定をバックアップしました: ${backupPath}`,
+    codexConfigRestoredAfterEcc: (configPath) =>
+      `ECC 上流インストール後、追加のみのマージでユーザー Codex 設定を復元しました: ${configPath}`,
+    codexGlobalAgentsBackupBeforeEcc: (backupPath) =>
+      `ECC 上流インストール前に Codex グローバル AGENTS.md をバックアップしました: ${backupPath}`,
+    codexGlobalAgentsRestoredAfterEcc: (agentsPath) =>
+      `ECC 上流インストール後にユーザーの Codex グローバル AGENTS.md を復元しました: ${agentsPath}`,
+    codexGlobalAgentsQuarantinedAfterEcc: (agentsPath, backupPath) =>
+      `Codex グローバル AGENTS.md の ECC ベースラインを隔離しました: ${agentsPath}; バックアップ: ${backupPath}`,
+    codexChoiceSurfacePreserved: (configPath) =>
+      `Codex choice surface と App ネイティブ制御を保持しました: ${configPath}`,
+    codexConfigBackupBeforeChoiceSurface: (backupPath) =>
+      `choice surface と App ネイティブ制御の復元前に Codex 設定をバックアップしました: ${backupPath}`,
+    codexChoiceSurfaceRestored: (configPath) =>
+      `Codex choice surface、Windows-safe notify、App ネイティブ制御を復元しました: ${configPath}`,
+    codexNativePluginManualStep: (pluginId) =>
+      `Codex ネイティブプラグインは手動手順です: "codex plugin add ${pluginId}@openai-curated" を実行するか /plugins からインストールしてください。`,
+    cursorNativePluginManualStep: (pluginId) =>
+      `Cursor ネイティブプラグインは手動手順です: Cursor Agent チャットで /add-plugin ${pluginId} を実行するか、Cursor のプラグインマーケットからインストールしてください。Cursor CLI は現在、非対話プラグインインストールを公開していません。`,
+    codexPluginAlreadyInstalled: (pluginSpec) =>
+      `Codex プラグイン ${pluginSpec} はインストール済み`,
+    codexNativePluginAutoInstallIncomplete: (pluginSpec) =>
+      `任意の Codex ネイティブプラグイン自動インストールが完了しませんでした: codex plugin add ${pluginSpec}。/plugins からインストールするか手動で再実行してください。`,
+    staleClaudePluginRecordRemoved: (skillId, recordKey) =>
+      `${skillId}: 古い Claude プラグインレコード ${recordKey} を削除中`,
+    graphifyInstallSkippedGuideExists: (platformName) =>
+      `graphify ${platformName} install をスキップ（ガイドに Graphify セクションが既にあります）`,
+    usingActiveVenv: (venvPath) => `アクティブな venv を使用: ${venvPath}`,
+    venvTooOldFallback: (venvPath, versionText) =>
+      `venv "${venvPath}" は ${versionText}（3.10+ が必要）です。システム Python にフォールバックします。`,
     activeTargets: (targets) =>
       `アクティブランタイムターゲット：${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim リポジトリ（正典ソースルート）：${root}`,
@@ -708,6 +930,8 @@ const STRINGS = {
       `git 프록시 설정: ${url}（출처: ${source}）`,
     proxyStrippedHint:
       "루프백 프록시 환경변수가 제거되었습니다. --proxy <url> 또는 META_KIM_GIT_PROXY 환경변수로 프록시를 설정하세요.",
+    warnIgnoringLoopbackProxyEnv: (entries) =>
+      `설치에서 루프백 프록시 환경변수를 무시했습니다: ${entries.join(", ")}`,
     canonicalMissingWarn: (filePath) =>
       `[sync-runtimes] 누락된 canonical 파일을 건너뜁니다: ${filePath}`,
     syncRuntimesSummaryTitle: "── meta:sync（증분 쓰기 요약）──",
@@ -728,6 +952,8 @@ const STRINGS = {
     syncRuntimesCheckStale: "생성된 런타임 자산이 오래되었습니다:",
     syncRuntimesCheckStaleLine: (file) => `- ${file}`,
     syncRuntimesCheckOk: "런타임 자산이 최신입니다.",
+    syncRuntimesCheckSourceRepoProjectionAbsent: (count) =>
+      `Source repository check passed: project runtime projections are intentionally absent here (${count} generated project file(s) skipped). Run project bootstrap in a target project to materialize project-local assets.`,
     // Reverse mode strings
     reverseModeIntro: "런타임 프로젝션에서 진화 신호 스캔 중...",
     reverseModeNoSignals: "진화 신호가 감지되지 않았습니다. 런타임 프로젝션이 canonical 소스와 일치합니다.",
@@ -756,6 +982,7 @@ const STRINGS = {
     skipExists: (path) => `존재함 ${path}`,
     okBasename: (name, dest) => `[OK] ${name} -> ${dest}`,
     pluginsHeader: "--- Claude Code 플러그인 (사용자 범위) ---",
+    checkingPluginMarketplaces: "플러그인 마켓플레이스 확인 중...",
     warnClaNotFound:
       "claude CLI를 찾을 수 없음 — 플러그인 설치 건너뜀. Claude Code CLI를 설치한 후 --plugins-only를 다시 실행하세요.",
     skipAlreadyInstalled: (name) => `${name} — 이미 설치됨`,
@@ -763,6 +990,7 @@ const STRINGS = {
     labelCannotCheckGitHub: "GitHub 연결 불가 — 버전 확인 건너뜀",
     labelUsingLocalRecord: (v) => `로컬 레코드 사용：${v}`,
     installingPlugin: (spec) => `플러그인 설치 중：${spec}`,
+    updatingPlugin: (spec) => `플러그인 업데이트 중：${spec}`,
     warnPluginFailed: (spec, code) =>
       `[WARN] 플러그인 설치 실패：${spec}（종료 코드 ${code}）`,
     pluginUpdateVersionMismatch: (spec, installedVer, specVer) =>
@@ -795,6 +1023,51 @@ const STRINGS = {
     done: "완료.",
     noteCodexOpenclaw:
       "참고: Codex/Cursor 네이티브 플러그인은 각 호스트의 플러그인 UI에서 설치해야 합니다. 네이티브 진입점이 없는 런타임만 스킬 디렉토리 fallback을 사용합니다.",
+    upstreamNativeInstallersHeader: "업스트림 네이티브 설치기",
+    pluginBundlesHeader: "플러그인 번들 / 네이티브 플러그인 안내",
+    upstreamNativeInstall: (id, runtimeId) =>
+      `${id}: ${runtimeId}용 업스트림 네이티브 설치 실행 중`,
+    upstreamProjectLocalSkipped: (id, runtimeId, commandText) =>
+      `${id}: 전역 업데이트에서는 프로젝트 로컬 설치를 변경하지 않습니다. 각 ${runtimeId} 프로젝트 루트에서 실행하세요: ${commandText}`,
+    upstreamCodexConfigPreserveDryRun: (configPath) =>
+      `기존 ${configPath}를 보존하고 ECC 업스트림 설치 후 추가 전용 병합으로 복원합니다`,
+    upstreamCodexGlobalAgentsPreserveDryRun: (agentsPath) =>
+      `${agentsPath}를 ECC 업스트림 설치기로부터 보호합니다. 사용자 내용은 복원하고 전역 ECC baseline은 백업 후 격리합니다`,
+    upstreamInstallerFailureReason: (commandText) =>
+      `업스트림 설치기 출력을 보려면 ${commandText}를 직접 실행하세요.`,
+    codexNativeControlsDryRun: (configPath, requestUserInputFeature) =>
+      `${configPath}가 Codex App Browser/Chrome/Computer Use 네이티브 제어([features].${requestUserInputFeature}, [features].js_repl, Windows sandbox/notify, openai-bundled marketplace/plugins)를 보존하는지 확인합니다`,
+    codexConfigBackupBeforeEcc: (backupPath) =>
+      `ECC 업스트림 설치 전에 Codex 설정을 백업했습니다: ${backupPath}`,
+    codexConfigRestoredAfterEcc: (configPath) =>
+      `ECC 업스트림 설치 후 사용자 Codex 설정을 추가 전용 병합으로 복원했습니다: ${configPath}`,
+    codexGlobalAgentsBackupBeforeEcc: (backupPath) =>
+      `ECC 업스트림 설치 전에 Codex 전역 AGENTS.md를 백업했습니다: ${backupPath}`,
+    codexGlobalAgentsRestoredAfterEcc: (agentsPath) =>
+      `ECC 업스트림 설치 후 사용자 Codex 전역 AGENTS.md를 복원했습니다: ${agentsPath}`,
+    codexGlobalAgentsQuarantinedAfterEcc: (agentsPath, backupPath) =>
+      `Codex 전역 AGENTS.md의 ECC baseline을 격리했습니다: ${agentsPath}; 백업: ${backupPath}`,
+    codexChoiceSurfacePreserved: (configPath) =>
+      `Codex choice surface 및 App 네이티브 제어를 보존했습니다: ${configPath}`,
+    codexConfigBackupBeforeChoiceSurface: (backupPath) =>
+      `choice surface 및 App 네이티브 제어 복원 전에 Codex 설정을 백업했습니다: ${backupPath}`,
+    codexChoiceSurfaceRestored: (configPath) =>
+      `Codex choice surface, Windows-safe notify 및 App 네이티브 제어를 복원했습니다: ${configPath}`,
+    codexNativePluginManualStep: (pluginId) =>
+      `Codex 네이티브 플러그인은 수동 단계가 필요합니다: "codex plugin add ${pluginId}@openai-curated"를 실행하거나 /plugins에서 설치하세요.`,
+    cursorNativePluginManualStep: (pluginId) =>
+      `Cursor 네이티브 플러그인은 수동 단계가 필요합니다: Cursor Agent 채팅에서 /add-plugin ${pluginId}를 실행하거나 Cursor 플러그인 마켓플레이스에서 설치하세요. Cursor CLI는 현재 비대화형 플러그인 설치 명령을 제공하지 않습니다.`,
+    codexPluginAlreadyInstalled: (pluginSpec) =>
+      `Codex 플러그인 ${pluginSpec} 설치됨`,
+    codexNativePluginAutoInstallIncomplete: (pluginSpec) =>
+      `선택적 Codex 네이티브 플러그인 자동 설치가 완료되지 않았습니다: codex plugin add ${pluginSpec}. /plugins에서 설치하거나 명령을 다시 실행하세요.`,
+    staleClaudePluginRecordRemoved: (skillId, recordKey) =>
+      `${skillId}: 오래된 Claude 플러그인 레코드 ${recordKey} 제거 중`,
+    graphifyInstallSkippedGuideExists: (platformName) =>
+      `graphify ${platformName} install 건너뜀(가이드에 Graphify 섹션이 이미 있음)`,
+    usingActiveVenv: (venvPath) => `활성 venv 사용: ${venvPath}`,
+    venvTooOldFallback: (venvPath, versionText) =>
+      `venv "${venvPath}"는 ${versionText}입니다(3.10+ 필요). 시스템 Python으로 전환합니다.`,
     activeTargets: (targets) => `활성 런타임 대상：${targets.join(", ")}`,
     metaKimRoot: (root) => `Meta_Kim 저장소 (정본 소스 루트)：${root}`,
     logSaved: (path) => `전체 로그 저장 위치：${path}`,
@@ -928,7 +1201,11 @@ const REPORT_STRINGS = {
     localCommitsNotOnOriginMain: "Local commits not on origin/main",
     workingTreeDelta: "Working tree delta",
     currentGithubDeltaFromPrd: "Current GitHub delta from PRD",
-    blockedOrNotDone: "Blocked or not done",
+    blockedOrNotDone: "Primary release gaps or not done",
+    compatibilityFollowUp: "Compatibility follow-up",
+    releaseBoundary: "Release boundary",
+    cannotClaimGithubComplete: "cannotClaimGithubComplete",
+    cannotClaimAllToolCompatibility: "cannotClaimAllToolCompatibility",
     completedParallelBacklogEvidence: "Completed parallel backlog evidence",
     missing: "(missing)",
     capabilityGaps: "Capability gaps",
@@ -946,6 +1223,7 @@ const REPORT_STRINGS = {
     blocked: "Blocked",
     workerTask: "WorkerTask",
     candidate: "Candidate",
+    branch: "Branch",
     type: "Type",
     target: "Target",
     dryRunWrites: "Dry-run writes",
@@ -980,7 +1258,7 @@ const REPORT_STRINGS = {
       title: "Meta_Kim notice",
       stageProgress: "Stage progress",
       stageProgressDetail:
-        "Critical, Fetch, Thinking, Execution, and Review are being surfaced as compact progress.",
+        "Critical, Fetch, Thinking, Execution, Review, Meta-Review, Verification, and Evolution are surfaced as compact progress.",
       route: "Capability route",
       routeDetail: (count) =>
         `Interpreted the natural-language request and checked ${count} capability type(s).`,
@@ -1002,6 +1280,8 @@ const REPORT_STRINGS = {
       emissionEvidenceLabel: "Conversation notice evidence",
       signal: "User-visible signal",
       internalOnly: "Internal evidence only",
+      internalOnlySummary:
+        "Machine-readable audit packets are retained internally; this report shows plain-language summaries instead of field names.",
       partialStatusReason:
         "The readable report is generated, but no runtime conversation notice is emitted by this script yet.",
       emittedStatusReason: (channel, adapter, hash) =>
@@ -1112,12 +1392,63 @@ const REPORT_STRINGS = {
     capabilityType: "Capability Type",
     routeImpact: "Route Impact",
     cardPlanTitle: "Card Dealing",
-    cardPlanSummary: (dealt, deckSize, pauseRule) =>
-      `Card plan: dealt ${dealt}/${deckSize} cards; ${pauseRule}.`,
+    cardPlanSummary: (eventCount, cardTypeCount, pauseRule) =>
+      `Card plan: ${eventCount} card events across ${cardTypeCount} card types; ${pauseRule}.`,
     cardDealer: "Dealer",
     card: "Card",
     cardShell: "Shell",
     cardWhy: "Why now",
+    cardNames: {
+      clarify: "Clarify",
+      "shrink-scope": "Shrink scope",
+      options: "Options",
+      risk: "Risk",
+      execute: "Execute",
+      verify: "Verify",
+      fix: "Fix",
+      rollback: "Rollback",
+      nudge: "Nudge",
+      pause: "Pause",
+    },
+    cardVisibleSummary: {
+      sectionTitle: "User-visible card summary",
+      signalLabel: "Card dealing summary",
+      userFocusLabel: "User focus cards",
+      riskInserted: "Risk inserted",
+      riskNotTriggered: "Risk not triggered",
+      pauseTriggered: "Pause triggered",
+      pauseNotTriggered: "Pause not triggered",
+      nativeChoiceBoundary:
+        "This is a chat/report summary, not native choice popup proof.",
+      dealtLine: ({ eventCount, cardTypeCount, activeCards }) =>
+        `Card dealing: ${eventCount} card events across ${cardTypeCount} card types: ${activeCards}.`,
+      inactiveLine: ({ inactiveCards }) => `Inactive this round: ${inactiveCards}.`,
+      userLine: ({ userCards, interruptCards, riskState, pauseState }) =>
+        `User-relevant: ${userCards}; interrupts: ${interruptCards}; ${riskState}; ${pauseState}`,
+      progressSectionTitle: "In-run card dealing",
+      progressStageLine: ({ stage }) => `${stage} in progress`,
+      progressDealLine: ({ discovery, cardName, repeatNote }) =>
+        `Card dealt: found ${discovery}; triggered ${cardName} card${repeatNote ? ` (${repeatNote})` : ""}.`,
+      repeatEventNote: ({ repeatOrdinal, repeatReason }) =>
+        `repeat #${repeatOrdinal}, ${repeatReason}`,
+      progressDiscoveries: {
+        clarify: "the goal or acceptance boundary may change the route",
+        "shrink-scope": "the route has multiple lanes and needs a tighter boundary",
+        options: "more than one viable path exists",
+        risk: "runtime or external-platform risk can preempt execution",
+        execute: "owner, route, and verification are ready for bounded work",
+        verify: "fresh proof is needed before claiming completion",
+        fix: "review or verification found a bounded repair point",
+        rollback: "risk may exceed the approved boundary",
+        nudge: "the user needs one compact next action",
+        pause: "the run needs a digest or decision window",
+        default: "a route-changing signal appeared",
+      },
+      repeatPolicy:
+        "Card types are dynamic signals; the same card type can be dealt repeatedly across stages.",
+      nextLine:
+        "Next: read the user-relevant cards first, then check whether risk or pause changed the route.",
+    },
     businessPhasePlanTitle: "11-phase Business Workflow",
     businessPhaseSummary: (count) => `${count} business phases are recorded for packaging and closure.`,
     phase: "Phase",
@@ -1290,7 +1621,11 @@ const REPORT_STRINGS = {
     localCommitsNotOnOriginMain: "本地未进入 origin/main 的提交",
     workingTreeDelta: "工作区改动",
     currentGithubDeltaFromPrd: "PRD 中记录的当前 GitHub 差距",
-    blockedOrNotDone: "阻塞或未完成",
+    blockedOrNotDone: "主发布差距或未完成",
+    compatibilityFollowUp: "兼容后续项",
+    releaseBoundary: "发布边界",
+    cannotClaimGithubComplete: "不能宣称 GitHub 完成",
+    cannotClaimAllToolCompatibility: "不能宣称全工具端兼容完成",
     completedParallelBacklogEvidence: "已完成并行 backlog 证据",
     missing: "（缺失）",
     capabilityGaps: "能力缺口",
@@ -1342,7 +1677,7 @@ const REPORT_STRINGS = {
       title: "Meta_Kim 对话提示",
       stageProgress: "阶段进度",
       stageProgressDetail:
-        "Critical、Fetch、Thinking、Execution、Review 会被压缩成用户能看懂的简短进度。",
+        "Critical、Fetch、Thinking、Execution、Review、Meta-Review、Verification、Evolution 会被压缩成用户能看懂的简短进度。",
       route: "能力路线",
       routeDetail: (count) =>
         `已把许愿式自然语言需求转成路线，并检查 ${count} 类能力。`,
@@ -1364,6 +1699,8 @@ const REPORT_STRINGS = {
       emissionEvidenceLabel: "conversation notice 发射证据",
       signal: "用户可见信号",
       internalOnly: "仅内部证据",
+      internalOnlySummary:
+        "机器可审计 packet 仍在内部保留；这份报告只展示人话摘要，不列内部字段名。",
       partialStatusReason:
         "可读报告已生成，但这个脚本还没有发出 runtime conversation notice。",
       emittedStatusReason: (channel, adapter, hash) =>
@@ -1474,12 +1811,69 @@ const REPORT_STRINGS = {
     capabilityType: "能力类型",
     routeImpact: "路线影响",
     cardPlanTitle: "发牌",
-    cardPlanSummary: (dealt, deckSize, pauseRule) =>
-      `发牌计划：本次显性处理 ${dealt}/${deckSize} 张牌；${pauseRule}。`,
+    cardPlanSummary: (eventCount, cardTypeCount, pauseRule) =>
+      `发牌计划：本轮记录 ${eventCount} 次发牌事件，涉及 ${cardTypeCount} 类牌；${pauseRule}。`,
     cardDealer: "发牌 owner",
     card: "牌",
     cardShell: "呈现壳",
     cardWhy: "为什么现在发",
+    cardNames: {
+      clarify: "澄清",
+      "shrink-scope": "收窄范围",
+      options: "选项",
+      risk: "风险",
+      execute: "执行",
+      verify: "验证",
+      fix: "修复",
+      rollback: "回滚",
+      nudge: "下一步提醒",
+      pause: "暂停",
+    },
+    cardVisibleSummary: {
+      sectionTitle: "用户可见发牌摘要",
+      signalLabel: "发牌摘要",
+      userFocusLabel: "用户相关牌",
+      riskInserted: "风险已插入",
+      riskNotTriggered: "风险未触发",
+      pauseTriggered: "暂停已触发",
+      pauseNotTriggered: "暂停未触发",
+      nativeChoiceBoundary:
+        "这是对话/报告摘要，不是 native choice popup 证据。",
+      dealtLine: ({ eventCount, cardTypeCount, activeCards }) =>
+        `触发发牌：本轮生成 ${eventCount} 次发牌事件，涉及 ${cardTypeCount} 类牌：${activeCards}。`,
+      inactiveLine: ({ inactiveCards }) => `本轮未触发的牌型：${inactiveCards}。`,
+      userLine: ({ userCards, interruptCards, riskState, pauseState }) =>
+        `和用户直接相关：${userCards}；插入/打断：${interruptCards}；${riskState}；${pauseState}`,
+      progressSectionTitle: "过程发牌事件",
+      progressStageLine: ({ stage }) => `${stage} 进行中`,
+      progressDealLine: ({ discovery, cardName, repeatNote }) =>
+        `触发发牌：发现${discovery}，触发${cardName}牌${repeatNote ? `（${repeatNote}）` : ""}。`,
+      repeatEventNote: ({ repeatOrdinal, repeatReason }) => {
+        const reasons = {
+          user_decision_window: "用户决策窗口",
+          high_cost_control_window: "高成本节奏控制",
+          digest_window_after_visible_status: "状态摘要后的消化窗口",
+        };
+        return `第 ${repeatOrdinal} 次，原因=${reasons[repeatReason] ?? repeatReason}`;
+      },
+      progressDiscoveries: {
+        clarify: "目标或验收边界可能改变路线",
+        "shrink-scope": "路线过宽，需要先收窄边界",
+        options: "存在多个可行路径，需要选择",
+        risk: "运行时或外部平台风险可能抢占执行",
+        execute: "负责人、路线和验证条件已就绪",
+        verify: "需要新证据才能声称完成",
+        fix: "审查或验证发现可修复点",
+        rollback: "风险可能超过已批准边界",
+        nudge: "用户需要一个低成本下一步",
+        pause: "当前需要消化窗口或决策窗口",
+        default: "出现会改变路线的信号",
+      },
+      repeatPolicy:
+        "牌是动态节奏信号；同一类牌可以在不同阶段、不同原因下重复发。",
+      nextLine:
+        "下一步先看用户相关牌，再看风险或暂停有没有改变路线。",
+    },
     businessPhasePlanTitle: "11 阶段业务流",
     businessPhaseSummary: (count) => `已记录 ${count} 个业务阶段，用于打包、闭环、反馈和镜像。`,
     phase: "阶段",
@@ -1651,6 +2045,10 @@ const REPORT_STRINGS = {
     workingTreeDelta: "作業ツリー差分",
     currentGithubDeltaFromPrd: "PRD 上の現在の GitHub ギャップ",
     blockedOrNotDone: "ブロックまたは未完了",
+    compatibilityFollowUp: "互換性フォローアップ",
+    releaseBoundary: "リリース境界",
+    cannotClaimGithubComplete: "cannotClaimGithubComplete",
+    cannotClaimAllToolCompatibility: "cannotClaimAllToolCompatibility",
     completedParallelBacklogEvidence: "完了済み並列 backlog 証拠",
     missing: "（欠落）",
     capabilityGaps: "能力ギャップ",
@@ -1702,7 +2100,7 @@ const REPORT_STRINGS = {
       title: "Meta_Kim 通知",
       stageProgress: "ステージ進捗",
       stageProgressDetail:
-        "Critical、Fetch、Thinking、Execution、Review を、ユーザーが読める短い進捗として表示します。",
+        "Critical、Fetch、Thinking、Execution、Review、Meta-Review、Verification、Evolution を、ユーザーが読める短い進捗として表示します。",
       route: "能力ルート",
       routeDetail: (count) =>
         `願望に近い自然言語の依頼を解釈し、${count} 種類の能力を確認しました。`,
@@ -1724,6 +2122,8 @@ const REPORT_STRINGS = {
       emissionEvidenceLabel: "conversation notice 発射証拠",
       signal: "ユーザーに見える信号",
       internalOnly: "内部証拠のみ",
+      internalOnlySummary:
+        "機械可読の監査 packet は内部に保持し、このレポートではフィールド名ではなく平易な要約を表示します。",
       partialStatusReason:
         "読みやすいレポートは生成済みですが、このスクリプトはまだ runtime conversation notice を発射していません。",
       emittedStatusReason: (channel, adapter, hash) =>
@@ -1834,12 +2234,63 @@ const REPORT_STRINGS = {
     capabilityType: "能力種別",
     routeImpact: "ルートへの影響",
     cardPlanTitle: "カード配布",
-    cardPlanSummary: (dealt, deckSize, pauseRule) =>
-      `カード計画: 今回は ${dealt}/${deckSize} 枚を可視化して処理します。${pauseRule}。`,
+    cardPlanSummary: (eventCount, cardTypeCount, pauseRule) =>
+      `カード計画: 今回は ${eventCount} 件のカードイベント、${cardTypeCount} 種類のカードを記録します。${pauseRule}。`,
     cardDealer: "配布 owner",
     card: "カード",
     cardShell: "表示シェル",
     cardWhy: "今出す理由",
+    cardNames: {
+      clarify: "明確化",
+      "shrink-scope": "範囲縮小",
+      options: "選択肢",
+      risk: "リスク",
+      execute: "実行",
+      verify: "検証",
+      fix: "修正",
+      rollback: "ロールバック",
+      nudge: "次の一手",
+      pause: "一時停止",
+    },
+    cardVisibleSummary: {
+      sectionTitle: "ユーザー向けカード要約",
+      signalLabel: "カード配布要約",
+      userFocusLabel: "ユーザー関連カード",
+      riskInserted: "リスクを挿入",
+      riskNotTriggered: "リスク未発火",
+      pauseTriggered: "一時停止が発火",
+      pauseNotTriggered: "一時停止未発火",
+      nativeChoiceBoundary:
+        "これは会話/レポート要約であり、native choice popup の証拠ではありません。",
+      dealtLine: ({ eventCount, cardTypeCount, activeCards }) =>
+        `カード配布: ${eventCount} 件のカードイベント、${cardTypeCount} 種類: ${activeCards}。`,
+      inactiveLine: ({ inactiveCards }) => `今回未発火のカード種類: ${inactiveCards}。`,
+      userLine: ({ userCards, interruptCards, riskState, pauseState }) =>
+        `ユーザー関連: ${userCards}; 割り込み: ${interruptCards}; ${riskState}; ${pauseState}`,
+      progressSectionTitle: "実行中カードイベント",
+      progressStageLine: ({ stage }) => `${stage} 進行中`,
+      progressDealLine: ({ discovery, cardName, repeatNote }) =>
+        `カード配布: ${discovery} を検出し、${cardName} カードを発火${repeatNote ? `（${repeatNote}）` : ""}。`,
+      repeatEventNote: ({ repeatOrdinal, repeatReason }) =>
+        `${repeatOrdinal} 回目、理由=${repeatReason}`,
+      progressDiscoveries: {
+        clarify: "目標または受け入れ境界がルートを変える可能性",
+        "shrink-scope": "ルートが広く、境界を絞る必要",
+        options: "複数の実行可能な道筋",
+        risk: "実行を先取りする可能性のあるランタイムまたは外部リスク",
+        execute: "owner、ルート、検証条件が揃った状態",
+        verify: "完了主張前に fresh proof が必要",
+        fix: "レビューまたは検証で修正点を検出",
+        rollback: "リスクが承認済み境界を超える可能性",
+        nudge: "ユーザーに低コストの次手が必要",
+        pause: "消化または意思決定のための間",
+        default: "ルートを変える信号",
+      },
+      repeatPolicy:
+        "カード種類は動的なリズム信号です。同じ種類のカードは段階をまたいで繰り返し配布できます。",
+      nextLine:
+        "次はユーザー関連カードを先に見て、リスクや一時停止がルートを変えたか確認します。",
+    },
     businessPhasePlanTitle: "11フェーズ業務ワークフロー",
     businessPhaseSummary: (count) =>
       `${count} 個の業務フェーズを、パッケージングと完了確認のために記録しています。`,
@@ -2015,6 +2466,10 @@ const REPORT_STRINGS = {
     workingTreeDelta: "작업 트리 변경",
     currentGithubDeltaFromPrd: "PRD 의 현재 GitHub 격차",
     blockedOrNotDone: "차단 또는 미완료",
+    compatibilityFollowUp: "호환성 후속 항목",
+    releaseBoundary: "릴리스 경계",
+    cannotClaimGithubComplete: "cannotClaimGithubComplete",
+    cannotClaimAllToolCompatibility: "cannotClaimAllToolCompatibility",
     completedParallelBacklogEvidence: "완료된 병렬 backlog 증거",
     missing: "（누락）",
     capabilityGaps: "능력 격차",
@@ -2066,7 +2521,7 @@ const REPORT_STRINGS = {
       title: "Meta_Kim 알림",
       stageProgress: "단계 진행",
       stageProgressDetail:
-        "Critical, Fetch, Thinking, Execution, Review 를 사용자가 읽을 수 있는 짧은 진행 상태로 표시합니다.",
+        "Critical, Fetch, Thinking, Execution, Review, Meta-Review, Verification, Evolution 를 사용자가 읽을 수 있는 짧은 진행 상태로 표시합니다.",
       route: "능력 경로",
       routeDetail: (count) =>
         `희망형 자연어 요청을 해석하고 ${count}개 능력 유형을 확인했습니다.`,
@@ -2088,6 +2543,8 @@ const REPORT_STRINGS = {
       emissionEvidenceLabel: "conversation notice 발사 증거",
       signal: "사용자에게 보이는 신호",
       internalOnly: "내부 증거 전용",
+      internalOnlySummary:
+        "기계 판독용 감사 packet 은 내부에 보존하고, 이 보고서는 필드명 대신 쉬운 요약만 표시합니다.",
       partialStatusReason:
         "읽기 쉬운 보고서는 생성되었지만 이 스크립트는 아직 runtime conversation notice 를 발사하지 않았습니다.",
       emittedStatusReason: (channel, adapter, hash) =>
@@ -2198,12 +2655,63 @@ const REPORT_STRINGS = {
     capabilityType: "능력 유형",
     routeImpact: "경로 영향",
     cardPlanTitle: "카드 배분",
-    cardPlanSummary: (dealt, deckSize, pauseRule) =>
-      `카드 계획: 이번 실행에서 ${dealt}/${deckSize}장을 가시적으로 처리합니다. ${pauseRule}.`,
+    cardPlanSummary: (eventCount, cardTypeCount, pauseRule) =>
+      `카드 계획: 이번 실행에서 ${eventCount}개의 카드 이벤트와 ${cardTypeCount}개 카드 유형을 기록합니다. ${pauseRule}.`,
     cardDealer: "배분 owner",
     card: "카드",
     cardShell: "표시 shell",
     cardWhy: "지금 배분하는 이유",
+    cardNames: {
+      clarify: "명확화",
+      "shrink-scope": "범위 축소",
+      options: "선택지",
+      risk: "위험",
+      execute: "실행",
+      verify: "검증",
+      fix: "수정",
+      rollback: "롤백",
+      nudge: "다음 행동",
+      pause: "일시정지",
+    },
+    cardVisibleSummary: {
+      sectionTitle: "사용자 표시 카드 요약",
+      signalLabel: "카드 배분 요약",
+      userFocusLabel: "사용자 관련 카드",
+      riskInserted: "위험 삽입됨",
+      riskNotTriggered: "위험 미발동",
+      pauseTriggered: "일시정지 발동됨",
+      pauseNotTriggered: "일시정지 미발동",
+      nativeChoiceBoundary:
+        "이것은 대화/보고서 요약이며 native choice popup 증거가 아닙니다.",
+      dealtLine: ({ eventCount, cardTypeCount, activeCards }) =>
+        `카드 배분: ${eventCount}개 카드 이벤트, ${cardTypeCount}개 카드 유형: ${activeCards}.`,
+      inactiveLine: ({ inactiveCards }) => `이번 라운드 미발동 카드 유형: ${inactiveCards}.`,
+      userLine: ({ userCards, interruptCards, riskState, pauseState }) =>
+        `사용자 관련: ${userCards}; 인터럽트: ${interruptCards}; ${riskState}; ${pauseState}`,
+      progressSectionTitle: "실행 중 카드 이벤트",
+      progressStageLine: ({ stage }) => `${stage} 진행 중`,
+      progressDealLine: ({ discovery, cardName, repeatNote }) =>
+        `카드 배분: ${discovery} 발견, ${cardName} 카드 발동${repeatNote ? `(${repeatNote})` : ""}.`,
+      repeatEventNote: ({ repeatOrdinal, repeatReason }) =>
+        `${repeatOrdinal}번째, 이유=${repeatReason}`,
+      progressDiscoveries: {
+        clarify: "목표나 수용 기준이 경로를 바꿀 수 있음",
+        "shrink-scope": "경로가 넓어 경계를 좁혀야 함",
+        options: "실행 가능한 경로가 여러 개 있음",
+        risk: "런타임 또는 외부 플랫폼 위험이 실행을 선점할 수 있음",
+        execute: "owner, 경로, 검증 조건이 준비됨",
+        verify: "완료 주장 전에 fresh proof 가 필요함",
+        fix: "리뷰 또는 검증에서 수정 지점 발견",
+        rollback: "위험이 승인된 경계를 넘을 수 있음",
+        nudge: "사용자에게 낮은 비용의 다음 행동이 필요함",
+        pause: "소화 또는 의사결정 시간이 필요함",
+        default: "경로를 바꿀 수 있는 신호",
+      },
+      repeatPolicy:
+        "카드 유형은 동적 리듬 신호입니다. 같은 유형의 카드는 단계마다 반복해서 배분될 수 있습니다.",
+      nextLine:
+        "다음은 사용자 관련 카드를 먼저 보고 위험이나 일시정지가 경로를 바꿨는지 확인합니다.",
+    },
     businessPhasePlanTitle: "11단계 비즈니스 워크플로",
     businessPhaseSummary: (count) =>
       `${count}개 비즈니스 단계를 패키징과 종료 확인을 위해 기록했습니다.`,

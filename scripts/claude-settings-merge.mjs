@@ -23,8 +23,35 @@ export function isGlobalMetaKimManagedHookCommand(command) {
   if (typeof command !== "string") {
     return false;
   }
-  const n = normalizeHookCommand(command);
-  return n.includes("hooks/meta-kim/") || n.includes("hooks\\meta-kim\\");
+  const norm = normalizeHookCommand(command).replace(/\\/g, "/");
+  if (norm.includes("hooks/meta-kim/")) {
+    return true;
+  }
+  if (norm.includes("/hooks/hookprompt-adapter.mjs")) {
+    return true;
+  }
+  const managedFiles = [
+    ...REPO_META_KIM_HOOK_FILES,
+    ...RETIRED_META_KIM_HOOK_FILES,
+  ];
+  return managedFiles.some(
+    (file) =>
+      norm.includes(`/hooks/${file}`) ||
+      norm.includes(`.claude/hooks/${file}`) ||
+      norm.includes(`/hooks/${file} `),
+  );
+}
+
+export function isRawHookPromptUserPromptSubmitCommand(command) {
+  if (typeof command !== "string") {
+    return false;
+  }
+  const norm = normalizeHookCommand(command).replace(/\\/g, "/");
+  return (
+    norm.includes("/hooks/user-prompt-submit.js") ||
+    norm.includes("/skills/hookprompt/.claude/hooks/user-prompt-submit.js") ||
+    norm.includes("/skills/hookprompt/.codex/hooks/user-prompt-submit.js")
+  );
 }
 
 const RETIRED_META_KIM_HOOK_FILES = new Set(["pre-git-push-confirm.mjs"]);
@@ -56,33 +83,46 @@ export function hookCommandNode(absScriptPath) {
 }
 
 /** Hook blocks matching Meta_Kim canonical runtime (absolute paths under meta-kim/). */
-export function buildMetaKimHooksTemplate(absHooksDir) {
-  const cmd = (name) => ({
+export function buildMetaKimHooksTemplate(
+  absHooksDir,
+  packageRoot = null,
+  { hookPromptAdapter = false, hookPromptCommand = null } = {},
+) {
+  const cmd = (name, args = []) => ({
     type: "command",
-    command: hookCommandNode(path.join(absHooksDir, name)),
+    command: [
+      hookCommandNode(path.join(absHooksDir, name)),
+      ...args.map((arg) => JSON.stringify(String(arg).replace(/\\/g, "/"))),
+    ].join(" "),
   });
 
+  const userPromptHooks = [];
+  if (hookPromptCommand) {
+    userPromptHooks.push({
+      type: "command",
+      command: hookPromptCommand,
+      timeout: 10000,
+    });
+  } else if (hookPromptAdapter) {
+    userPromptHooks.push(cmd("hookprompt-adapter.mjs"));
+  }
+  userPromptHooks.push(
+    cmd(
+      "activate-meta-theory-spine.mjs",
+      packageRoot ? ["--package-root", packageRoot] : [],
+    ),
+  );
+
   return {
+    UserPromptSubmit: [
+      {
+        hooks: userPromptHooks,
+      },
+    ],
     PreToolUse: [
       {
         matcher: "Bash",
         hooks: [cmd("block-dangerous-bash.mjs")],
-      },
-    ],
-    PostToolUse: [
-      {
-        matcher: "Edit|Write",
-        hooks: [
-          cmd("post-format.mjs"),
-          cmd("post-typecheck.mjs"),
-          cmd("post-console-log-warn.mjs"),
-        ],
-      },
-    ],
-    SubagentStart: [
-      {
-        matcher: "*",
-        hooks: [cmd("subagent-context.mjs")],
       },
     ],
     Stop: [
@@ -92,6 +132,9 @@ export function buildMetaKimHooksTemplate(absHooksDir) {
           cmd("stop-compaction.mjs"),
           cmd("stop-console-log-audit.mjs"),
           cmd("stop-completion-guard.mjs"),
+          cmd("stop-memory-save.mjs"),
+          cmd("stop-save-progress.mjs"),
+          cmd("stop-spine-cleanup.mjs"),
         ],
       },
     ],
@@ -105,7 +148,8 @@ export function stripGlobalMetaKimHookEntriesFromBlocks(blocks) {
       hooks: (block.hooks || []).filter(
         (h) =>
           !isGlobalMetaKimManagedHookCommand(h.command || "") &&
-          !isRetiredMetaKimHookCommand(h.command || ""),
+          !isRetiredMetaKimHookCommand(h.command || "") &&
+          !isRawHookPromptUserPromptSubmitCommand(h.command || ""),
       ),
     }))
     .filter((block) => (block.hooks || []).length > 0);
@@ -162,6 +206,19 @@ export function stripRepoMetaKimHookEntriesFromBlocks(blocks) {
     .filter((block) => (block.hooks || []).length > 0);
 }
 
+export function stripRepoMetaKimHooksFromSettings(settings) {
+  const next = { ...settings };
+  const hooks = {};
+  for (const [event, blocks] of Object.entries(next.hooks ?? {})) {
+    const cleaned = stripRepoMetaKimHookEntriesFromBlocks(blocks || []);
+    if (cleaned.length > 0) {
+      hooks[event] = cleaned;
+    }
+  }
+  next.hooks = hooks;
+  return next;
+}
+
 // ── Shared block merge ───────────────────────────────────────────────────
 
 export function mergeHookMatcherBlocks(existing, additions) {
@@ -194,11 +251,19 @@ export function mergeGlobalMetaKimHooksIntoSettings(settings, template) {
   if (!next.hooks) {
     next.hooks = {};
   }
-  const hooks = { ...next.hooks };
+  const hooks = {};
+  for (const [event, blocks] of Object.entries(next.hooks)) {
+    const cleaned = stripGlobalMetaKimHookEntriesFromBlocks(blocks || []);
+    if (cleaned.length > 0) {
+      hooks[event] = cleaned;
+    }
+  }
 
   for (const [event, additionBlocks] of Object.entries(template)) {
-    const cleaned = stripGlobalMetaKimHookEntriesFromBlocks(hooks[event] || []);
-    hooks[event] = mergeHookMatcherBlocks(cleaned, additionBlocks);
+    hooks[event] =
+      event === "UserPromptSubmit"
+        ? mergeHookMatcherBlocks(additionBlocks, hooks[event] || [])
+        : mergeHookMatcherBlocks(hooks[event] || [], additionBlocks);
   }
 
   next.hooks = hooks;
@@ -214,11 +279,16 @@ export function mergeRepoMetaKimHooksIntoSettings(settings, templateHooks) {
   if (!next.hooks) {
     next.hooks = {};
   }
-  const hooks = { ...next.hooks };
+  const hooks = {};
+  for (const [event, blocks] of Object.entries(next.hooks)) {
+    const cleaned = stripRepoMetaKimHookEntriesFromBlocks(blocks || []);
+    if (cleaned.length > 0) {
+      hooks[event] = cleaned;
+    }
+  }
 
   for (const [event, additionBlocks] of Object.entries(templateHooks)) {
-    const cleaned = stripRepoMetaKimHookEntriesFromBlocks(hooks[event] || []);
-    hooks[event] = mergeHookMatcherBlocks(cleaned, additionBlocks);
+    hooks[event] = mergeHookMatcherBlocks(hooks[event] || [], additionBlocks);
   }
 
   next.hooks = hooks;
@@ -241,8 +311,10 @@ export function mergePermissionsDenyUnion(canonicalPerm, basePerm) {
 }
 
 /**
- * Merge canonical Claude settings into existing repo-local settings: keep user keys,
- * union permissions.deny, merge Meta_Kim-managed hooks only.
+ * Merge canonical Claude settings into existing repo-local settings: keep user
+ * keys, union permissions.deny, strip stale Meta_Kim hook commands, and merge
+ * the current canonical project hook block. Global install carries reusable
+ * global hooks; project bootstrap still writes project-native runtime config.
  * @param {Record<string, unknown>} base - existing ~/.meta or user file (may be {})
  * @param {Record<string, unknown>} canonical - parsed canonical/runtime-assets/claude/settings.json with repo-relative hook paths.
  */
@@ -266,8 +338,10 @@ export function mergeRepoClaudeSettings(base, canonical, repoRoot = null) {
     base.permissions,
   );
 
-  const canonHooks = canonicalForMerge.hooks;
-  out.hooks = mergeRepoMetaKimHooksIntoSettings(base, canonHooks).hooks;
+  out.hooks = mergeRepoMetaKimHooksIntoSettings(
+    stripRepoMetaKimHooksFromSettings(base),
+    canonicalForMerge.hooks,
+  ).hooks;
 
   return out;
 }

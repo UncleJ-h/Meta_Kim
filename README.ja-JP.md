@@ -12,9 +12,10 @@
 </p>
 
 <p>
-  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw%20%7C%20Cursor-111827"/>
+  <img alt="Projection tiers" src="https://img.shields.io/badge/default-Claude%20Code%20%7C%20Codex%20%2B%20compat-OpenClaw%20%7C%20Cursor-111827"/>
+  <img alt="Candidate compatibility probes" src="https://img.shields.io/badge/candidate-Qoder%20%7C%20Trae%20%7C%20Kiro%20%7C%20Cascade%20%7C%20Cline%20%7C%20Roo%20%7C%20Continue-475569"/>
   <img alt="Stars" src="https://img.shields.io/github/stars/KimYx0207/Meta_Kim?style=flat&logo=github"/>
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-green"/>
+  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green"/>
 </p>
 
 </div>
@@ -52,6 +53,14 @@ node setup.mjs
 
 > 💡 **インストール後**：`setup.mjs` が成果物の場所を出力します。いつでも再確認（または前回との差分表示）したいときは、インストール先のディレクトリで `npm run meta:status` を実行してください。
 
+新規 clone 直後は、Meta_Kim がソースファイル、生成される projection、ローカル状態を意図的に分けていると見てください。
+
+| レイヤー | 例 | 見えるタイミング |
+| --- | --- | --- |
+| GitHub source | `README.md`、`AGENTS.md`、`CLAUDE.md`、`canonical/`、`config/`、`scripts/` | `git clone` 直後からリポジトリに存在します。該当する場合は `package.json` の `files` whitelist にも入ります |
+| 生成される runtime projection | `.claude/`、`.codex/`、`.agents/`、`.cursor/`、`openclaw/`、`.mcp.json`、`codex/` | `node setup.mjs` または `npm run meta:sync` によりローカル生成されます。gitignored で、GitHub source ではありません |
+| ローカル実行状態とグラフ出力 | `.meta-kim/`、`graphify-out/`、`tests/output/`、`task_plan.md`、`findings.md`、`progress.md` | setup、graphify、tests、governed run が必要なときだけ作られます。local-only で再生成可能です |
+
 リポジトリを保守する場合は、まず `canonical/` と `config/contracts/workflow-contract.json` を編集し、そのあとで同期と検証を実行します（Node.js >= 22.13.0 が必要）。
 
 ```bash
@@ -71,11 +80,13 @@ Meta_Kim は、互換性のある面をすべて「完全対応」とは呼び�
 
 | 層 | 製品 | 意味 |
 |---|---|---|
-| 正式 runtime projection | Claude Code、Codex、OpenClaw、Cursor | canonical の統治層を runtime 固有ファイルへ投影し、`npm run meta:sync` / `npm run meta:check` で検証します。 |
-| ネイティブ依存インストール対象 | opencode、Qwen、Zed、Gemini、CodeBuddy、Antigravity、JoyCode | ECC の upstream installer は対応していますが、Meta_Kim の正式 runtime projection ではありません。 |
-| candidate probe | Qoder CLI | Qoder 公式ドキュメントでは skills、subagents、hooks、MCP が確認できます。Meta_Kim では候補として追跡し、正式対応とは扱いません。 |
+| default formal projection | Claude Code、Codex | canonical の統治層をデフォルトで runtime 固有ファイルへ投影し、`npm run meta:sync` / `npm run meta:check` で検証します。 |
+| non-default compatibility projection | OpenClaw、Cursor | 明示的に選択した場合だけ project projection を生成します。runtime 変更は maintainer handshake と tool 側の self-test evidence が必要です。 |
+| candidate compatibility probe | Qoder CLI、Trae、Kiro、Windsurf / Devin Desktop Cascade、Cline、Roo Code、Continue | 公式ドキュメントで rules / instructions、skills、agents / modes、hooks、MCP、commands、memory、permission controls などの互換 primitive が確認できます。Meta_Kim では候補として追跡し、正式対応とは扱いません。 |
 
 事実のソース: `config/runtime-compatibility-catalog.json`。
+
+Surface compatibility は formal runtime support より弱い扱いです。adapter、profile/layout、sync tests、live validation が揃うまでは正式 projection には昇格しません。依存プロジェクト側の install target matrix は、Meta_Kim の support claim としてここでは繰り返しません。
 
 ---
 
@@ -472,18 +483,22 @@ Claude Code では、Meta_Kim は **Hook** によって自動化されていま�
 
 ### クロスプラットフォーム映射
 
-**このアーキテクチャは、agent と agent 間通信をサポートする任意のプロジェクトに映射できます。**
+**新しい platform は、Meta_Kim に対応できる primitive を持つ場合に候補として評価できます。ただし、profile、layout、sync、tests、evidence が揃うまでは正式 projection ではありません。**
 
-Meta_Kim はすでに 4 つのプラットフォームに対応しています。
+Meta_Kim は現在 2 つの default formal projection target と、2 つの non-default compatibility projection target を持ちます。
 
 | プラットフォーム | 状態 | 映射方法 |
 | --- | --- | --- |
-| **Claude Code** | 完全対応 | `.claude/agents/*.md` + `SKILL.md` + hooks + MCP |
-| **Codex** | 完全対応 | `.codex/agents/*.toml` + skills + commands + hooks |
-| **OpenClaw** | 完全対応 | `openclaw/` のディレクトリ構造 + workspaces + hooks |
-| **Cursor** | 完全対応 | `.cursor/agents/*.md` + skills + hooks + MCP |
+| **Claude Code** | default formal projection | `.claude/agents/*.md` + `SKILL.md` + hooks + MCP |
+| **Codex** | default formal projection | generated local `.codex/agents/*.toml` + `.agents/skills/` + commands + hooks |
+| **OpenClaw** | non-default compatibility projection; maintainer handshake required | `openclaw/` workspaces + skills + internal hooks |
+| **Cursor** | non-default compatibility projection; maintainer handshake required | `.cursor/agents/*.md` + `.cursor/rules/*.mdc` + skills + hooks + MCP |
 
-中核ロジックは同じで、`canonical/` が共通の正典ソースです。同期スクリプト `npm run meta:sync` により、各プラットフォームの構造へ投影されます。
+Meta_Kim は Qoder CLI、Trae、Kiro、Windsurf / Devin Desktop Cascade、Cline、Roo Code、Continue も candidate compatibility probe として追跡しています。これらは公式ドキュメントで互換 primitive が確認できますが、setup は project projection を生成しません。promotion には runtime profile、projection layout、generated paths、sync tests、install policy、live または official probe evidence が必要です。
+
+中核ロジックは同じで、`canonical/` が共通の正典ソースです。同期スクリプト `npm run meta:sync` により、正式 projection target の構造へ投影されます。
+
+Open-source boundary: 生成された runtime projection directory は local output で、`.gitignore` により GitHub source には入りません。対象は `.claude/`、`.codex/`、`.agents/`、`.cursor/`、`openclaw/`、`.mcp.json`、`codex/` です。9 つの governance agent の唯一の source は `canonical/agents/` で、Codex adapter / business-role `.toml` は host 用にローカル生成できますが、force-add や package source への同梱は禁止です。
 
 ```mermaid
 flowchart TB
@@ -494,29 +509,29 @@ flowchart TB
     CANONICAL --> |npm run meta:sync| OPENCLAW["openclaw/<br/>OpenClaw<br/>ワークスペース・スキル・フック"]
     CANONICAL --> |npm run meta:sync| CURSOR[".cursor/<br/>Cursor<br/>エージェント・スキル・フック・MCP"]
 
-    NEW[新しいプラットフォーム...] -.-> |設定で映射| CANONICAL
+    CANDIDATE["candidate probes<br/>Qoder / Trae / Kiro / Cascade / Cline / Roo / Continue"] -.-> |promotion requires profile + layout + tests + evidence| CANONICAL
 
     style CANONICAL fill:#7c3aed,color:#fff
     style CLAUDE fill:#fbbf24,color:#000
     style CODEX fill:#34d399,color:#000
     style OPENCLAW fill:#60a5fa,color:#000
     style CURSOR fill:#f87171,color:#fff
-    style NEW fill:#555,color:#aaa
+    style CANDIDATE fill:#555,color:#aaa
 ```
 
-新しいプラットフォームは、agent と agent 間通信をサポートしていれば、順次追加できます。
+新しい platform は順次追加できますが、候補から正式 projection への昇格は adapter 形態と検証可能性が揃ってからです。
 
-ただし、4 つのランタイムは対等ではありません。現時点では Claude Code の受け皿が最も完全で、主編集ランタイムです。
+4 つの projection family は同じ canonical source から生成されますが、native surface は異なります。Claude Code と Codex は default formal projection、OpenClaw と Cursor は maintainer handshake と native self-test evidence が必要な non-default compatibility projection です。
 
 | 能力面 | Claude Code | Codex | OpenClaw | Cursor |
 | --- | --- | --- | --- | --- |
 | **agent** | native agents/subagents、プロジェクト級とユーザー級が成熟 | custom agents/subagents が強力 | workspace 型 agent、agent-to-agent 対応 | agent 投影は使えるが軽量 |
 | **skill / references** | native skill、references、グローバル skill エコシステムが充実 | `.agents/skills/` がプロジェクト skill ルート | workspace skill + installable skill | `.cursor/skills/` による軽量接続 |
-| **hook / 自動化** | project hooks + settings.json + 拡張エコシステム | リポジトリ級の native hook 面はない | workspace boot / hook 的な能力あり | 統治 hook は最も軽い |
+| **hook / 自動化** | project hooks + settings.json + 拡張エコシステム | trusted `.codex/hooks.json` project/user hooks | internal lifecycle hooks。blocking/canceling policy には typed plugin hooks が必要 | `.cursor/hooks.json` lowerCamel lifecycle hooks と `preToolUse` / `failClosed` |
 | **MCP / 設定** | native MCP と設定面が充実 | runtime adapter と MCP を接続可能 | workspace config が明確 | MCP は接続可能だが全体は軽量 |
-| **統治閉ループの受け皿** | **最も高い** | 高いが Claude Code よりは下 | 高いが形態が異なる | 最も軽い |
+| **統治閉ループの受け皿** | Claude-native surface で完全対応 | Codex-native surface で完全対応 | OpenClaw-native surface で互換対応。tool-denial 変更は strict self-test evidence が必要 | Cursor-native surface で互換対応。official hook gate と project rule を保持 |
 
-理由は感覚ではありません。Claude Code には agent、skill、references、hooks、settings、MCP、plugin、global capability discovery などの native 面が揃っているため、「配牌 → 契約 → 門 → 自動防御 → 書き戻し」の閉ループを完整に載せやすいのです。
+重要なのは順位付けではなく互換 discipline です。各 formal target は、自分の agent、skill、hook、MCP、choice、config surface を保ち、別 host の形式を universal format として扱いません。
 
 ### リポジトリの四層構造
 
@@ -727,8 +742,8 @@ flowchart TB
 
 | コマンド | 役割 |
 | --- | --- |
-| `npm run meta:deps:install` | 9 個のコミュニティ skill を全体へインストール |
-| `npm run meta:deps:install:all-runtimes` | すべての runtime にインストール |
+| `npm run meta:deps:install` | デフォルトの Claude Code + Codex 経路へ 9 個のコミュニティ skill をインストール |
+| `npm run meta:deps:install:all-runtimes` | Claude Code、Codex、OpenClaw、Cursor へ明示的にインストール |
 | `npm run meta:deps:install:claude-plugins` | Claude Code marketplace plugin のみインストール |
 | `npm run discover:global` | グローバル能力をスキャン |
 | `npm run meta:sync:global` | meta-theory をユーザー級へ同期 |
@@ -744,11 +759,12 @@ flowchart TB
 | Cursor | `.cursor/` → `.cursor-plugin/` → `skills/` |
 | OpenClaw | `skills/` |
 | opencode | `.opencode/` → `skills/` |
-| Qwen | ECC は `npx --yes --package ecc-universal@2.0.0-rc.1 ecc install --profile core --target qwen` を使います |
-| Zed、Gemini、CodeBuddy、Antigravity、JoyCode | ECC は project-local です。各プロジェクトルートで `npx --yes --package ecc-universal@2.0.0-rc.1 ecc install --profile core --target <target>` を実行します |
+| Qwen | ECC は `npx --yes --package ecc-universal@latest ecc install --profile core --target qwen` を使います |
+| Zed、Gemini、CodeBuddy、Antigravity、JoyCode | ECC は project-local です。各プロジェクトルートで `npx --yes --package ecc-universal@latest ecc install --profile core --target <target>` を実行します |
 | Qoder CLI | candidate probe のみです。`.qoder/` → `skills/` の探索は可能ですが、upstream ECC が `qoder` を列挙していないため ECC install は実行しません |
+| Trae、Kiro、Windsurf / Devin Desktop Cascade、Cline、Roo Code、Continue | candidate probe のみです。互換 primitive は `config/runtime-compatibility-catalog.json` で追跡しますが、adapter、sync path、validation suite が揃うまでは install / projection しません |
 
-抽出結果は `~/.<runtime>/skills/<id>/` に配置される。Claude marketplace plugin のみをインストールするには `npm run meta:deps:install:claude-plugins`、全 runtime を一括カバーするには `npm run meta:deps:install:all-runtimes`。**アップグレード時に手動クリーンアップは不要**：旧版の full-repo clone 残留はターゲットディレクトリ直下の `.claude-plugin/` マーカーで自動検出され、次回実行時に再抽出される。
+抽出結果は `~/.<runtime>/skills/<id>/` に配置される。インストール/更新で Enter を押すと、デフォルトは Claude Code + Codex になる。Claude marketplace plugin のみをインストールするには `npm run meta:deps:install:claude-plugins`、Claude Code、Codex、OpenClaw、Cursor を明示的にカバーするには `npm run meta:deps:install:all-runtimes`。**アップグレード時に手動クリーンアップは不要**：旧版の full-repo clone 残留はターゲットディレクトリ直下の `.claude-plugin/` マーカーで自動検出され、次回実行時に再抽出される。
 
 ### 上級運用
 
@@ -805,7 +821,7 @@ Meta_Kim は 3 ヶ所に書き込みます：
 
 ### Q: どのプラットフォームに対応していますか?
 
-正式な runtime projection は Claude Code、Codex、OpenClaw、Cursor です。ECC はさらに opencode、Qwen、Zed、Gemini、CodeBuddy、Antigravity、JoyCode を native install target として扱います。Qoder CLI は candidate probe です。公式ドキュメントで skills、subagents、hooks、MCP は確認できますが、Meta_Kim の正式 runtime projection ではありません。正確な境界は `config/runtime-compatibility-catalog.json` を参照してください。
+Claude Code と Codex は default formal runtime projection です。OpenClaw と Cursor は maintainer handshake と native self-test evidence が必要な non-default compatibility projection です。Qoder CLI、Trae、Kiro、Windsurf / Devin Desktop Cascade、Cline、Roo Code、Continue は candidate probe です。公式ドキュメントで互換 primitive は確認できますが、Meta_Kim の正式 runtime projection ではありません。依存プロジェクト側の install target は upstream project で管理されるため、Meta_Kim の support claim としては繰り返しません。正確な境界は `config/runtime-compatibility-catalog.json` を参照してください。
 
 ### Q: インストールは難しいですか?
 
@@ -853,7 +869,7 @@ Meta_Kim は MCP（Model Context Protocol）を使って agent の能力境界�
 
 ## サードパーティの依存関係
 
-Meta_Kim 自体は MIT ライセンスです。以下のオプションスキルリポジトリは `node setup.mjs` で個別にインストールされ、それぞれのライセンスが独立して適用されます。
+Meta_Kim 自体は Apache License 2.0 の下でライセンスされています。以下のオプションスキルリポジトリは `node setup.mjs` で個別にインストールされ、それぞれのライセンスが独立して適用されます。
 
 ### npm 依存関係
 
@@ -888,4 +904,16 @@ Meta_Kim 自体は MIT ライセンスです。以下のオプションスキル
 
 ## ライセンス
 
-本プロジェクトは [MIT License](LICENSE) を採用しています。
+本プロジェクトは [Apache License 2.0](LICENSE) の下でライセンスされています。
+
+### 商用利用と表示
+
+商用利用は許可されています。Meta_Kim またはその実質的な部分を再配布する場合は、配布物に [LICENSE](LICENSE) と [NOTICE](NOTICE) を含めてください。
+
+推奨される表示:
+
+```text
+Meta_Kim by KimYx0207 — https://github.com/KimYx0207/Meta_Kim
+```
+
+この表示は、KimYx0207 または Meta_Kim プロジェクトがあなたの製品、サービス、配布物を支持していることを意味するものではありません。サードパーティの依存関係とオプションスキルリポジトリには、それぞれのライセンスが適用されます。

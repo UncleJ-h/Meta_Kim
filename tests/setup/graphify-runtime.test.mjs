@@ -1,16 +1,35 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   detectPython310,
   extractPipShowVersion,
   formatPythonLauncher,
+  homebrewPythonCandidates,
+  pythonCandidates,
   runPythonModule,
   meetsMinimumVersion,
   checkNetworkx,
   ensurePip,
   discoverWindowsPythonPathCommands,
 } from "../../scripts/graphify-runtime.mjs";
+
+const repoRoot = join(import.meta.dirname, "..", "..");
+
+describe("project-post-copy-init graphify bootstrap", () => {
+  test("uses the shared Python detector instead of a local launcher list", () => {
+    const source = readFileSync(
+      join(repoRoot, "scripts", "project-post-copy-init.mjs"),
+      "utf8",
+    );
+
+    assert.match(source, /detectPython310/);
+    assert.match(source, /bootstrapPip:\s*true/);
+    assert.doesNotMatch(source, /function pythonCandidates/);
+  });
+});
 
 describe("detectPython310()", () => {
   test("detects python when version is printed to stderr", () => {
@@ -105,6 +124,82 @@ describe("detectPython310()", () => {
 
     assert.equal(python.command, "python3");
     assert.equal(python.pipBootstrapped, true);
+  });
+
+  test("falls back to Homebrew Python when PATH launchers are unavailable", () => {
+    const calls = [];
+    const python = detectPython310((command, args) => {
+      calls.push([command, args]);
+      if (
+        command === "/opt/homebrew/bin/python3" &&
+        args.join(" ") === "--version"
+      ) {
+        return { status: 0, stdout: "Python 3.12.2", stderr: "" };
+      }
+      if (
+        command === "/opt/homebrew/bin/python3" &&
+        args.join(" ") === "-m pip --version"
+      ) {
+        return { status: 0, stdout: "pip 24.3", stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: "", error: new Error("missing") };
+    }, "darwin", { requirePip: true, env: {} });
+
+    assert.equal(python.command, "/opt/homebrew/bin/python3");
+    assert.equal(python.version.minor, 12);
+    assert.deepEqual(calls[0], ["python3", ["--version"]]);
+    assert.deepEqual(calls[1], ["python", ["--version"]]);
+  });
+});
+
+describe("pythonCandidates()", () => {
+  test("macOS keeps PATH launchers first and includes Homebrew paths", () => {
+    const candidates = pythonCandidates("darwin", {
+      HOMEBREW_PREFIX: "/custom/homebrew",
+    });
+
+    assert.deepEqual(candidates.slice(0, 2), [
+      { command: "python3", args: [] },
+      { command: "python", args: [] },
+    ]);
+    assert(candidates.some((candidate) => candidate.command === "/custom/homebrew/bin/python3"));
+    assert(candidates.some((candidate) => candidate.command === "/opt/homebrew/bin/python3"));
+    assert(candidates.some((candidate) => candidate.command === "/usr/local/bin/python3"));
+    assert(
+      candidates.some(
+        (candidate) =>
+          candidate.command ===
+          "/custom/homebrew/opt/python@3.12/bin/python3.12",
+      ),
+    );
+  });
+
+  test("Linux includes Linuxbrew paths after PATH launchers", () => {
+    const candidates = pythonCandidates("linux", {});
+
+    assert.deepEqual(candidates.slice(0, 2), [
+      { command: "python3", args: [] },
+      { command: "python", args: [] },
+    ]);
+    assert(
+      candidates.some(
+        (candidate) =>
+          candidate.command === "/home/linuxbrew/.linuxbrew/bin/python3",
+      ),
+    );
+  });
+});
+
+describe("homebrewPythonCandidates()", () => {
+  test("deduplicates HOMEBREW_PREFIX when it matches a default prefix", () => {
+    const candidates = homebrewPythonCandidates("darwin", {
+      HOMEBREW_PREFIX: "/opt/homebrew",
+    });
+    const matches = candidates.filter(
+      (candidate) => candidate.command === "/opt/homebrew/bin/python3",
+    );
+
+    assert.equal(matches.length, 1);
   });
 });
 

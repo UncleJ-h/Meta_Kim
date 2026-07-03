@@ -4,12 +4,27 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  assertCodexConfigTomlMergeable,
   ensureCodexAppNativeControls,
   ensureCodexWindowsNotifyCompat,
   ensureCodexRequestUserInputFeature,
   hasCodexRequestUserInputFeature,
   mergeCodexConfigAddOnly,
 } from "../../scripts/codex-config-merge.mjs";
+
+function sectionBlock(configText, sectionName) {
+  const lines = String(configText).replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((line) => line.trim() === `[${sectionName}]`);
+  if (start < 0) return "";
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\s*\[[^\]]+\]\s*(?:#.*)?$/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
 
 describe("Codex config merge", () => {
   test("adds features section when missing", () => {
@@ -52,6 +67,55 @@ describe("Codex config merge", () => {
       out,
       /\[features\]\nmulti_agent = true\ndefault_mode_request_user_input = true\n\[mcp_servers\.github\]/,
     );
+  });
+
+  test("rejects unclosed TOML arrays before Codex feature merges", () => {
+    const invalid = [
+      "notify = [",
+      '  "terminal-notifier"',
+      "multi_agent = true",
+      "",
+    ].join("\n");
+
+    assert.throws(
+      () => ensureCodexRequestUserInputFeature(invalid),
+      (error) => {
+        assert.equal(error.name, "CodexConfigTomlError");
+        assert.match(error.message, /line 3:1/);
+        assert.match(error.message, /array opened at line 1:10/);
+        assert.match(error.message, /multi_agent = true/);
+        assert.match(error.message, /\[features\]/);
+        assert.match(error.message, /missing comma or closing bracket/);
+        return true;
+      },
+    );
+    assert.throws(
+      () => mergeCodexConfigAddOnly(invalid, "[features]\njs_repl = true\n"),
+      /Codex config\.toml is not safe to merge/,
+    );
+    assert.throws(
+      () => ensureCodexAppNativeControls(invalid, { platformName: "darwin" }),
+      /Codex config\.toml is not safe to merge/,
+    );
+  });
+
+  test("allows valid multiline TOML arrays before feature merges", () => {
+    const valid = [
+      "notify = [",
+      '  "terminal-notifier",',
+      '  "-message",',
+      '  "done"',
+      "]",
+      "",
+      "[features]",
+      "multi_agent = true",
+      "",
+    ].join("\n");
+
+    assert.doesNotThrow(() => assertCodexConfigTomlMergeable(valid));
+    const out = ensureCodexRequestUserInputFeature(valid);
+    assert.match(out, /notify = \[/);
+    assert.match(out, /\[features\]\nmulti_agent = true\ndefault_mode_request_user_input = true/);
   });
 
   test("replaces macOS terminal-notifier with Windows-safe no-op notify", () => {
@@ -250,5 +314,80 @@ describe("Codex config merge", () => {
     assert.match(out, /\[projects\."D:\/User\/Project"\]\ntrust_level = "trusted"/);
     assert.doesNotMatch(out, /approval_policy = "on-request"/);
     assert.doesNotMatch(out, /sandbox_mode = "read-only"/);
+  });
+
+  test("normalizes MCP server when upstream replaces remote url with stdio command", () => {
+    const originalUserConfig = [
+      "[mcp_servers.exa]",
+      'url = "https://mcp.exa.ai/mcp"',
+      "enabled = false",
+      "",
+    ].join("\n");
+    const upstreamConfig = [
+      "[mcp_servers.exa]",
+      'command = "npx"',
+      'args = ["-y", "mcp-remote", "https://mcp.exa.ai/mcp"]',
+      "startup_timeout_sec = 30",
+      "",
+    ].join("\n");
+
+    const out = mergeCodexConfigAddOnly(originalUserConfig, upstreamConfig);
+    const exa = sectionBlock(out, "mcp_servers.exa");
+
+    assert.match(exa, /command = "npx"/);
+    assert.match(
+      exa,
+      /args = \["-y", "mcp-remote", "https:\/\/mcp\.exa\.ai\/mcp"\]/,
+    );
+    assert.match(exa, /startup_timeout_sec = 30/);
+    assert.match(exa, /enabled = false/);
+    assert.doesNotMatch(exa, /^\s*url\s*=/m);
+  });
+
+  test("normalizes MCP server when upstream replaces stdio command with remote url", () => {
+    const originalUserConfig = [
+      "[mcp_servers.exa]",
+      'command = "npx"',
+      'args = ["-y", "mcp-remote", "https://mcp.exa.ai/mcp"]',
+      "startup_timeout_sec = 30",
+      "",
+    ].join("\n");
+    const upstreamConfig = [
+      "[mcp_servers.exa]",
+      'url = "https://mcp.exa.ai/mcp"',
+      "startup_timeout_sec = 30",
+      "",
+    ].join("\n");
+
+    const out = mergeCodexConfigAddOnly(originalUserConfig, upstreamConfig);
+    const exa = sectionBlock(out, "mcp_servers.exa");
+
+    assert.match(exa, /url = "https:\/\/mcp\.exa\.ai\/mcp"/);
+    assert.match(exa, /startup_timeout_sec = 30/);
+    assert.doesNotMatch(exa, /^\s*command\s*=/m);
+    assert.doesNotMatch(exa, /^\s*args\s*=/m);
+  });
+
+  test("cleans an existing invalid MCP url plus stdio server during app control sync", () => {
+    const input = [
+      "[mcp_servers.exa]",
+      'url = "https://mcp.exa.ai/mcp"',
+      'command = "npx"',
+      'args = ["-y", "mcp-remote", "https://mcp.exa.ai/mcp"]',
+      "startup_timeout_sec = 30",
+      "",
+    ].join("\n");
+
+    const out = ensureCodexAppNativeControls(input, { platformName: "linux" });
+    const exa = sectionBlock(out, "mcp_servers.exa");
+
+    assert.match(exa, /command = "npx"/);
+    assert.match(
+      exa,
+      /args = \["-y", "mcp-remote", "https:\/\/mcp\.exa\.ai\/mcp"\]/,
+    );
+    assert.match(exa, /startup_timeout_sec = 30/);
+    assert.doesNotMatch(exa, /^\s*url\s*=/m);
+    assert.match(out, /default_mode_request_user_input = true/);
   });
 });
