@@ -220,7 +220,8 @@ describe("SKILL.md structural integrity", async () => {
         raw,
         /Thinking[\s\S]{0,120}Execution[\s\S]{0,240}agent-teams-playbook/i,
       );
-      assert.match(raw, /2\+.*parallel worker lane|two or more.*parallel worker lane/i);
+      assert.match(raw, /2\+ executable worker lanes/i);
+      assert.match(raw, /DAG.*collision/i);
       assert.doesNotMatch(
         raw,
         /Apply `agent-teams-playbook`[\s\S]{0,80}before substantive work/i,
@@ -229,8 +230,47 @@ describe("SKILL.md structural integrity", async () => {
 
     test("runtime command does not force agent-teams-playbook for all non-trivial work", async () => {
       const command = await readFile("canonical/runtime-assets/codex/commands/meta-theory.md");
-      assert.match(command, /2\+ independent parallel worker lanes/i);
+      assert.match(command, /2\+ executable worker lanes/i);
+      assert.match(command, /DAG.*collision/i);
       assert.doesNotMatch(command, /For any non-trivial task,\s*first apply `agent-teams-playbook`/i);
+    });
+
+    test("Codex /meta-theory command surfaces governed run output and discovers namespaced subagent tools", async () => {
+      const command = await readFile("canonical/runtime-assets/codex/commands/meta-theory.md");
+      const pkg = await readJson("package.json");
+      assert.match(command, /__META_KIM_PACKAGE_ROOT__\/scripts\/run-meta-theory-governed-execution\.mjs/);
+      assert.match(command, /--runtime codex/);
+      assert.match(command, /meta:theory:run:notice -- --runtime codex "\$ARGUMENTS"/);
+      assert.match(command, /relay the compact stdout notice/i);
+      assert.match(command, /Windows\/npm paths strip forwarded flags/i);
+      assert.match(pkg.scripts["meta:theory:run:notice"], /--emit-conversation-notice/);
+      assert.match(command, /tool discovery/i);
+      assert.match(command, /multi_agent_v1\.spawn_agent/);
+      assert.match(command, /Record the exact tool name and returned agent id/i);
+    });
+
+    test("Claude Code /meta-theory command passes Claude runtime and requires live Agent Task dispatch", async () => {
+      const command = await readFile("canonical/runtime-assets/claude/commands/meta-theory.md");
+      assert.match(command, /__META_KIM_PACKAGE_ROOT__\/scripts\/run-meta-theory-governed-execution\.mjs/);
+      assert.match(command, /--runtime claude_code/);
+      assert.match(command, /meta:theory:run:notice -- --runtime claude_code "\$ARGUMENTS"/);
+      assert.match(command, /HOST-NATIVE FAN-OUT PREFERRED/i);
+      assert.match(command, /hostInvocationRequestPacket/);
+      assert.match(command, /agent-teams-playbook/);
+      assert.ok(command.includes("real `Agent` / Task surface"));
+      assert.ok(command.includes("workerTaskPackets[].taskPacketId"));
+      assert.match(command, /tool-call id/i);
+      assert.match(command, /do not silently continue as main-thread execution/i);
+    });
+
+    test("governed runner routes through the requested runtime instead of hardcoding Codex", async () => {
+      const runner = await readFile("scripts/run-meta-theory-governed-execution.mjs");
+      assert.match(runner, /argValue\("--runtime"/);
+      assert.match(runner, /normalizeRouteRuntime\(runtimeArg\)/);
+      assert.match(runner, /selectExecutionRoute\(\{ task, runtime: routeRuntime, os: routeOs \}\)/);
+      assert.match(runner, /runtimeFamily: routeRuntime/);
+      assert.match(runner, /The Node governed runner cannot call the active host Agent\/Task or spawn_agent tool directly/);
+      assert.doesNotMatch(runner, /cannot call the Codex App\/CLI spawn_agent host tool directly/);
     });
 
     test("SKILL.md preserves product reasoning, ten-x path challenge, and user-facing closure", () => {
@@ -489,7 +529,8 @@ describe("Canonical meta-agent boundary structure", () => {
 
   test("meta-conductor scopes agent-teams-playbook to parallel lanes only", async () => {
     const conductor = await readFile("canonical/agents/meta-conductor.md");
-    assert.match(conductor, /2\+ independent parallel worker lanes/i);
+    assert.match(conductor, /2\+ executable worker lanes/i);
+    assert.match(conductor, /DAG.*collision/i);
     assert.doesNotMatch(
       conductor,
       /At the start of Stage 4 \(Execution\), use the `agent-teams-playbook` provider package/i,

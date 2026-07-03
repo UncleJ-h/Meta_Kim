@@ -10,8 +10,10 @@ import {
   buildCodexHooksJson,
   buildCursorHooksJson,
   buildHookPromptAdapterSource,
+  hookCommand,
   nodeHookCommand,
 } from "./runtime-hook-mapping.mjs";
+import { ensureCodexAppNativeControls } from "./codex-config-merge.mjs";
 import {
   canonicalAgentsDir,
   canonicalCapabilityIndexDir,
@@ -37,11 +39,140 @@ const jsonMode = process.argv.includes("--json");
 const reverseMode = process.argv.includes("--reverse");
 const dryRun = process.argv.includes("--dry-run");
 const forceWrite = process.argv.includes("--force");
+const PROJECT_RUNTIME_SKILL_IDS = new Set(["meta-theory"]);
 
 // Captures "will be written" entries whenever writeGeneratedFile runs under
 // --check. Populated even when not in --json mode so callers get deterministic
 // planning data; consumers just ignore it when they do not need it.
 const staleFiles = [];
+
+const SOURCE_REPO_PROJECT_PROJECTION_MARKERS = [
+  ".claude/agents",
+  ".claude/capability-index",
+  ".claude/commands",
+  ".claude/hooks",
+  ".claude/settings.json",
+  ".claude/skills",
+  ".mcp.json",
+  ".agents/skills",
+  ".codex/agents",
+  ".codex/capability-index",
+  ".codex/commands",
+  ".codex/config.toml",
+  ".codex/hooks",
+  ".codex/hooks.json",
+  ".codex/skills",
+  ".cursor/agents",
+  ".cursor/capability-index",
+  ".cursor/hooks",
+  ".cursor/hooks.json",
+  ".cursor/mcp.json",
+  ".cursor/rules",
+  ".cursor/skills",
+  "codex/config.toml.example",
+  "openclaw/capability-index",
+  "openclaw/hooks",
+  "openclaw/openclaw.template.json",
+  "openclaw/skills",
+  "openclaw/workspaces",
+];
+
+function normalizeRepoRelativePath(filePath) {
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.join(repoRoot, filePath);
+  const rel = path.relative(repoRoot, absolutePath).replace(/\\/g, "/");
+  if (rel.startsWith("../") || rel === ".." || path.isAbsolute(rel)) {
+    return null;
+  }
+  return rel;
+}
+
+function isSourceRepoProjectProjectionPath(filePath) {
+  const rel = normalizeRepoRelativePath(filePath);
+  if (!rel) return false;
+  return SOURCE_REPO_PROJECT_PROJECTION_MARKERS.some(
+    (marker) => rel === marker || rel.startsWith(`${marker}/`),
+  );
+}
+
+async function existsAtRepoPath(relativePath) {
+  try {
+    await fs.access(path.join(repoRoot, relativePath));
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function hasMaterialFileUnder(dirPath) {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+
+  for (const entry of entries) {
+    const childPath = path.join(dirPath, entry.name);
+    if (entry.isFile()) return true;
+    if (entry.isDirectory() && (await hasMaterialFileUnder(childPath))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function hasMaterialProjectionAtRepoPath(relativePath) {
+  const absolutePath = path.join(repoRoot, relativePath);
+  let stat;
+  try {
+    stat = await fs.stat(absolutePath);
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+  if (stat.isFile()) return true;
+  if (stat.isDirectory()) return hasMaterialFileUnder(absolutePath);
+  return false;
+}
+
+async function isMetaKimSourceRepo() {
+  try {
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
+    );
+    return (
+      pkg.name === "meta-kim" &&
+      (await existsAtRepoPath("canonical")) &&
+      (await existsAtRepoPath("config/sync.json"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function hasMaterialProjectProjection() {
+  for (const marker of SOURCE_REPO_PROJECT_PROJECTION_MARKERS) {
+    if (await hasMaterialProjectionAtRepoPath(marker)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function expectedSourceRepoProjectProjectionAbsence(scope, staleRecords) {
+  if (scope !== "project" || staleRecords.length === 0) return false;
+  if (!(await isMetaKimSourceRepo())) return false;
+  if (await hasMaterialProjectProjection()) return false;
+  return staleRecords.every(
+    (record) =>
+      record.action === "create" &&
+      isSourceRepoProjectProjectionPath(record.path),
+  );
+}
 
 // Recorder is lazily opened in main() when scope includes "project" so every
 // write point (writeGeneratedFile / writeGeneratedJson) can record through
@@ -67,7 +198,7 @@ function recordSafe(fn) {
  *   D = Project runtime skills   (.claude/skills, .agents/skills, ...)
  *   E = Project runtime hooks    (.claude/hooks, .codex/hooks, .cursor/hooks, openclaw/hooks)
  *   F = Project runtime agents   (.claude/agents, .codex/agents, .cursor/agents)
- *   G = Project settings + MCP   (.claude/settings.json, .mcp.json, .codex/*.toml)
+ *   G = Project settings + MCP   (.claude/settings.json, .claude/commands, .mcp.json, .codex/*.toml)
  */
 export function inferProjectCategory(filePath, rootDir = repoRoot) {
   if (typeof filePath !== "string" || !filePath) return null;
@@ -109,6 +240,7 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
     return CATEGORIES.D;
   }
   if (
+    rel.startsWith(".claude/commands/") ||
     rel.startsWith(".codex/commands/") ||
     rel === ".codex/hooks.json" ||
     rel === ".cursor/hooks.json" ||
@@ -150,6 +282,40 @@ async function tryReadCanonical(filePath) {
   } catch {
     console.warn(t.canonicalMissingWarn(filePath));
     return null;
+  }
+}
+
+async function canonicalGlobalHookSource(fileName) {
+  for (const baseDir of [
+    path.join(canonicalRuntimeAssetsDir, "claude", "hooks"),
+    path.join(canonicalRuntimeAssetsDir, "shared", "hooks"),
+  ]) {
+    const sourcePath = path.join(baseDir, fileName);
+    try {
+      await fs.access(sourcePath);
+      return sourcePath;
+    } catch {
+      // try the next canonical hook source dir
+    }
+  }
+  return null;
+}
+
+async function syncGlobalHookPackage(targetDir, displayDir, changedFiles) {
+  for (const fileName of GLOBAL_META_KIM_HOOK_PACKAGE_FILES) {
+    const sourcePath = await canonicalGlobalHookSource(fileName);
+    if (!sourcePath) continue;
+    const content = await fs.readFile(sourcePath, "utf8");
+    if (
+      (
+        await writeGeneratedFile(
+          path.join(targetDir, fileName),
+          content,
+        )
+      ).changed
+    ) {
+      changedFiles.push(`${displayDir}/${fileName}`);
+    }
   }
 }
 
@@ -620,11 +786,13 @@ function resolveProjectionDirs(scope) {
   const globalScope = scope === "global";
 
   return {
+    scope,
     // Claude Code
     claudeAgentsProjectionDir: claude.agentsDir,
     claudeSkillsProjectionDir: claude.skillsDir,
     claudeSkillProjectionRoot: claude.skillRoot,
     claudeHooksProjectionDir: claude.hooksDir,
+    claudeCommandsDir: claude.commandsDir,
     claudeSettingsProjectionPath: claude.settingsFile,
     claudeMcpProjectionPath: claude.mcpFile,
     claudeCapabilityIndexDir: claude.capabilityIndexDir,
@@ -642,9 +810,10 @@ function resolveProjectionDirs(scope) {
       : codex.legacySkillReferencesDir,
     codexUsesDirectorySkill: true,
     codexAgentsDir: codex.agentsDir,
-    codexHooksDir: globalScope ? null : codex.hooksDir,
-    codexHooksFile: globalScope ? null : codex.hooksFile,
+    codexHooksDir: codex.hooksDir,
+    codexHooksFile: codex.hooksFile,
     codexCommandsDir: codex.commandsDir,
+    codexConfigPath: globalScope ? null : codex.configFile,
     codexConfigExamplePath: codex.configExampleFile,
     codexCapabilityIndexDir: codex.capabilityIndexDir,
 
@@ -679,16 +848,18 @@ function resolveProjectionDirs(scope) {
       claudeSkills: claude.display.skillsDir,
       claudeSkill: claude.display.skillRoot,
       claudeHooks: claude.display.hooksDir,
+      claudeCommands: claude.display.commandsDir,
       claudeSettings: claude.display.settingsFile,
       claudeMcp: claude.display.mcpFile,
       claudeCapabilityIndex: claude.display.capabilityIndexDir,
       codexAgents: codex.display.agentsDir,
       codexSkillsRoot: codex.display.skillsDir,
       codexSkills: codex.display.skillRoot,
-      codexHooks: globalScope ? null : codex.display.hooksDir,
-      codexHooksFile: globalScope ? null : codex.display.hooksFile,
+      codexHooks: codex.display.hooksDir,
+      codexHooksFile: codex.display.hooksFile,
       codexCommands: codex.display.commandsDir,
-      codexConfig: codex.display.configExampleFile,
+      codexConfig: globalScope ? null : codex.display.configFile,
+      codexConfigExample: codex.display.configExampleFile,
       codexCapabilityIndex: codex.display.capabilityIndexDir,
       openclawWorkspaces: globalScope
         ? openclaw.baseDir
@@ -727,22 +898,20 @@ const canonicalClaudeMcpPath = path.join(
   "claude",
   "mcp.json",
 );
+const canonicalClaudeCommandsDir = path.join(
+  canonicalRuntimeAssetsDir,
+  "claude",
+  "commands",
+);
 const canonicalCodexConfigExamplePath = path.join(
   canonicalRuntimeAssetsDir,
   "codex",
   "config.toml.example",
 );
-const canonicalCodexCommandPath = path.join(
+const canonicalCodexCommandsDir = path.join(
   canonicalRuntimeAssetsDir,
   "codex",
   "commands",
-  "meta-theory.md",
-);
-const canonicalSharedMemoryHookPath = path.join(
-  canonicalRuntimeAssetsDir,
-  "shared",
-  "hooks",
-  "meta-kim-memory-save.mjs",
 );
 const canonicalSharedSpineHookPath = path.join(
   canonicalRuntimeAssetsDir,
@@ -778,6 +947,66 @@ const canonicalOpenClawMemoryHookDir = path.join(
   "hooks",
   "mcp-memory-service",
 );
+const canonicalOpenClawStopSaveProgressHookPath = path.join(
+  canonicalRuntimeAssetsDir,
+  "claude",
+  "hooks",
+  "stop-save-progress.mjs",
+);
+const canonicalSharedMemorySaveHookPath = path.join(
+  canonicalRuntimeAssetsDir,
+  "shared",
+  "hooks",
+  "meta-kim-memory-save.mjs",
+);
+const GLOBAL_META_KIM_HOOK_PACKAGE_FILES = new Set([
+  "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "block-dangerous-bash.mjs",
+  "ecc-permission-cache-wrapper.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "post-console-log-warn.mjs",
+  "post-format.mjs",
+  "post-typecheck.mjs",
+  "stop-compaction.mjs",
+  "stop-completion-guard.mjs",
+  "stop-console-log-audit.mjs",
+  "stop-memory-save.mjs",
+  "stop-save-progress.mjs",
+  "stop-spine-cleanup.mjs",
+  "subagent-context.mjs",
+  "utils.mjs",
+  "meta-kim-memory-save.mjs",
+  "skip-reminder.mjs",
+  "spine-state.mjs",
+]);
+
+const PROJECT_CLAUDE_HOOK_FILES = new Set([
+  "bash-readonly-whitelist.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "hook-i18n.mjs",
+  "post-console-log-warn.mjs",
+  "post-format.mjs",
+  "post-typecheck.mjs",
+  "skip-reminder.mjs",
+  "spine-state.mjs",
+  "stop-compaction.mjs",
+  "stop-completion-guard.mjs",
+  "stop-console-log-audit.mjs",
+  "stop-spine-cleanup.mjs",
+  "subagent-context.mjs",
+  "utils.mjs",
+]);
+
+const REMOVED_PROJECT_CLAUDE_HOOK_FILES = [
+  "block-dangerous-bash.mjs",
+  "ecc-permission-cache-wrapper.mjs",
+  "meta-kim-memory-save.mjs",
+  "stop-memory-save.mjs",
+  "stop-save-progress.mjs",
+];
 
 const preferredOrder = [
   "meta-warden",
@@ -1027,6 +1256,8 @@ Generated from \`${agent.sourceFile}\`. Edit the canonical source first, then ru
 - When the user asks which agents exist, how many agents exist, or who can collaborate right now, query the live runtime registry first through \`agents_list\`. If that tool is unavailable, fall back to an explicit runtime command and state the result source.
 - Stay inside your own responsibility boundary unless the user explicitly asks you to coordinate broader work.
 - The theory source is \`canonical/skills/meta-theory/references/meta-theory.md\`; public runtime behavior must not depend on local narrative notes.
+- For \`meta-theory\`, \`/meta-theory\`, project understanding, architecture, runtime routing, hook/MCP/tool routing, commercialization, market, competitor, pricing, growth, strategy, or roadmap tasks, run or faithfully follow \`npm run meta:theory:run:notice -- "<user request>"\` before Thinking and relay the compact notice/report path. If command execution or retrieval capability is unavailable, return \`blocked_to_fetch\` with the exact missing capability instead of giving a shallow summary.
+- Project-understanding Fetch must account for README, AGENTS, package scripts, canonical agents/skills/runtime assets, contracts, capability index, runtime projections, MCP configs, hooks, dependency registry, and Graphify when present.
 
 ${agent.body}
 `;
@@ -1130,6 +1361,35 @@ async function collectSkillFiles(rootDir, currentDir = rootDir, bucket = []) {
   );
 }
 
+async function collectCommandFiles(commandsDir) {
+  let entries = [];
+  try {
+    entries = await fs.readdir(commandsDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  const files = [];
+  for (const entry of entries) {
+    if (
+      !entry.isFile() ||
+      !entry.name.endsWith(".md") ||
+      entry.name.includes(".tmp.") ||
+      entry.name.endsWith(".tmp")
+    ) {
+      continue;
+    }
+    files.push({
+      name: entry.name,
+      content: await fs.readFile(path.join(commandsDir, entry.name), "utf8"),
+    });
+  }
+  return files.sort((left, right) => left.name.localeCompare(right.name));
+}
+
 async function loadCanonicalSkills() {
   const entries = await fs.readdir(canonicalSkillsDir, { withFileTypes: true });
   const skills = [];
@@ -1196,128 +1456,12 @@ const CODEX_NICKNAME_CANDIDATES_BY_AGENT = {
   "meta-chrysalis": ["Meta Chrysalis", "Chrysalis"],
 };
 
-export const CODEX_RUNTIME_ADAPTER_AGENTS = [
-  {
-    id: "worker",
-    description:
-      "Execute bounded Meta_Kim implementation tasks after governance dispatch.",
-    nicknameCandidates: ["Execution", "Worker", "Implementation"],
-    instructions: [
-      "You are the Codex runtime adapter for bounded Meta_Kim execution work.",
-      "This file exists to give Codex a readable project-level custom-agent definition for its generic worker role.",
-      "It is not a canonical durable Meta_Kim owner. Durable governance ownership stays with canonical meta agents; concrete execution ownership is selected per run through matched capabilities, skills, commands, MCP capabilities, and tools.",
-      "Use the parent task packet as the source of truth for roleDisplayName, roleInstanceId, scope, dependencies, verification steps, and merge owner.",
-      "Never replace roleDisplayName with a Codex runtime nickname. If Codex assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "explorer",
-    description:
-      "Perform read-only codebase, platform, and evidence discovery for Meta_Kim runs.",
-    nicknameCandidates: ["Codebase Analysis", "Explorer", "Research"],
-    instructions: [
-      "You are the Codex runtime adapter for read-only Meta_Kim discovery work.",
-      "This file exists to give Codex a readable project-level custom-agent definition for its generic explorer role.",
-      "Inspect files, official documentation, capability indexes, commands, MCP capabilities, and tool availability as requested by the parent task packet.",
-      "Do not edit files or finalize implementation decisions. Return evidence, uncertainty, and candidate paths for the governance owner to merge.",
-      "Never replace roleDisplayName with a Codex runtime nickname. If Codex assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-];
+// Meta_Kim projects only governance agents into Codex. Execution-layer labels
+// such as frontend/backend/test are run-scoped `roleDisplayName` values in
+// packets, not durable project/global `.codex/agents/*.toml` files.
+export const CODEX_RUNTIME_ADAPTER_AGENTS = [];
 
-export const CODEX_BUSINESS_ROLE_AGENTS = [
-  {
-    id: "frontend",
-    roleDisplayName: "frontend",
-    description:
-      "Implement bounded frontend, UI, and client-side work after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["frontend", "ui", "client"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim frontend work.",
-      "Use this role only when the task packet's roleDisplayName is frontend or an equivalent client/UI role family.",
-      "Follow the parent task packet for scope, dependencies, verification, and merge owner.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "backend",
-    roleDisplayName: "backend",
-    description:
-      "Implement bounded backend, API, data, and service work after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["backend", "server", "api"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim backend work.",
-      "Use this role only when the task packet's roleDisplayName is backend or an equivalent service/API/data role family.",
-      "Follow the parent task packet for scope, dependencies, verification, and merge owner.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "test",
-    roleDisplayName: "test",
-    description:
-      "Write or run bounded tests and QA checks after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["test", "qa", "checks"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim test and QA work.",
-      "Use this role only when the task packet's roleDisplayName is test or an equivalent QA role family.",
-      "Follow the parent task packet for target checks, expected evidence, dependencies, and merge owner.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "review",
-    roleDisplayName: "review",
-    description:
-      "Review bounded implementation outputs and report findings after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["review", "quality", "audit"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim review work.",
-      "Use this role only when the task packet's roleDisplayName is review or an equivalent quality/audit role family.",
-      "Return findings, risks, and missing verification. Do not patch reviewed files unless the parent task explicitly re-dispatches execution.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "analysis",
-    roleDisplayName: "analysis",
-    description:
-      "Perform bounded read-only codebase, platform, or product analysis after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["analysis", "research", "discovery"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim analysis work.",
-      "Use this role only when the task packet's roleDisplayName is analysis or an equivalent discovery/research role family.",
-      "Return evidence, uncertainty, and candidate paths. Do not finalize implementation decisions or edit files.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "verify",
-    roleDisplayName: "verify",
-    description:
-      "Run bounded verification evidence collection after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["verify", "validation", "evidence"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim verification work.",
-      "Use this role only when the task packet's roleDisplayName is verify or an equivalent validation/evidence role family.",
-      "Run or inspect only the checks assigned by the parent task packet and report fresh evidence.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-  {
-    id: "docs",
-    roleDisplayName: "docs",
-    description:
-      "Write or update bounded documentation after Meta_Kim governance dispatch.",
-    nicknameCandidates: ["docs", "writing", "documentation"],
-    instructions: [
-      "You are the Codex project custom agent for Meta_Kim documentation work.",
-      "Use this role only when the task packet's roleDisplayName is docs or an equivalent documentation/writing role family.",
-      "Follow the parent task packet for audience, files, scope, and review owner.",
-      "Do not rename this role from a Codex host nickname. If the host assigns an incidental alias, report it only as runtimeInstanceAlias.",
-    ].join("\n"),
-  },
-];
+export const CODEX_BUSINESS_ROLE_AGENTS = [];
 
 function normalizeCodexNicknameCandidate(value) {
   return String(value ?? "").trim().replace(/\s+/g, " ");
@@ -1385,38 +1529,6 @@ export function buildCodexAgent(agent) {
   const nicknameCandidates = buildCodexNicknameCandidates(agent);
 
   return `name = "${agent.id}"
-description = "${escapeTomlBasicString(agent.description)}"
-nickname_candidates = ${formatTomlStringArray(nicknameCandidates)}
-developer_instructions = """
-${instructions}
-"""
-`;
-}
-
-export function buildCodexRuntimeAdapterAgent(agent) {
-  const nicknameCandidates = uniqueNicknameCandidates(
-    agent.nicknameCandidates ?? [],
-    `Codex runtime adapter ${agent.id}`,
-  );
-  const instructions = escapeTomlBasicMultiline(agent.instructions ?? "");
-
-  return `name = "${escapeTomlBasicString(agent.id)}"
-description = "${escapeTomlBasicString(agent.description)}"
-nickname_candidates = ${formatTomlStringArray(nicknameCandidates)}
-developer_instructions = """
-${instructions}
-"""
-`;
-}
-
-export function buildCodexBusinessRoleAgent(agent) {
-  const nicknameCandidates = uniqueNicknameCandidates(
-    agent.nicknameCandidates ?? [agent.roleDisplayName, agent.id],
-    `Codex business role agent ${agent.id}`,
-  );
-  const instructions = escapeTomlBasicMultiline(agent.instructions ?? "");
-
-  return `name = "${escapeTomlBasicString(agent.id)}"
 description = "${escapeTomlBasicString(agent.description)}"
 nickname_candidates = ${formatTomlStringArray(nicknameCandidates)}
 developer_instructions = """
@@ -1515,6 +1627,67 @@ async function writeGeneratedJson(filePath, value) {
 function renderMetaKimRuntimeMcp(content, rootDir) {
   const normalizedRoot = rootDir.replace(/\\/g, "/");
   return content.replaceAll("__REPO_ROOT__", normalizedRoot);
+}
+
+function renderCodexConfigExample(content, rootDir) {
+  const normalizedRoot = rootDir.replace(/\\/g, "/");
+  return content.replaceAll("REPLACE_WITH_REPO_ROOT", normalizedRoot);
+}
+
+/**
+ * Additive merge: take a rendered canonical MCP config (already containing
+ * the meta_kim-runtime server) and union it with any user-added servers
+ * already present at the projection path. User-added servers (anything that
+ * is not meta-kim-runtime) are preserved across syncs so the user can keep
+ * local helper MCPs (memory, sqlite, etc.) registered without re-adding
+ * them after every `npm run meta:sync`.
+ *
+ * Preserves canonical entries when both sides define the same server name.
+ */
+function mergeUserMcpServers(canonicalRendered, existingRaw) {
+  let parsedCanonical = {};
+  let parsedExisting = {};
+  try {
+    parsedCanonical = JSON.parse(canonicalRendered);
+  } catch {
+    parsedCanonical = {};
+  }
+  try {
+    parsedExisting = JSON.parse(existingRaw);
+  } catch {
+    parsedExisting = {};
+  }
+  const canonicalServers =
+    parsedCanonical && typeof parsedCanonical === "object" && parsedCanonical.mcpServers
+      ? parsedCanonical.mcpServers
+      : {};
+  const existingServers =
+    parsedExisting && typeof parsedExisting === "object" && parsedExisting.mcpServers
+      ? parsedExisting.mcpServers
+      : {};
+  const merged = {};
+  for (const [name, def] of Object.entries(canonicalServers)) {
+    merged[name] = def;
+  }
+  for (const [name, def] of Object.entries(existingServers)) {
+    if (Object.prototype.hasOwnProperty.call(merged, name)) continue;
+    merged[name] = def;
+  }
+  return `${JSON.stringify({ mcpServers: merged }, null, 2)}\n`;
+}
+
+export function buildCodexProjectConfig(
+  currentContent,
+  configExampleContent,
+  options = {},
+) {
+  const seed = String(currentContent ?? "").trim()
+    ? String(currentContent ?? "")
+    : renderCodexConfigExample(configExampleContent, repoRoot);
+  return ensureCodexAppNativeControls(seed, {
+    codexHome: resolveRuntimeHomeDir("codex"),
+    ...options,
+  });
 }
 
 function emptyMcpConfigContent() {
@@ -1750,14 +1923,17 @@ function buildRuntimeSkillMap(targetId) {
 export function applyRuntimePaths(content, targetId) {
   const rules = buildRuntimeSkillMap(targetId);
   const protectedBlocks = [];
-  let result = content.replace(
+  let result = content;
+  for (const pattern of [
     /Fetch discovery minimum checklist: before Thinking, search at least these locations \(even if results are empty\):[\s\S]*?\n(?=Pass condition:)/g,
-    (block) => {
+    /^- 项目内迭代或创新需要专用能力时，必须创建在对应 runtime 的原生项目目录[\s\S]*?\n/gm,
+  ]) {
+    result = result.replace(pattern, (block) => {
       const token = `__META_KIM_RUNTIME_LITERAL_BLOCK_${protectedBlocks.length}__`;
       protectedBlocks.push({ token, block });
       return token;
-    },
-  );
+    });
+  }
   for (const { pattern, replacement } of rules) {
     result = result.replace(pattern, replacement);
   }
@@ -1838,7 +2014,7 @@ export function buildCodexGraphifyContextHook() {
     "if (existsSync(graphPath)) {",
     "  console.log(",
     "    JSON.stringify({",
-    '      systemMessage: "graphify: Knowledge graph exists. Read graphify-out/GRAPH_REPORT.md for god nodes and community structure before searching raw files.",',
+    '      systemMessage: "graphify: Knowledge graph exists. For focused questions, run `graphify query \\"<question>\\" --budget 1000` first; use `graphify path`/`graphify explain` for relationships or concepts. Treat graph results as candidate file anchors and verify route-changing claims against source files; fall back to targeted `rg` when results are generic or stale. Read GRAPH_REPORT.md only for broad architecture context; never inject full graph.json or full GRAPH_REPORT.md.",',
     "    }),",
     "  );",
     "}",
@@ -1848,32 +2024,90 @@ export function buildCodexGraphifyContextHook() {
 
 export function buildCodexProjectHooksJson({
   graphifyHookPath = ".codex/hooks/graphify-context.mjs",
-  memoryHookPath = ".codex/hooks/meta-kim-memory-save.mjs",
+  memoryHookPath = null,
   spineHookPath = ".codex/hooks/activate-meta-theory-spine.mjs",
   enforceAgentDispatchHookPath = ".codex/hooks/enforce-agent-dispatch.mjs",
   hookPromptAdapterPath = null,
+  packageRoot = null,
 } = {}) {
-  return buildCodexHooksJson({
+  const config = buildCodexHooksJson({
     graphifyHookPath,
     memoryHookPath,
     spineHookPath,
     enforceAgentDispatchHookPath,
     hookPromptAdapterPath,
+    packageRoot,
   });
+  config.hooks.PostToolUse = [
+    {
+      matcher: "Edit|Write",
+      hooks: [
+        hookCommand(nodeHookCommand(".codex/hooks/post-format.mjs")),
+        hookCommand(nodeHookCommand(".codex/hooks/post-typecheck.mjs")),
+        hookCommand(nodeHookCommand(".codex/hooks/post-console-log-warn.mjs")),
+      ],
+    },
+  ];
+  config.hooks.SubagentStart = [
+    {
+      matcher: "*",
+      hooks: [hookCommand(nodeHookCommand(".codex/hooks/subagent-context.mjs"))],
+    },
+  ];
+  config.hooks.Stop = [
+    ...(config.hooks.Stop ?? []),
+    {
+      matcher: "*",
+      hooks: [
+        hookCommand(nodeHookCommand(".codex/hooks/stop-compaction.mjs")),
+        hookCommand(nodeHookCommand(".codex/hooks/stop-console-log-audit.mjs")),
+        hookCommand(nodeHookCommand(".codex/hooks/stop-completion-guard.mjs")),
+        hookCommand(nodeHookCommand(".codex/hooks/stop-spine-cleanup.mjs")),
+      ],
+    },
+  ];
+  return config;
 }
 
 export function buildCursorProjectHooksJson({
   graphifyHookPath = ".cursor/hooks/graphify-context.mjs",
-  memoryHookPath = ".cursor/hooks/meta-kim-memory-save.mjs",
+  memoryHookPath = null,
+  spineHookPath = ".cursor/hooks/activate-meta-theory-spine.mjs",
   enforceAgentDispatchHookPath = ".cursor/hooks/enforce-agent-dispatch.mjs",
   hookPromptAdapterPath = null,
+  packageRoot = null,
 } = {}) {
-  return buildCursorHooksJson({
+  const config = buildCursorHooksJson({
     graphifyHookPath,
     memoryHookPath,
+    spineHookPath,
     enforceAgentDispatchHookPath,
     hookPromptAdapterPath,
+    packageRoot,
   });
+  config.hooks.postToolUse = [
+    {
+      matcher: "Edit|Write",
+      hooks: [
+        { command: nodeHookCommand(".cursor/hooks/post-format.mjs") },
+        { command: nodeHookCommand(".cursor/hooks/post-typecheck.mjs") },
+        { command: nodeHookCommand(".cursor/hooks/post-console-log-warn.mjs") },
+      ],
+    },
+  ];
+  config.hooks.subagentStart = [
+    {
+      command: nodeHookCommand(".cursor/hooks/subagent-context.mjs"),
+    },
+  ];
+  config.hooks.stop = [
+    ...(config.hooks.stop ?? []),
+    { command: nodeHookCommand(".cursor/hooks/stop-compaction.mjs") },
+    { command: nodeHookCommand(".cursor/hooks/stop-console-log-audit.mjs") },
+    { command: nodeHookCommand(".cursor/hooks/stop-completion-guard.mjs") },
+    { command: nodeHookCommand(".cursor/hooks/stop-spine-cleanup.mjs") },
+  ];
+  return config;
 }
 
 async function syncRuntimeSkills(
@@ -1883,7 +2117,16 @@ async function syncRuntimeSkills(
   canonicalSkills,
   changedFiles,
 ) {
-  for (const skill of canonicalSkills) {
+  const runtimeSkills = canonicalSkills.filter((skill) =>
+    PROJECT_RUNTIME_SKILL_IDS.has(skill.id),
+  );
+  await pruneNonProjectedRuntimeSkills(
+    runtimeSkillsDir,
+    displaySkillsDir,
+    canonicalSkills,
+    changedFiles,
+  );
+  for (const skill of runtimeSkills) {
     for (const file of skill.files) {
       const targetPath = path.join(
         runtimeSkillsDir,
@@ -1910,6 +2153,210 @@ async function syncRuntimeSkills(
   }
 }
 
+function isRepoLocalPath(filePath) {
+  const rel = path.relative(repoRoot, filePath);
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+async function pruneNonProjectedRuntimeSkills(
+  runtimeSkillsDir,
+  displaySkillsDir,
+  canonicalSkills,
+  changedFiles,
+) {
+  if (!isRepoLocalPath(runtimeSkillsDir)) return;
+  for (const skill of canonicalSkills) {
+    if (PROJECT_RUNTIME_SKILL_IDS.has(skill.id)) continue;
+    const targetPath = path.join(runtimeSkillsDir, skill.id);
+    try {
+      const stat = await fs.stat(targetPath);
+      if (!stat.isDirectory()) continue;
+      if (!checkOnly) {
+        await fs.rm(targetPath, { recursive: true, force: true });
+      }
+      changedFiles.push(`${displaySkillsDir}/${skill.id}`);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+}
+
+// Whitelists of Meta_Kim-managed hook files per platform. Used to identify
+// and replace or prune generated hook files before rendering the current
+// project/global runtime projection. Files NOT on the whitelist
+// (i.e. user-authored files) are never touched.
+const CLAUDE_PROJECT_HOOK_FILES = new Set([
+  "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "block-dangerous-bash.mjs",
+  "ecc-permission-cache-wrapper.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "hook-i18n.mjs",
+  "meta-kim-memory-save.mjs",
+  "post-format.mjs",
+  "post-typecheck.mjs",
+  "post-console-log-warn.mjs",
+  "skip-reminder.mjs",
+  "subagent-context.mjs",
+  "stop-compaction.mjs",
+  "stop-memory-save.mjs",
+  "stop-console-log-audit.mjs",
+  "stop-completion-guard.mjs",
+  "stop-save-progress.mjs",
+  "stop-spine-cleanup.mjs",
+  "utils.mjs",
+  "spine-state.mjs",
+]);
+
+// Codex uses an adapter pattern (.mjs script + .py wrapper). Project-level
+// files match the same basename as global hooks dir.
+const CODEX_PROJECT_HOOK_FILES = new Set([
+  "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "codex_hook_adapter.py",
+  "codex_hook_runner.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "hook-i18n.mjs",
+  "hookprompt-adapter.mjs",
+  "meta-kim-memory-save.mjs",
+  "planning-with-files-adapter.mjs",
+  "post_tool_use.py",
+  "post-tool-use.sh",
+  "pre_tool_use.py",
+  "pre-tool-use.sh",
+  "pre-compact.sh",
+  "session_start.py",
+  "session-start.sh",
+  "stop.py",
+  "stop.sh",
+  "user_prompt_submit.py",
+  "user-prompt-submit.sh",
+  "permission_request.py",
+  "resolve-plan-dir.sh",
+  "skip-reminder.mjs",
+  "spine-state.mjs",
+  "utils.mjs",
+]);
+
+const CODEX_ACTIVE_PROJECT_HOOK_FILES = new Set([
+  "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "post-console-log-warn.mjs",
+  "post-format.mjs",
+  "post-typecheck.mjs",
+  "skip-reminder.mjs",
+  "spine-state.mjs",
+  "stop-compaction.mjs",
+  "stop-completion-guard.mjs",
+  "stop-console-log-audit.mjs",
+  "stop-spine-cleanup.mjs",
+  "subagent-context.mjs",
+  "utils.mjs",
+]);
+
+// Cursor hook files (.ps1/.sh variants under ~/.cursor/hooks/).
+const CURSOR_PROJECT_HOOK_FILES = new Set([
+  "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "hook-i18n.mjs",
+  "hookprompt-adapter.mjs",
+  "meta-kim-memory-save.mjs",
+  "planning-with-files-adapter.mjs",
+  "post-tool-use.ps1",
+  "post-tool-use.sh",
+  "pre-tool-use.ps1",
+  "pre-tool-use.sh",
+  "stop.ps1",
+  "stop.sh",
+  "user-prompt-submit.ps1",
+  "user-prompt-submit.sh",
+  "skip-reminder.mjs",
+  "spine-state.mjs",
+  "utils.mjs",
+]);
+
+const CURSOR_ACTIVE_PROJECT_HOOK_FILES = new Set([
+  "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "post-console-log-warn.mjs",
+  "post-format.mjs",
+  "post-typecheck.mjs",
+  "skip-reminder.mjs",
+  "spine-state.mjs",
+  "stop-compaction.mjs",
+  "stop-completion-guard.mjs",
+  "stop-console-log-audit.mjs",
+  "stop-spine-cleanup.mjs",
+  "subagent-context.mjs",
+  "utils.mjs",
+]);
+
+const OPENCLAW_PROJECT_HOOK_FILES = new Set([
+  "HOOK.md",
+  "handler.ts",
+  "stop-save-progress.mjs",
+]);
+
+// Map from platform id to whitelist for project-level hook cleanup.
+const PROJECT_HOOK_FILES_BY_PLATFORM = {
+  claude: CLAUDE_PROJECT_HOOK_FILES,
+  codex: CODEX_PROJECT_HOOK_FILES,
+  cursor: CURSOR_PROJECT_HOOK_FILES,
+  openclaw: OPENCLAW_PROJECT_HOOK_FILES,
+};
+
+// Remove Meta_Kim-managed hook files from a project hooks dir. No backup
+// (caller's policy). Files NOT on the whitelist (user-authored) are kept.
+async function removeProjectMetaKimHooks(hooksDir, platformId, options = {}) {
+  const whitelist = PROJECT_HOOK_FILES_BY_PLATFORM[platformId];
+  if (!whitelist || !hooksDir) return [];
+  const keep = options.keep ?? null;
+  let entries;
+  try {
+    entries = await fs.readdir(hooksDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!whitelist.has(entry.name)) continue;
+    if (keep?.has(entry.name)) continue;
+    const target = path.join(hooksDir, entry.name);
+    if (checkOnly) {
+      removed.push(entry.name);
+      continue;
+    }
+    try {
+      await fs.unlink(target);
+      removed.push(entry.name);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(
+          `[Meta_Kim] Failed to remove ${platformId} hook ${entry.name}: ${error.message}`,
+        );
+      }
+    }
+  }
+  if (removed.length > 0 && !checkOnly) {
+    console.log(
+      `[Meta_Kim] Removed ${removed.length} Meta_Kim ${platformId} hook file(s) from ${hooksDir}`,
+    );
+  }
+  return removed;
+}
+
 async function syncClaudeProjection(
   dirs,
   agents,
@@ -1920,10 +2367,22 @@ async function syncClaudeProjection(
     claudeAgentsProjectionDir,
     claudeSkillsProjectionDir,
     claudeHooksProjectionDir,
+    claudeCommandsDir,
     claudeSettingsProjectionPath,
     claudeMcpProjectionPath,
     displayPaths,
   } = dirs;
+  const globalScope = dirs.scope === "global";
+  const targetHasMetaRuntimeServer =
+    typeof claudeMcpProjectionPath === "string" &&
+    claudeMcpProjectionPath.includes(repoRoot);
+  if (globalScope) {
+    await syncGlobalHookPackage(
+      claudeHooksProjectionDir,
+      displayPaths.claudeHooks,
+      changedFiles,
+    );
+  }
 
   for (const agent of agents) {
     if (
@@ -1946,49 +2405,78 @@ async function syncClaudeProjection(
     changedFiles,
   );
 
-  const hookEntries = (
-    await fs.readdir(canonicalClaudeHooksDir, { withFileTypes: true })
-  )
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
-    .sort((left, right) => left.name.localeCompare(right.name));
-
-  for (const hookEntry of hookEntries) {
-    const hookContent = await fs.readFile(
-      path.join(canonicalClaudeHooksDir, hookEntry.name),
-      "utf8",
-    );
+  for (const command of await collectCommandFiles(canonicalClaudeCommandsDir)) {
     if (
       (
         await writeGeneratedFile(
-          path.join(claudeHooksProjectionDir, hookEntry.name),
-          hookContent,
+          path.join(claudeCommandsDir, command.name),
+          command.content,
         )
       ).changed
     ) {
-      changedFiles.push(`${displayPaths.claudeHooks}/${hookEntry.name}`);
+      changedFiles.push(`${displayPaths.claudeCommands}/${command.name}`);
     }
   }
 
-  const sharedClaudeHookDependencies = [
-    "activate-meta-theory-spine.mjs",
-    "hook-i18n.mjs",
-    "meta-kim-memory-save.mjs",
-    "skip-reminder.mjs",
-  ];
-  for (const hookName of sharedClaudeHookDependencies) {
-    const hookContent = await tryReadCanonical(
-      path.join(canonicalRuntimeAssetsDir, "shared", "hooks", hookName),
-    );
-    if (
-      hookContent &&
-      (
-        await writeGeneratedFile(
-          path.join(claudeHooksProjectionDir, hookName),
-          hookContent,
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${displayPaths.claudeHooks}/${hookName}`);
+  if (!globalScope) {
+    const hookEntries = (
+      await fs.readdir(canonicalClaudeHooksDir, { withFileTypes: true })
+    )
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          entry.name.endsWith(".mjs") &&
+          PROJECT_CLAUDE_HOOK_FILES.has(entry.name),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const hookEntry of hookEntries) {
+      const hookContent = await fs.readFile(
+        path.join(canonicalClaudeHooksDir, hookEntry.name),
+        "utf8",
+      );
+      if (
+        (
+          await writeGeneratedFile(
+            path.join(claudeHooksProjectionDir, hookEntry.name),
+            hookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${displayPaths.claudeHooks}/${hookEntry.name}`);
+      }
+    }
+
+    const sharedClaudeHookDependencies = [
+      "activate-meta-theory-spine.mjs",
+      "skip-reminder.mjs",
+    ];
+    for (const hookName of sharedClaudeHookDependencies) {
+      const hookContent = await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", hookName),
+      );
+      if (
+        hookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(claudeHooksProjectionDir, hookName),
+            hookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${displayPaths.claudeHooks}/${hookName}`);
+      }
+    }
+
+    if (!globalScope) {
+      for (const hookName of REMOVED_PROJECT_CLAUDE_HOOK_FILES) {
+        if (
+          (await removeGeneratedPath(path.join(claudeHooksProjectionDir, hookName)))
+            .changed
+        ) {
+          changedFiles.push(`${displayPaths.claudeHooks}/${hookName}`);
+        }
+      }
     }
   }
 
@@ -1998,11 +2486,10 @@ async function syncClaudeProjection(
   ]);
 
   // Merge into existing settings.json — never blind overwrite (project + global).
-  const inRepoRoot = claudeSettingsProjectionPath.includes(repoRoot);
   let finalSettingsContent;
   const canonicalParsed = JSON.parse(settingsContent);
 
-  if (inRepoRoot) {
+  if (!globalScope) {
     let base = {};
     try {
       const prev = await fs.readFile(claudeSettingsProjectionPath, "utf8");
@@ -2024,7 +2511,12 @@ async function syncClaudeProjection(
         throw error;
       }
     }
-    const template = buildMetaKimHooksTemplate(".claude/hooks");
+    const globalClaudeMetaKimHooksDir = path.join(
+      resolveRuntimeHomeDir("claude"),
+      "hooks",
+      "meta-kim",
+    );
+    const template = buildMetaKimHooksTemplate(globalClaudeMetaKimHooksDir);
     const merged = mergeGlobalMetaKimHooksIntoSettings(base, template);
     finalSettingsContent = `${JSON.stringify(merged, null, 2)}\n`;
   }
@@ -2040,13 +2532,23 @@ async function syncClaudeProjection(
     changedFiles.push(displayPaths.claudeSettings);
   }
   if (claudeMcpProjectionPath) {
-    // Only write meta-kim-runtime MCP config when inside the Meta_Kim repo.
-    // The MCP server script (scripts/mcp/meta-runtime-server.mjs) only exists
-    // inside this repo — writing it to external projects breaks MCP startup.
-    if (inRepoRoot) {
+    // Only write meta-kim-runtime MCP config when the target contains the
+    // server script; writing that command elsewhere breaks MCP startup.
+    if (targetHasMetaRuntimeServer) {
       const renderedMcpContent = renderMetaKimRuntimeMcp(mcpContent, repoRoot);
+      let existingMcpRaw = null;
+      try {
+        existingMcpRaw = await fs.readFile(claudeMcpProjectionPath, "utf8");
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+      const finalMcpContent = existingMcpRaw
+        ? mergeUserMcpServers(renderedMcpContent, existingMcpRaw)
+        : renderedMcpContent;
       if (
-        (await writeGeneratedFile(claudeMcpProjectionPath, renderedMcpContent))
+        (await writeGeneratedFile(claudeMcpProjectionPath, finalMcpContent))
           .changed
       ) {
         changedFiles.push(displayPaths.claudeMcp);
@@ -2099,8 +2601,12 @@ Examples:
   }
 
   const scope = parseScopeArg(cliArgs);
-  const { cliTargets, supportedTargets } = await resolveTargetContext(cliArgs);
-  const selectedTargets = cliTargets.length > 0 ? cliTargets : supportedTargets;
+  const targetContext = await resolveTargetContext(cliArgs);
+  const globalOnlyProjectSync =
+    scope === "project" &&
+    targetContext.cliTargets.length === 0 &&
+    targetContext.localOverrides.projectProjectionMode === "global_only";
+  const selectedTargets = globalOnlyProjectSync ? [] : targetContext.activeTargets;
   const dirs = resolveProjectionDirs(scope);
   const agents = await loadAgents();
   const teamDirectory = buildWorkspaceDirectory(agents);
@@ -2110,6 +2616,10 @@ Examples:
   // Safety assertion: all writes must stay within allowedRoots
   if (!checkOnly) {
     assertHomeBound(dirs.claudeAgentsProjectionDir, dirs.allowedRoots);
+    assertHomeBound(dirs.claudeCommandsDir, dirs.allowedRoots);
+    if (dirs.codexConfigPath) {
+      assertHomeBound(dirs.codexConfigPath, dirs.allowedRoots);
+    }
     if (dirs.claudeMcpProjectionPath) {
       assertHomeBound(dirs.claudeMcpProjectionPath, dirs.allowedRoots);
     }
@@ -2143,6 +2653,70 @@ Examples:
   }
 
   await syncCapabilityIndexMirrors(dirs, selectedTargets, changedFiles);
+
+  // Root-cause fix for "meta:sync reports 0 changes and never projects hook
+  // updates to runtime mirrors": when `local.overrides.json` has
+  // `projectProjectionMode: "global_only"`, `selectedTargets` is forced to [],
+  // so the per-runtime `syncClaudeProjection` (which hosts the hook
+  // projection) is skipped, and `enforce-agent-dispatch.mjs` /
+  // `spine-state.mjs` (and any other canonical hook) silently drift out of
+  // sync until a manual `cp`. Canonical hooks are governance infrastructure
+  // (not user-level agent/skill/command), so they must be projected to all
+  // three runtime mirrors regardless of `selectedTargets` and
+  // `projectProjectionMode`. This block runs unconditionally (still gated by
+  // `scope !== "global"` so global-only users are not double-written).
+  if (scope !== "global") {
+    const canonicalHookFiles = (
+      await fs.readdir(canonicalClaudeHooksDir, { withFileTypes: true })
+    )
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          entry.name.endsWith(".mjs") &&
+          PROJECT_CLAUDE_HOOK_FILES.has(entry.name),
+      )
+      .map((entry) => entry.name);
+    const sharedHookDeps = [
+      "activate-meta-theory-spine.mjs",
+      "skip-reminder.mjs",
+    ];
+    for (const hookName of sharedHookDeps) {
+      if (await tryReadCanonical(
+        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", hookName),
+      )) canonicalHookFiles.push(hookName);
+    }
+    const runtimeHookTargets = [
+      { hooksDir: dirs.claudeHooksProjectionDir, display: dirs.displayPaths.claudeHooks, runtime: "claude" },
+      { hooksDir: dirs.codexHooksDir, display: dirs.displayPaths.codexHooks, runtime: "codex" },
+      { hooksDir: dirs.cursorHooksDir, display: dirs.displayPaths.cursorHooks, runtime: "cursor" },
+    ];
+    for (const target of runtimeHookTargets) {
+      for (const hookName of canonicalHookFiles) {
+        const hookContent = await tryReadCanonical(
+          path.join(canonicalClaudeHooksDir, hookName),
+        );
+        if (
+          hookContent &&
+          (
+            await writeGeneratedFile(
+              path.join(target.hooksDir, hookName),
+              hookContent,
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${target.display}/${hookName}`);
+        }
+      }
+      for (const hookName of REMOVED_PROJECT_CLAUDE_HOOK_FILES) {
+        if (
+          (await removeGeneratedPath(path.join(target.hooksDir, hookName)))
+            .changed
+        ) {
+          changedFiles.push(`${target.display}/${hookName}`);
+        }
+      }
+    }
+  }
 
   if (selectedTargets.includes("claude")) {
     await syncClaudeProjection(
@@ -2225,31 +2799,77 @@ Examples:
       changedFiles.push(dp.openclawTemplate);
     }
 
-    let openclawHookEntries = [];
-    try {
-      openclawHookEntries = await fs.readdir(canonicalOpenClawMemoryHookDir, {
-        withFileTypes: true,
-      });
-    } catch {
-      openclawHookEntries = [];
-    }
-    for (const hookEntry of openclawHookEntries) {
-      if (!hookEntry.isFile()) continue;
-      const hookContent = await tryReadCanonical(
-        path.join(canonicalOpenClawMemoryHookDir, hookEntry.name),
+    const openclawInRepoRoot =
+      dirs.openclawTemplateConfigPath?.includes(repoRoot);
+    if (openclawInRepoRoot) {
+      const removedOpenclawRootHooks = await removeProjectMetaKimHooks(
+        dirs.openclawHooksDir,
+        "openclaw",
+      );
+      for (const hookName of removedOpenclawRootHooks) {
+        changedFiles.push(`${dp.openclawHooks}/${hookName}`);
+      }
+      const removedOpenclawHooks = await removeProjectMetaKimHooks(
+        path.join(dirs.openclawHooksDir, "mcp-memory-service"),
+        "openclaw",
+      );
+      for (const hookName of removedOpenclawHooks) {
+        changedFiles.push(`${dp.openclawHooks}/mcp-memory-service/${hookName}`);
+      }
+      if (
+        (await removeDirIfEmpty(path.join(dirs.openclawHooksDir, "mcp-memory-service")))
+          .changed
+      ) {
+        changedFiles.push(`${dp.openclawHooks}/mcp-memory-service`);
+      }
+      if ((await removeDirIfEmpty(dirs.openclawHooksDir)).changed) {
+        changedFiles.push(dp.openclawHooks);
+      }
+    } else {
+      let openclawHookEntries = [];
+      try {
+        openclawHookEntries = await fs.readdir(canonicalOpenClawMemoryHookDir, {
+          withFileTypes: true,
+        });
+      } catch {
+        openclawHookEntries = [];
+      }
+      for (const hookEntry of openclawHookEntries) {
+        if (!hookEntry.isFile()) continue;
+        const hookContent = await tryReadCanonical(
+          path.join(canonicalOpenClawMemoryHookDir, hookEntry.name),
+        );
+        if (
+          hookContent &&
+          (
+            await writeGeneratedFile(
+              path.join(
+                dirs.openclawHooksDir,
+                "mcp-memory-service",
+                hookEntry.name,
+              ),
+              hookContent,
+            )
+          ).changed
+        ) {
+          changedFiles.push(
+            `${dp.openclawHooks}/mcp-memory-service/${hookEntry.name}`,
+          );
+        }
+      }
+      const stopSaveProgressHook = await tryReadCanonical(
+        canonicalOpenClawStopSaveProgressHookPath,
       );
       if (
-        hookContent &&
+        stopSaveProgressHook &&
         (
           await writeGeneratedFile(
-            path.join(dirs.openclawHooksDir, "mcp-memory-service", hookEntry.name),
-            hookContent,
+            path.join(dirs.openclawHooksDir, "stop-save-progress.mjs"),
+            stopSaveProgressHook,
           )
         ).changed
       ) {
-        changedFiles.push(
-          `${dp.openclawHooks}/mcp-memory-service/${hookEntry.name}`,
-        );
+        changedFiles.push(`${dp.openclawHooks}/stop-save-progress.mjs`);
       }
     }
 
@@ -2307,46 +2927,91 @@ Examples:
         )
       ).changed
     ) {
-      changedFiles.push(dp.codexConfig);
+      changedFiles.push(dp.codexConfigExample);
+    }
+    if (dirs.codexConfigPath && codexConfigExample) {
+      let currentCodexConfig = null;
+      try {
+        currentCodexConfig = await fs.readFile(dirs.codexConfigPath, "utf8");
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+      // Respect user-local override: if the local .codex/config.toml
+      // carries a `# meta-kim: local-override` marker comment, the file
+      // is intentionally divergent from the canonical template and
+      // sync must not silently rewrite it. To regenerate from canonical,
+      // remove the marker line.
+      if (
+        currentCodexConfig &&
+        /meta-kim:\s*local-override/.test(currentCodexConfig)
+      ) {
+        // skip — file is intentionally divergent
+      } else {
+        const nextCodexConfig = buildCodexProjectConfig(
+          currentCodexConfig,
+          codexConfigExample,
+        );
+        if (
+          (await writeGeneratedFile(dirs.codexConfigPath, nextCodexConfig))
+            .changed
+        ) {
+          changedFiles.push(dp.codexConfig);
+        }
+      }
     }
 
-    const codexMetaTheoryCommand = await tryReadCanonical(
-      canonicalCodexCommandPath,
-    );
-    if (
-      codexMetaTheoryCommand &&
-      (
-        await writeGeneratedFile(
-          path.join(dirs.codexCommandsDir, "meta-theory.md"),
-          codexMetaTheoryCommand,
-        )
-      ).changed
-    ) {
-      changedFiles.push(`${dp.codexCommands}/meta-theory.md`);
-    }
-
-    if (dirs.codexHooksDir && dirs.codexHooksFile) {
+    for (const command of await collectCommandFiles(canonicalCodexCommandsDir)) {
       if (
         (
           await writeGeneratedFile(
+            path.join(dirs.codexCommandsDir, command.name),
+            command.content,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.codexCommands}/${command.name}`);
+      }
+    }
+
+    if (dirs.codexHooksDir && dirs.codexHooksFile) {
+      // Global-hooks migration: clear legacy files directly under
+      // ~/.codex/hooks/ before writing the namespaced global package.
+      if (scope === "global") {
+        await removeProjectMetaKimHooks(path.dirname(dirs.codexHooksDir), "codex", {
+          keep: new Set(["hookprompt-adapter.mjs"]),
+        });
+      }
+      const removedCodexHooks = await removeProjectMetaKimHooks(
+        dirs.codexHooksDir,
+        "codex",
+        {
+          keep:
+            scope === "global"
+              ? GLOBAL_META_KIM_HOOK_PACKAGE_FILES
+              : CODEX_ACTIVE_PROJECT_HOOK_FILES,
+        },
+      );
+      for (const hookName of removedCodexHooks) {
+        changedFiles.push(`${dp.codexHooks}/${hookName}`);
+      }
+      const codexGraphifyHookContent =
+        scope === "global"
+          ? await tryReadCanonical(
+              path.join(canonicalRuntimeAssetsDir, "claude", "hooks", "graphify-context.mjs"),
+            )
+          : buildCodexGraphifyContextHook();
+      if (
+        codexGraphifyHookContent &&
+        (
+          await writeGeneratedFile(
             path.join(dirs.codexHooksDir, "graphify-context.mjs"),
-            buildCodexGraphifyContextHook(),
+            codexGraphifyHookContent,
           )
         ).changed
       ) {
         changedFiles.push(`${dp.codexHooks}/graphify-context.mjs`);
-      }
-      const memoryHookContent = await tryReadCanonical(canonicalSharedMemoryHookPath);
-      if (
-        memoryHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs"),
-            memoryHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexHooks}/meta-kim-memory-save.mjs`);
       }
       const spineHookContent = await tryReadCanonical(canonicalSharedSpineHookPath);
       if (
@@ -2392,7 +3057,7 @@ Examples:
       ) {
         changedFiles.push(`${dp.codexHooks}/bash-readonly-whitelist.mjs`);
       }
-      // Sync shared hook dependencies (utils.mjs, spine-state.mjs, hook-i18n.mjs, skip-reminder.mjs)
+      // Sync shared hook dependencies (utils.mjs, spine-state.mjs, skip-reminder.mjs)
       const utilsHookContent = await tryReadCanonical(
         path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "utils.mjs"),
       );
@@ -2435,38 +3100,57 @@ Examples:
       ) {
         changedFiles.push(`${dp.codexHooks}/skip-reminder.mjs`);
       }
-      const hookI18nContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "hook-i18n.mjs"),
-      );
+      const codexMemoryHookContent =
+        scope === "global"
+          ? await tryReadCanonical(canonicalSharedMemorySaveHookPath)
+          : null;
       if (
-        hookI18nContent &&
+        codexMemoryHookContent &&
         (
           await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "hook-i18n.mjs"),
-            hookI18nContent,
+            path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs"),
+            codexMemoryHookContent,
           )
         ).changed
       ) {
-        changedFiles.push(`${dp.codexHooks}/hook-i18n.mjs`);
+        changedFiles.push(`${dp.codexHooks}/meta-kim-memory-save.mjs`);
       }
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "hookprompt-adapter.mjs"),
-            buildHookPromptAdapterSource("codex"),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexHooks}/hookprompt-adapter.mjs`);
+      if (scope === "global") {
+        const codexHookPromptAdapterPath = path.join(
+          path.dirname(dirs.codexHooksDir),
+          "hookprompt-adapter.mjs",
+        );
+        if (
+          (
+            await writeGeneratedFile(
+              codexHookPromptAdapterPath,
+              buildHookPromptAdapterSource("codex"),
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${path.dirname(dp.codexHooks)}/hookprompt-adapter.mjs`);
+        }
+      }
+      const staleCodexHooks = [
+        "hookprompt-adapter.mjs",
+        "planning-with-files-adapter.mjs",
+        ...(scope === "global" ? [] : ["meta-kim-memory-save.mjs"]),
+      ];
+      for (const staleHook of staleCodexHooks) {
+        if (
+          (await removeGeneratedPath(path.join(dirs.codexHooksDir, staleHook)))
+            .changed
+        ) {
+          changedFiles.push(`${dp.codexHooks}/${staleHook}`);
+        }
+      }
+      if (scope === "global") {
+        await syncGlobalHookPackage(dirs.codexHooksDir, dp.codexHooks, changedFiles);
       }
       const graphifyHookPath =
         scope === "global"
           ? path.join(dirs.codexHooksDir, "graphify-context.mjs")
           : ".codex/hooks/graphify-context.mjs";
-      const memoryHookPath =
-        scope === "global"
-          ? path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs")
-          : ".codex/hooks/meta-kim-memory-save.mjs";
       const spineHookPath =
         scope === "global"
           ? path.join(dirs.codexHooksDir, "activate-meta-theory-spine.mjs")
@@ -2475,20 +3159,25 @@ Examples:
         scope === "global"
           ? path.join(dirs.codexHooksDir, "enforce-agent-dispatch.mjs")
           : ".codex/hooks/enforce-agent-dispatch.mjs";
-      const hookPromptAdapterPath =
+      const codexMemoryHookPath =
         scope === "global"
-          ? path.join(dirs.codexHooksDir, "hookprompt-adapter.mjs")
-          : ".codex/hooks/hookprompt-adapter.mjs";
+          ? path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs")
+          : null;
+      const codexHookPromptAdapterPath =
+        scope === "global"
+          ? path.join(path.dirname(dirs.codexHooksDir), "hookprompt-adapter.mjs")
+          : null;
       if (
         (
           await writeGeneratedJson(
             dirs.codexHooksFile,
             buildCodexProjectHooksJson({
               graphifyHookPath,
-              memoryHookPath,
+              memoryHookPath: codexMemoryHookPath,
               spineHookPath,
               enforceAgentDispatchHookPath,
-              hookPromptAdapterPath,
+              hookPromptAdapterPath: codexHookPromptAdapterPath,
+              packageRoot: repoRoot,
             }),
           )
         ).changed
@@ -2510,31 +3199,6 @@ Examples:
       }
     }
 
-    for (const agent of CODEX_RUNTIME_ADAPTER_AGENTS) {
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexAgentsDir, `${agent.id}.toml`),
-            buildCodexRuntimeAdapterAgent(agent),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexAgents}/${agent.id}.toml`);
-      }
-    }
-
-    for (const agent of CODEX_BUSINESS_ROLE_AGENTS) {
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexAgentsDir, `${agent.id}.toml`),
-            buildCodexBusinessRoleAgent(agent),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexAgents}/${agent.id}.toml`);
-      }
-    }
   }
 
   // ── Cursor sync ───────────────────────────────────────────────
@@ -2602,27 +3266,56 @@ Examples:
     );
 
     if (dirs.cursorHooksDir && dirs.cursorHooksFile) {
-      const memoryHookContent = await tryReadCanonical(canonicalSharedMemoryHookPath);
-      if (
-        memoryHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "meta-kim-memory-save.mjs"),
-            memoryHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorHooks}/meta-kim-memory-save.mjs`);
+      // Global-hooks migration: clear legacy files directly under
+      // ~/.cursor/hooks/ before writing the namespaced global package.
+      if (scope === "global") {
+        await removeProjectMetaKimHooks(path.dirname(dirs.cursorHooksDir), "cursor", {
+          keep: new Set(["hookprompt-adapter.mjs"]),
+        });
       }
+      const removedCursorHooks = await removeProjectMetaKimHooks(
+        dirs.cursorHooksDir,
+        "cursor",
+        {
+          keep:
+            scope === "global"
+              ? GLOBAL_META_KIM_HOOK_PACKAGE_FILES
+              : CURSOR_ACTIVE_PROJECT_HOOK_FILES,
+        },
+      );
+      for (const hookName of removedCursorHooks) {
+        changedFiles.push(`${dp.cursorHooks}/${hookName}`);
+      }
+      const cursorGraphifyHookContent =
+        scope === "global"
+          ? await tryReadCanonical(
+              path.join(canonicalRuntimeAssetsDir, "claude", "hooks", "graphify-context.mjs"),
+            )
+          : buildCodexGraphifyContextHook();
       if (
+        cursorGraphifyHookContent &&
         (
           await writeGeneratedFile(
             path.join(dirs.cursorHooksDir, "graphify-context.mjs"),
-            buildCodexGraphifyContextHook(),
+            cursorGraphifyHookContent,
           )
         ).changed
       ) {
         changedFiles.push(`${dp.cursorHooks}/graphify-context.mjs`);
+      }
+      const cursorSpineHookContent = await tryReadCanonical(
+        canonicalSharedSpineHookPath,
+      );
+      if (
+        cursorSpineHookContent &&
+        (
+          await writeGeneratedFile(
+            path.join(dirs.cursorHooksDir, "activate-meta-theory-spine.mjs"),
+            cursorSpineHookContent,
+          )
+        ).changed
+      ) {
+        changedFiles.push(`${dp.cursorHooks}/activate-meta-theory-spine.mjs`);
       }
       // Sync the dispatch-enforcement gate + its bash-readonly classifier from
       // the Claude canonical hooks directory. deny() output adapts to Cursor's
@@ -2656,7 +3349,7 @@ Examples:
         changedFiles.push(`${dp.cursorHooks}/bash-readonly-whitelist.mjs`);
       }
       // Shared dependencies required by enforce-agent-dispatch.mjs: utils.mjs,
-      // spine-state.mjs, skip-reminder.mjs, hook-i18n.mjs. Without these the
+      // spine-state.mjs and skip-reminder.mjs. Without these the
       // dispatch gate cannot resolve its imports.
       const cursorUtilsHookContent = await tryReadCanonical(
         path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "utils.mjs"),
@@ -2700,55 +3393,84 @@ Examples:
       ) {
         changedFiles.push(`${dp.cursorHooks}/skip-reminder.mjs`);
       }
-      const cursorHookI18nContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "hook-i18n.mjs"),
-      );
+      const cursorMemoryHookContent =
+        scope === "global"
+          ? await tryReadCanonical(canonicalSharedMemorySaveHookPath)
+          : null;
       if (
-        cursorHookI18nContent &&
+        cursorMemoryHookContent &&
         (
           await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "hook-i18n.mjs"),
-            cursorHookI18nContent,
+            path.join(dirs.cursorHooksDir, "meta-kim-memory-save.mjs"),
+            cursorMemoryHookContent,
           )
         ).changed
       ) {
-        changedFiles.push(`${dp.cursorHooks}/hook-i18n.mjs`);
+        changedFiles.push(`${dp.cursorHooks}/meta-kim-memory-save.mjs`);
       }
-      if (
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "hookprompt-adapter.mjs"),
-            buildHookPromptAdapterSource("cursor"),
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorHooks}/hookprompt-adapter.mjs`);
+      if (scope === "global") {
+        const cursorHookPromptAdapterPath = path.join(
+          path.dirname(dirs.cursorHooksDir),
+          "hookprompt-adapter.mjs",
+        );
+        if (
+          (
+            await writeGeneratedFile(
+              cursorHookPromptAdapterPath,
+              buildHookPromptAdapterSource("cursor"),
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${path.dirname(dp.cursorHooks)}/hookprompt-adapter.mjs`);
+        }
+      }
+      const staleCursorHooks = [
+        "hookprompt-adapter.mjs",
+        "planning-with-files-adapter.mjs",
+        ...(scope === "global" ? [] : ["meta-kim-memory-save.mjs"]),
+      ];
+      for (const staleHook of staleCursorHooks) {
+        if (
+          (await removeGeneratedPath(path.join(dirs.cursorHooksDir, staleHook)))
+            .changed
+        ) {
+          changedFiles.push(`${dp.cursorHooks}/${staleHook}`);
+        }
+      }
+      if (scope === "global") {
+        await syncGlobalHookPackage(dirs.cursorHooksDir, dp.cursorHooks, changedFiles);
       }
       const graphifyHookPath =
         scope === "global"
           ? path.join(dirs.cursorHooksDir, "graphify-context.mjs")
           : ".cursor/hooks/graphify-context.mjs";
-      const memoryHookPath =
+      const spineHookPath =
         scope === "global"
-          ? path.join(dirs.cursorHooksDir, "meta-kim-memory-save.mjs")
-          : ".cursor/hooks/meta-kim-memory-save.mjs";
+          ? path.join(dirs.cursorHooksDir, "activate-meta-theory-spine.mjs")
+          : ".cursor/hooks/activate-meta-theory-spine.mjs";
       const enforceAgentDispatchHookPath =
         scope === "global"
           ? path.join(dirs.cursorHooksDir, "enforce-agent-dispatch.mjs")
           : ".cursor/hooks/enforce-agent-dispatch.mjs";
-      const hookPromptAdapterPath =
+      const cursorMemoryHookPath =
         scope === "global"
-          ? path.join(dirs.cursorHooksDir, "hookprompt-adapter.mjs")
-          : ".cursor/hooks/hookprompt-adapter.mjs";
+          ? path.join(dirs.cursorHooksDir, "meta-kim-memory-save.mjs")
+          : null;
+      const cursorHookPromptAdapterPath =
+        scope === "global"
+          ? path.join(path.dirname(dirs.cursorHooksDir), "hookprompt-adapter.mjs")
+          : null;
       if (
         (
           await writeGeneratedJson(
             dirs.cursorHooksFile,
             buildCursorProjectHooksJson({
               graphifyHookPath,
-              memoryHookPath,
+              memoryHookPath: cursorMemoryHookPath,
+              spineHookPath,
               enforceAgentDispatchHookPath,
-              hookPromptAdapterPath,
+              hookPromptAdapterPath: cursorHookPromptAdapterPath,
+              packageRoot: repoRoot,
             }),
           )
         ).changed
@@ -2774,7 +3496,14 @@ Examples:
     }
   }
 
+  const sourceRepoProjectProjectionAbsent = checkOnly
+    ? await expectedSourceRepoProjectProjectionAbsence(scope, staleFiles)
+    : false;
+
   if (checkOnly && jsonMode) {
+    const effectiveStaleFiles = sourceRepoProjectProjectionAbsent
+      ? []
+      : staleFiles;
     const byCategory = staleFiles.reduce((acc, f) => {
       const k = f.category || "unknown";
       acc[k] = (acc[k] || 0) + 1;
@@ -2789,20 +3518,45 @@ Examples:
         {
           scope,
           targets: selectedTargets,
-          total: staleFiles.length,
-          byCategory,
-          byAction,
-          staleFiles,
+          status: sourceRepoProjectProjectionAbsent
+            ? "source_repo_project_projections_absent"
+            : staleFiles.length > 0
+              ? "stale"
+              : "ok",
+          total: effectiveStaleFiles.length,
+          byCategory: sourceRepoProjectProjectionAbsent ? {} : byCategory,
+          byAction: sourceRepoProjectProjectionAbsent ? {} : byAction,
+          sourceRepoProjectProjections: sourceRepoProjectProjectionAbsent
+            ? {
+                expectedAbsent: true,
+                skippedStaleFiles: staleFiles.length,
+                message: t.syncRuntimesCheckSourceRepoProjectionAbsent(
+                  staleFiles.length,
+                ),
+              }
+            : {
+                expectedAbsent: false,
+                skippedStaleFiles: 0,
+              },
+          staleFiles: effectiveStaleFiles,
         },
         null,
         2,
       )}\n`,
     );
-    if (staleFiles.length > 0) process.exitCode = 1;
+    if (!sourceRepoProjectProjectionAbsent && staleFiles.length > 0) {
+      process.exitCode = 1;
+    }
     return;
   }
 
   if (checkOnly && changedFiles.length > 0) {
+    if (sourceRepoProjectProjectionAbsent) {
+      console.log(
+        t.syncRuntimesCheckSourceRepoProjectionAbsent(staleFiles.length),
+      );
+      return;
+    }
     console.error(t.syncRuntimesCheckStale);
     for (const file of changedFiles) {
       console.error(t.syncRuntimesCheckStaleLine(file));
@@ -2845,6 +3599,9 @@ Examples:
     claudeHooks: changedFiles.filter((f) =>
       hasDisplayPrefix(f, dirs.displayPaths.claudeHooks),
     ).length,
+    claudeCommands: changedFiles.filter((f) =>
+      hasDisplayPrefix(f, dirs.displayPaths.claudeCommands),
+    ).length,
     claudeSettings: changedFiles.filter(
       (f) =>
         normalizeDisplayPath(f) ===
@@ -2866,9 +3623,14 @@ Examples:
       hasDisplayPrefix(f, dirs.displayPaths.codexHooks),
     ).length,
     codexConfig: changedFiles.filter(
-      (f) =>
-        normalizeDisplayPath(f) ===
-        normalizeDisplayPath(dirs.displayPaths.codexConfig),
+      (f) => {
+        const normalized = normalizeDisplayPath(f);
+        return (
+          normalized === normalizeDisplayPath(dirs.displayPaths.codexConfig) ||
+          normalized ===
+            normalizeDisplayPath(dirs.displayPaths.codexConfigExample)
+        );
+      },
     ).length,
     codexHooksFile: changedFiles.filter(
       (f) =>
@@ -2934,6 +3696,11 @@ Examples:
           summaryKind: "files",
         },
         {
+          label: dirs.displayPaths.claudeCommands,
+          count: layerCounts.claudeCommands,
+          summaryKind: "files",
+        },
+        {
           label: dirs.displayPaths.claudeSettings,
           count: layerCounts.claudeSettings,
           summaryKind: "files",
@@ -2952,10 +3719,7 @@ Examples:
           label: dirs.displayPaths.codexAgents,
           count: layerCounts.codexAgents,
           summaryKind: "agents",
-          expectedCount:
-            teamSize +
-            CODEX_RUNTIME_ADAPTER_AGENTS.length +
-            CODEX_BUSINESS_ROLE_AGENTS.length,
+          expectedCount: teamSize,
         },
         {
           label: dirs.displayPaths.codexSkillsRoot,

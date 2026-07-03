@@ -10,17 +10,12 @@ export const META_AGENTS = [
   "meta-warden",
 ];
 
-export const CODEX_RUNTIME_ADAPTER_AGENT_IDS = ["worker", "explorer"];
+// Meta_Kim projects only nine governance agents into Codex. Execution-layer
+// labels such as frontend/backend/test remain run-scoped packet labels; they
+// are not generated as durable `.codex/agents/*.toml` files.
+export const CODEX_RUNTIME_ADAPTER_AGENT_IDS = [];
 
-export const CODEX_BUSINESS_ROLE_AGENT_IDS = [
-  "frontend",
-  "backend",
-  "test",
-  "review",
-  "analysis",
-  "verify",
-  "docs",
-];
+export const CODEX_BUSINESS_ROLE_AGENT_IDS = [];
 
 export const OPENCLAW_WORKSPACE_MD = [
   "BOOT.md",
@@ -35,18 +30,19 @@ export const OPENCLAW_WORKSPACE_MD = [
 ];
 
 export const SHARED_HOOK_FILES = [
-  "hook-i18n.mjs",
   "skip-reminder.mjs",
-  "block-dangerous-bash.mjs",
   "activate-meta-theory-spine.mjs",
+  "bash-readonly-whitelist.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
   "post-format.mjs",
   "post-typecheck.mjs",
   "post-console-log-warn.mjs",
   "subagent-context.mjs",
   "stop-compaction.mjs",
-  "stop-memory-save.mjs",
   "stop-console-log-audit.mjs",
   "stop-completion-guard.mjs",
+  "stop-spine-cleanup.mjs",
 ];
 
 // Legacy export alias for backwards compatibility

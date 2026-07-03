@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { OS_TARGETS, RUNTIMES, repoPath, toPosix } from "./governance-lib.mjs";
+import { buildHookPromptAdapterSource } from "./runtime-hook-mapping.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -300,7 +301,7 @@ async function validateHookPromptAdapter({
     return;
   }
 
-  const projectHooks = await readJson(repoPath(projectHooksPath));
+  const projectHooks = await readJsonIfExists(repoPath(projectHooksPath));
   const projectHasAdapter = hasCommand(
     projectHooks,
     eventName,
@@ -312,17 +313,18 @@ async function validateHookPromptAdapter({
     "hookprompt-adapter.mjs",
   );
 
-  if (!projectHasAdapter) {
+  if (projectHasAdapter) {
     issues.push(
       issue({
-        code: "missing_projection",
+        code: "wrong_install_layer",
         providerId: provider.id,
         providerType: provider.providerType,
         runtimeId,
         installLayer: "project_projection",
-        state: "missing_projection",
+        state: "project_duplicate",
         sourceRef: projectHooksPath,
-        message: `Project ${runtimeId} hooks do not register hookprompt-adapter.mjs`,
+        message:
+          `Project ${runtimeId} hooks register hookprompt-adapter.mjs, but HookPrompt is a global package and must not be duplicated in project hooks`,
       }),
     );
   }
@@ -398,6 +400,8 @@ async function addHookPromptAdapter(filePath, hooksJson, eventName, runtimeId) {
   const hooksDir = path.join(path.dirname(target), "hooks");
   const adapter = path.join(hooksDir, "hookprompt-adapter.mjs");
   const command = adapterCommand(adapter);
+  await fs.mkdir(hooksDir, { recursive: true });
+  await fs.writeFile(adapter, buildHookPromptAdapterSource(runtimeId), "utf8");
   hooksJson.hooks ??= {};
   hooksJson.hooks[eventName] ??= runtimeId === "codex" ? [{ hooks: [] }] : [];
   if (!Array.isArray(hooksJson.hooks[eventName])) {

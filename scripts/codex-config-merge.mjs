@@ -44,6 +44,152 @@ function normalizeLines(configText = "") {
   return lines;
 }
 
+const TOML_BARE_KEY_RE = /^\s*[A-Za-z0-9_.-]+\s*=/;
+const TOML_TABLE_HEADER_RE = /^\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?$/;
+
+function codeBeforeTomlComment(line = "") {
+  let quote = null;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (quote) {
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (ch === "#") {
+      return line.slice(0, index);
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    }
+  }
+
+  return line;
+}
+
+function scanTomlContainers(code, stack, lineNumber) {
+  let quote = null;
+  let escaped = false;
+
+  for (let index = 0; index < code.length; index += 1) {
+    const ch = code[index];
+    if (quote) {
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push({ kind: "array", line: lineNumber, column: index + 1 });
+      continue;
+    }
+    if (ch === "{") {
+      stack.push({ kind: "inline table", line: lineNumber, column: index + 1 });
+      continue;
+    }
+    if (ch === "]") {
+      const latestArray = stack.findLastIndex((entry) => entry.kind === "array");
+      if (latestArray >= 0) stack.splice(latestArray, 1);
+      continue;
+    }
+    if (ch === "}") {
+      const latestTable = stack.findLastIndex((entry) => entry.kind === "inline table");
+      if (latestTable >= 0) stack.splice(latestTable, 1);
+    }
+  }
+}
+
+function codexConfigTomlIssue(configText = "") {
+  const lines = normalizeLines(configText);
+  const stack = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const lineNumber = index + 1;
+    const rawLine = lines[index];
+    const code = codeBeforeTomlComment(rawLine);
+    if (!code.trim()) continue;
+
+    const isTableHeader = TOML_TABLE_HEADER_RE.test(rawLine);
+    if (stack.length > 0 && (TOML_BARE_KEY_RE.test(code) || isTableHeader)) {
+      return {
+        type: "statement_inside_unclosed_container",
+        line: lineNumber,
+        column: code.search(/\S/) + 1,
+        snippet: rawLine.trim(),
+        opener: stack[stack.length - 1],
+      };
+    }
+
+    if (isTableHeader) continue;
+    scanTomlContainers(code, stack, lineNumber);
+  }
+
+  if (stack.length > 0) {
+    return {
+      type: "unclosed_container",
+      line: lines.length || 1,
+      column: 1,
+      snippet: "<end of file>",
+      opener: stack[stack.length - 1],
+    };
+  }
+
+  return null;
+}
+
+function formatCodexConfigTomlIssue(issue) {
+  const opener = issue.opener;
+  const location = `line ${issue.line}:${issue.column}`;
+  const openedAt = `${opener.kind} opened at line ${opener.line}:${opener.column}`;
+  return [
+    `Codex config.toml is not safe to merge: ${location} appears before an unclosed TOML ${openedAt}.`,
+    `Problem line: ${issue.snippet}`,
+    "Fix the missing comma or closing bracket above this line first, then put Codex feature flags under [features], for example:",
+    "[features]",
+    "multi_agent = true",
+  ].join("\n");
+}
+
+export class CodexConfigTomlError extends Error {
+  constructor(issue) {
+    super(formatCodexConfigTomlIssue(issue));
+    this.name = "CodexConfigTomlError";
+    this.issue = issue;
+  }
+}
+
+export function assertCodexConfigTomlMergeable(configText = "") {
+  const issue = codexConfigTomlIssue(configText);
+  if (issue) {
+    throw new CodexConfigTomlError(issue);
+  }
+}
+
 function ensureSectionSetting(lines, sectionName, settingName, settingValue) {
   const settingLine = `${settingName} = ${settingValue}`;
   const settingRe = new RegExp(
@@ -107,6 +253,42 @@ function settingNameFromLine(line) {
   return line.match(/^\s*([A-Za-z0-9_.-]+)\s*=/)?.[1] ?? null;
 }
 
+function isTopLevelMcpServerSection(sectionName = "") {
+  return /^mcp_servers\.(?:"[^"]+"|[A-Za-z0-9_-]+)$/.test(sectionName);
+}
+
+function isStdioTransportType(value = "") {
+  return String(value).trim().toLowerCase() === "stdio";
+}
+
+function isRemoteTransportType(value = "") {
+  return ["http", "sse", "streamable_http", "streamable-http"].includes(
+    String(value).trim().toLowerCase(),
+  );
+}
+
+function mcpTransportForSection(lines, sectionName) {
+  const settings = new Set(
+    sectionSettingLines(lines, sectionName)
+      .map(settingNameFromLine)
+      .filter(Boolean),
+  );
+  const type = sectionSettingValue(lines, sectionName, "type");
+  const hasUrl = settings.has("url");
+  const hasStdioLaunch = settings.has("command") || settings.has("args");
+
+  if (hasUrl && !hasStdioLaunch && !isStdioTransportType(type)) {
+    return "remote";
+  }
+  if (hasStdioLaunch || isStdioTransportType(type)) {
+    return "stdio";
+  }
+  if (hasUrl || isRemoteTransportType(type)) {
+    return "remote";
+  }
+  return null;
+}
+
 function ensureBlankLineBeforeAppend(lines) {
   if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
     lines.push("");
@@ -121,8 +303,20 @@ function appendWholeSection(lines, sourceLines, sectionName) {
 }
 
 export function mergeCodexConfigAddOnly(baseConfigText = "", additiveConfigText = "") {
+  assertCodexConfigTomlMergeable(baseConfigText);
+  assertCodexConfigTomlMergeable(additiveConfigText);
+
   const baseLines = normalizeLines(baseConfigText);
   const additiveLines = normalizeLines(additiveConfigText);
+  const preferredMcpTransports = new Map(
+    sectionNames(additiveLines)
+      .filter(isTopLevelMcpServerSection)
+      .map((sectionName) => [
+        sectionName,
+        mcpTransportForSection(additiveLines, sectionName),
+      ])
+      .filter(([, transport]) => Boolean(transport)),
+  );
   const existingRootSettings = rootSettingNames(baseLines);
   const missingRootLines = rootSettingLines(additiveLines).filter((line) => {
     const name = settingNameFromLine(line);
@@ -157,10 +351,14 @@ export function mergeCodexConfigAddOnly(baseConfigText = "", additiveConfigText 
     }
   }
 
+  normalizeCodexMcpServerTransportConflicts(baseLines, preferredMcpTransports);
+
   return `${baseLines.join("\n")}\n`;
 }
 
 export function ensureCodexRequestUserInputFeature(configText = "") {
+  assertCodexConfigTomlMergeable(configText);
+
   const lines = normalizeLines(configText);
   ensureSectionSetting(
     lines,
@@ -346,6 +544,62 @@ function removeSectionSetting(lines, sectionName, settingName) {
   }
 }
 
+function codexMcpServerTransportConflict(lines, sectionName) {
+  const settings = new Set(
+    sectionSettingLines(lines, sectionName)
+      .map(settingNameFromLine)
+      .filter(Boolean),
+  );
+  const type = sectionSettingValue(lines, sectionName, "type");
+  const hasRemote = settings.has("url") || isRemoteTransportType(type);
+  const hasStdio =
+    settings.has("command") ||
+    settings.has("args") ||
+    isStdioTransportType(type);
+
+  return hasRemote && hasStdio;
+}
+
+function removeTransportTypeIf(lines, sectionName, predicate) {
+  const type = sectionSettingValue(lines, sectionName, "type");
+  if (type !== null && predicate(type)) {
+    removeSectionSetting(lines, sectionName, "type");
+  }
+}
+
+function normalizeCodexMcpServerTransportConflicts(
+  lines,
+  preferredTransports = new Map(),
+) {
+  for (const sectionName of sectionNames(lines)) {
+    if (!isTopLevelMcpServerSection(sectionName)) continue;
+    if (!codexMcpServerTransportConflict(lines, sectionName)) continue;
+
+    const preferredTransport =
+      preferredTransports.get(sectionName) ??
+      mcpTransportForSection(lines, sectionName) ??
+      "stdio";
+
+    if (preferredTransport === "remote") {
+      for (const settingName of ["command", "args", "cwd"]) {
+        removeSectionSetting(lines, sectionName, settingName);
+      }
+      removeTransportTypeIf(lines, sectionName, isStdioTransportType);
+      continue;
+    }
+
+    for (const settingName of [
+      "url",
+      "bearer_token_env_var",
+      "oauth_client_id",
+      "oauth_resource",
+    ]) {
+      removeSectionSetting(lines, sectionName, settingName);
+    }
+    removeTransportTypeIf(lines, sectionName, isRemoteTransportType);
+  }
+}
+
 function withoutExtendedWindowsPrefix(filePath = "") {
   return String(filePath).replace(/^\\\\\?\\/, "");
 }
@@ -454,6 +708,8 @@ function ensureOpenAiBundledMarketplace(lines, options = {}) {
 }
 
 export function ensureCodexAppNativeControls(configText = "", options = {}) {
+  assertCodexConfigTomlMergeable(configText);
+
   const lines = normalizeLines(configText);
   const platformName = options.platformName ?? process.platform;
 
@@ -467,6 +723,8 @@ export function ensureCodexAppNativeControls(configText = "", options = {}) {
       ensureSectionSetting(lines, `plugins."${pluginId}"`, "enabled", "true");
     }
   }
+
+  normalizeCodexMcpServerTransportConflicts(lines);
 
   return ensureCodexWindowsNotifyCompat(
     `${lines.join("\n")}\n`,

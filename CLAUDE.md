@@ -8,11 +8,11 @@ If you only keep six rules in mind:
 
 - `meta-warden` is the public front door; the other meta agents are backstage specialists.
 - `canonical/agents/`, `canonical/skills/meta-theory/`, `canonical/runtime-assets/`, `config/contracts/`, and `config/capability-index/` are the durable sources of truth.
-- `.claude/` is a runtime projection generated from canonical assets. Sync it instead of hand-forking it.
+- `.claude/` is a runtime projection generated from canonical assets. It is gitignored — run `npm run meta:sync` after clone to generate hooks/agents/skills locally. Sync it instead of hand-forking it.
 - When `meta-theory` is active, the main Claude thread dispatches; it does not execute complex work directly.
 - Critical, Fetch, Thinking, and Review must make the run executable before mutation; hooks are final safeguards, not the primary design path.
 - Capability-first dispatch is **mechanically enforced** in Claude Code via the `enforce-agent-dispatch.mjs` PreToolUse hook (deny payload). Codex and Cursor v1.7+ use the same projected hook; OpenClaw remains declarative. The current matrix lives in `AGENTS.md` under Mechanical Enforcement.
-- User-visible worker names must be coarse English business role-family names such as `frontend`, `backend`, or `test`, not scoped work items or host-generated personal nicknames. Localized trigger words may be recognized as input, but durable governance files stay English.
+- User-visible run-scoped worker labels may be coarse English role-family names such as `frontend`, `backend`, or `test`, but Meta_Kim does not project those execution labels as durable agents. Durable governance files stay with the nine `meta-*` owners.
 
 ## What This Repository Is
 
@@ -184,6 +184,7 @@ Keep three names separate:
 
 Rules:
 
+- `roleDisplayName` is a run-scoped task-packet label, not a durable agent identity and not a projection file.
 - Do not expose random personal nicknames as the primary agent name.
 - Prefer short role names over long task sentences.
 - Do not put concrete work items into `roleDisplayName`; when the same role has parallel shards, keep the same coarse role name and put shard scope in `roleInstanceId` / `shardScope`.
@@ -255,14 +256,13 @@ Meta agents govern. They do not become generic implementation workers when a bet
 
 Claude Code has project hooks generated from canonical runtime assets. The expected hook commands are:
 
-- `node .claude/hooks/activate-meta-theory-spine.mjs`
-- `node .claude/hooks/block-dangerous-bash.mjs`
+- `node .claude/hooks/graphify-context.mjs`
 - `node .claude/hooks/enforce-agent-dispatch.mjs`
+- `node .claude/hooks/activate-meta-theory-spine.mjs`
 - `node .claude/hooks/post-format.mjs`
 - `node .claude/hooks/post-typecheck.mjs`
 - `node .claude/hooks/post-console-log-warn.mjs`
 - `node .claude/hooks/subagent-context.mjs`
-- `node .claude/hooks/stop-memory-save.mjs`
 - `node .claude/hooks/stop-compaction.mjs`
 - `node .claude/hooks/stop-console-log-audit.mjs`
 - `node .claude/hooks/stop-completion-guard.mjs`
@@ -271,17 +271,17 @@ Claude Code has project hooks generated from canonical runtime assets. The expec
 They cover:
 
 - meta-theory spine activation
-- dangerous command blocking
-- git-push reminder
-- dispatch enforcement
+- graph/context preload
+- capability-first dispatch enforcement and dangerous command blocking
 - formatting and typecheck follow-ups
 - console logging warnings
 - subagent graph/context hints
-- session-end memory save
 - session-end compaction
 - session-end console audit
 - optional premature-completion guard
 - spine-state cleanup
+
+Shared hook dependencies such as `bash-readonly-whitelist.mjs`, `spine-state.mjs`, `hook-i18n.mjs`, `skip-reminder.mjs`, and `utils.mjs` are copied as support files. They are not direct `.claude/settings.json` hook commands.
 
 Hook behavior differs across runtimes. Do not assume Claude's `SubagentStart`-style behavior exists in Codex, OpenClaw, or Cursor unless the runtime adapter explicitly verifies it.
 
@@ -300,12 +300,13 @@ Repository policy:
 
 This repo keeps a knowledge graph under `graphify-out/`.
 
-Use it as compressed codebase context, not as an infallible truth source:
+Use it as a query-first navigation index, not as compressed context or an infallible truth source:
 
-- for broad architecture review, start with `graphify-out/GRAPH_REPORT.md`
+- for focused questions, start with `graphify query "<question>" --budget 1000`, `graphify path`, or `graphify explain`
+- for broad architecture review, use `graphify-out/GRAPH_REPORT.md` only as orientation
 - if `graphify-out/wiki/index.md` exists, use it for broad navigation
-- for focused questions, prefer graph queries or subgraph extraction when available
-- treat ambiguous graph nodes as uncertain dependencies requiring manual verification
+- treat graph results as candidate file anchors, then verify route-changing claims against source files
+- treat ambiguous graph nodes as uncertain dependencies requiring manual verification, and fall back to targeted repository search when graph results are generic or stale
 - `npm run meta:graphify:check` and `npm run meta:validate` compare the graph's built commit with current `git rev-parse HEAD` and fail when `GRAPH_REPORT.md` is stale
 - after modifying code files, run `npm run meta:graphify:rebuild`
 
@@ -356,7 +357,7 @@ Use supporting commands as needed:
 - `node setup.mjs` installs selected runtime projections and graphify wiring idempotently.
 - Runtime target selection has two layers: repo defaults in `config/sync.json`, machine-active targets in `.meta-kim/local.overrides.json`.
 - MCP Memory Service uses port `8000`.
-- `stop-memory-save.mjs` saves session summaries to the MCP Memory Service on session end.
+- `stop-memory-save.mjs` is a canonical/global MCP memory lifecycle asset installed by `scripts/install-mcp-memory-hooks.mjs`; it is not registered in the project `.claude/settings.json` projection.
 
 ## Reading Order
 
