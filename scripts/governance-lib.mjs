@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { getProfilePaths } from "./meta-kim-local-state.mjs";
+import { hasEngineeringRepairIntent, hasProductBuildIntent } from "./meta-theory-entry-classifier.mjs";
+import { loadFormalToolProfiles } from "./runtime-tool-profiles.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(__dirname, "..");
-export const stateDir = path.join(repoRoot, ".meta-kim", "state", "default");
+export const stateDir = getProfilePaths().profileDir;
 export const GOVERNANCE_ACTIONS = [
   "clarify_intent",
   "fetch_platform_capability",
@@ -21,8 +24,8 @@ export const GOVERNANCE_ACTIONS = [
   "verify_user_goal",
   "evolve_writeback",
 ];
-export const RUNTIMES = ["claude_code", "codex", "openclaw", "cursor"];
-export const OS_TARGETS = ["macos", "windows", "linux", "wsl2"];
+export const RUNTIMES = loadFormalToolProfiles().map(profile => profile.runtime);
+export { OPERATING_SYSTEM_TARGETS as OS_TARGETS } from "../src/application/runtime/operating-system.mjs";
 export const SUPPORT = ["native", "partial", "unsupported", "unknown"];
 export const CONFIDENCE = [
   "verified_docs",
@@ -50,6 +53,73 @@ export function toPosix(filePath) {
   return String(filePath).replace(/\\/g, "/");
 }
 
+export function annotateCrossScopeAgentCollisions(agents, runtime) {
+  if (runtime !== "codex") return agents;
+  const groups = new Map();
+  for (const agent of agents) {
+    const group = groups.get(agent.id) ?? [];
+    group.push(agent);
+    groups.set(agent.id, group);
+  }
+  return agents.map((agent) => {
+    const cacheOnly = agent.cacheEvidenceOnly === true;
+    // Cached definitions remain advisory evidence, never live collision inputs.
+    const group = (groups.get(agent.id) ?? [agent])
+      .filter((candidate) => cacheOnly || candidate.cacheEvidenceOnly !== true);
+    const provenance = group.flatMap((candidate) =>
+      Array.isArray(candidate.provenance) && candidate.provenance.length > 0
+        ? candidate.provenance
+        : [{
+            id: candidate.id,
+            inventoryId: candidate.inventoryId ?? candidate.id,
+            sourceClass: candidate.sourceClass ?? "unknown",
+            sourceRef: candidate.sourceRef ?? null,
+            contentDigest: candidate.contentDigest ?? null,
+            nativeIdentity: candidate.nativeIdentity ?? candidate.id,
+            sourcePriority: candidate.sourcePriority ?? null,
+            sourceKey: candidate.sourceKey ?? null,
+            sourceValid: candidate.validCustomAgentDefinition !== false,
+          }],
+    );
+    const uniqueSources = [...new Map(
+      provenance.map((entry) => [entry.sourceKey ?? `${entry.sourceRef}:${entry.contentDigest}`, entry]),
+    ).values()];
+    const distinctDigests = [...new Set(uniqueSources.map((entry) => entry.contentDigest).filter(Boolean))];
+    const conflicting = distinctDigests.length > 1;
+    const explicitlySelected = agent.sourceSelectedExplicitly === true;
+    const routeEligible = !cacheOnly && agent.routeEligible !== false &&
+      (!conflicting || explicitlySelected) &&
+      agent.validCustomAgentDefinition !== false;
+    if (uniqueSources.length <= 1 && agent.collision == null &&
+      !cacheOnly && agent.routeEligible !== false && agent.validCustomAgentDefinition !== false) return agent;
+    const collision = {
+      detected: uniqueSources.length > 1,
+      kind: uniqueSources.length <= 1
+        ? "none"
+        : conflicting
+          ? "conflicting_definitions"
+          : "exact_duplicate",
+      candidateCount: uniqueSources.length,
+      distinctContentDigests: distinctDigests,
+      exactDuplicate: uniqueSources.length > 1 && !conflicting,
+      ambiguous: conflicting,
+      routeEligible,
+      evidenceSource: group.every((candidate) => candidate.cacheEvidenceOnly === true)
+        ? "cached_agent_inventory"
+        : group.some((candidate) => candidate.cacheEvidenceOnly === true)
+          ? "mixed_live_and_cached_agent_inventory"
+          : "live_project_and_global_filesystem",
+    };
+    return {
+      ...agent,
+      provenance: uniqueSources,
+      collision,
+      routeEligible,
+      ambiguousNativeIdentity: conflicting,
+    };
+  });
+}
+
 export async function exists(filePath) {
   try {
     await fs.access(filePath);
@@ -68,16 +138,27 @@ export async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function quoteWindowsCommand(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
 export function commandProbe(command) {
   const whereCommand = process.platform === "win32" ? "where.exe" : "which";
   const where = spawnSync(whereCommand, [command], { encoding: "utf8" });
   const source = where.status === 0 ? where.stdout.split(/\r?\n/)[0] : null;
   let version = null;
   if (source) {
-    const result = spawnSync(command, ["--version"], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    });
+    const result =
+      process.platform === "win32"
+        ? spawnSync(
+            process.env.ComSpec || "cmd.exe",
+            ["/d", "/s", "/c", `${quoteWindowsCommand(source)} --version`],
+            { encoding: "utf8", shell: false },
+          )
+        : spawnSync(source, ["--version"], {
+            encoding: "utf8",
+            shell: false,
+          });
     version =
       result.status === 0
         ? (result.stdout || result.stderr).split(/\r?\n/).find(Boolean) ?? null
@@ -134,10 +215,21 @@ export function scriptExists(scriptPath) {
 
 export function classifyTaskShape(task) {
   const text = String(task ?? "").toLowerCase();
-  if (/hook|runtime|codex|claude|cursor|openclaw|windows|mac|wsl|钩子|运行时|平台|安装|更新|配置|沙盒|权限|审批/.test(text)) {
+  const runtimePlatformSignal =
+    /hook|runtime|codex|claude|cursor|openclaw|windows|mac|wsl|钩子|运行时|安装|更新|配置|沙盒|权限|审批/.test(text) ||
+    /平台.{0,12}(key|adapter|适配|注册|路由|hook|钩子|mcp|权限|配置|安装|更新|同步|投影)|(?:key|adapter|hook|mcp|权限|配置|安装|更新|同步|投影).{0,12}平台/.test(text);
+  const businessContentSignal =
+    /内容|营销|增长|推广|投放|标题|文案|封面|素材|受众|转化|流量|传播|图文|视频|campaign|content|copy|audience|creative|conversion/.test(text);
+  if (runtimePlatformSignal && !businessContentSignal) {
     return "platform_governance";
   }
-  if (/strategy|growth|moneti[sz]e|pricing|business|product|pmf|conversion|策略|增长|商业化|变现|定价|产品|转化|留存|分发|用户路径/.test(text)) {
+  if (/goal\s*prompt|loop\s*prompt|goalpro|goal\s*contract|intent amplification|目标契约|目标合同|意图放大|循环提示词/.test(text)) {
+    return "goal_contract";
+  }
+  if (hasEngineeringRepairIntent(text) && !hasProductBuildIntent(text)) {
+    return "engineering_execution";
+  }
+  if (/strategy|growth|moneti[sz]e|pricing|business|product|pmf|conversion|decision|judge|判断|决策|选择|取舍|pass.?kill|策略|增长|商业化|变现|定价|产品|转化|留存|分发|用户路径|高流量/.test(text)) {
     return "strategy_product_decision";
   }
   if (/refactor|code|test|api|database|bug|integration|重构|代码|测试|接口|数据库|缺陷|集成/.test(text)) {

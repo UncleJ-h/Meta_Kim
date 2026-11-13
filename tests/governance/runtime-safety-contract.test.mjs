@@ -63,7 +63,7 @@ test("runtime safety validator is wired into governance verification", () => {
     `node ${CONTRACT.releaseGate.validatorScript}`,
   );
   assert.match(
-    PACKAGE.scripts["meta:verify:governance"],
+    `${PACKAGE.scripts["meta:verify:governance"]} && ${PACKAGE.scripts["meta:verify:governance:core"]}`,
     new RegExp(`npm run ${CONTRACT.releaseGate.packageScript}`),
   );
 
@@ -238,13 +238,17 @@ test("install experience contract keeps full platform compatibility tiers explic
   assert.equal(tiers.sourceOfTruth, "config/runtime-compatibility-catalog.json");
   assert.deepEqual(tiers.formalProjectionTargets.toSorted(), productIdsByTier("runtime_projection"));
   assert.deepEqual(tiers.defaultSelectedTargets.toSorted(), ["claude", "codex"]);
-  assert.deepEqual(tiers.nonDefaultFormalProjectionTargets.toSorted(), [
-    "cursor",
-    "openclaw",
-  ]);
+  assert.deepEqual(tiers.nonDefaultFormalProjectionTargets.toSorted(),
+    productIdsByTier("runtime_projection").filter((id) => !tiers.defaultSelectedTargets.includes(id)));
+  assert.equal(CONTRACT.hostConfigMerge.nativeProjectionBoundary.zcode.nativeProjectHooks, false);
+  assert.equal(CONTRACT.hostConfigMerge.nativeProjectionBoundary.projectionDoesNotGrantExecution, true);
   assert.deepEqual(
     tiers.dependencyInstallTargets.toSorted(),
     productIdsByTier("dependency_install_target"),
+  );
+  assert.deepEqual(
+    tiers.betaCompatibilityTargets.toSorted(),
+    productIdsByTier("beta_compatibility"),
   );
   assert.deepEqual(tiers.candidateProbeTargets.toSorted(), productIdsByTier("candidate_probe"));
   assert.match(tiers.boundary, /formal Meta_Kim projection targets/);
@@ -284,6 +288,7 @@ test("HookPrompt bad-input fixtures flow through adapter into model-visible fiel
     try {
       const adapterPath = path.join(tempDir, "hookprompt-adapter.mjs");
       const hookPromptPath = path.join(tempDir, "user-prompt-submit.js");
+      writeFileSync(path.join(tempDir, "package.json"), '{"type":"module"}\n', "utf8");
       writeFileSync(adapterPath, buildHookPromptAdapterSource(runtimeId), "utf8");
       writeFileSync(
         hookPromptPath,
@@ -302,8 +307,18 @@ test("HookPrompt bad-input fixtures flow through adapter into model-visible fiel
         const result = spawnSync(process.execPath, [adapterPath], {
           input: JSON.stringify(fixture.payload),
           encoding: "utf8",
+          // The adapter's inner hook spawn has a timeout, and on timeout the
+          // adapter stays silent by design. A loaded host can starve a healthy
+          // inner hook past the interactive default, which would surface here as
+          // a JSON parse error against empty stdout rather than as the contract
+          // break this case is about. Lift the ceiling for the measurement.
+          env: { ...process.env, META_KIM_HOOKPROMPT_INNER_TIMEOUT_MS: "60000" },
         });
         assert.equal(result.status, 0, result.stderr);
+        assert.ok(
+          result.stdout.trim(),
+          `${runtimeId} adapter emitted nothing for ${fixture.id ?? fixture.expectedPromptFragment}`,
+        );
         const parsed = JSON.parse(result.stdout);
         const modelVisible =
           runtimeId === "cursor"
@@ -315,5 +330,54 @@ test("HookPrompt bad-input fixtures flow through adapter into model-visible fiel
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  }
+});
+
+test("the HookPrompt adapter's inner timeout honours its override and falls back on a bad one", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "meta-kim-hookprompt-timeout-"));
+  try {
+    const adapterPath = path.join(tempDir, "hookprompt-adapter.mjs");
+    writeFileSync(path.join(tempDir, "package.json"), '{"type":"module"}\n', "utf8");
+    writeFileSync(adapterPath, buildHookPromptAdapterSource("codex"), "utf8");
+    // Busy-waits past a sub-second ceiling and well under a generous one, so the
+    // same inner hook is starved or served purely by the override's value.
+    writeFileSync(
+      path.join(tempDir, "user-prompt-submit.js"),
+      [
+        "const end = Date.now() + 900;",
+        "while (Date.now() < end) {}",
+        'console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: "CTX:served" } }));',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const runWith = (override) =>
+      spawnSync(process.execPath, [adapterPath], {
+        input: JSON.stringify({ prompt: "seam probe" }),
+        encoding: "utf8",
+        env:
+          override === null
+            ? process.env
+            : { ...process.env, META_KIM_HOOKPROMPT_INNER_TIMEOUT_MS: override },
+      });
+
+    const starved = runWith("200");
+    assert.equal(starved.status, 0, starved.stderr);
+    assert.equal(starved.stdout.trim(), "", "a ceiling below the inner hook must withhold output");
+
+    const served = runWith("30000");
+    assert.equal(served.status, 0, served.stderr);
+    assert.match(served.stdout, /CTX:served/, "a raised ceiling must let the inner hook through");
+
+    // A garbage override must not become the ceiling; the 10s default has to
+    // still serve this 0.9s hook.
+    for (const bad of ["nonsense", "0", "-5"]) {
+      const fallback = runWith(bad);
+      assert.equal(fallback.status, 0, fallback.stderr);
+      assert.match(fallback.stdout, /CTX:served/, `override ${bad} must fall back to the default`);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
   }
 });

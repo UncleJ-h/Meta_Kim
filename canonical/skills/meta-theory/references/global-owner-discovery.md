@@ -1,8 +1,8 @@
 # Global-First Owner Discovery
 
-Capability discovery is **global-first**, not project-local-first. Before Fetch can name an owner, the run must look in every layer where a reusable owner can live. Named dispatch without a discovery step is a design shortcut, not the canonical method. The main thread is the discovery orchestrator; the discovery itself may fan out across the sources below in parallel.
+Capability discovery is **global-first**, not project-local-first. Fetch consults the relevant layers where a reusable owner can live before Thinking selects the owner. Named dispatch without discovery evidence is a design shortcut, not the canonical method. The main thread is the discovery orchestrator; independent discovery may run in parallel inside Fetch.
 
-This reference is the long-form companion to `SKILL.md` § **Global-First Owner Discovery** and the **4-Stage Parallel Fan-out Protocol** in `dev-governance.md`. SKILL.md keeps the section short and links here for detail.
+This reference is the long-form companion to `SKILL.md` § **Global-First Owner Discovery**. `config/contracts/core-loop-contract.json` is the single authority for scan scope, `capabilityDiscovery.fullScanTriggers`, stage order and stage-internal parallelism; `dev-governance.md` explains that contract. Normal discovery uses cached global inventory plus a project-light scan and stop-on-match once a qualified provider fits. The source catalog below does not require a full scan on every run.
 
 ## Use when
 
@@ -14,15 +14,15 @@ Discovery requires: the **capability needed** (e.g. "frontend Next.js", "graph c
 
 ## Do
 
-Search the six global discovery sources in locality order. Match by **capability and boundary**, not by agent title. Record every source checked (including empty results) into `dispatchEnvelopePacket.capabilityInventory`. Prefer a global owner that already fits over creating a project-local copy. When multiple candidates match, prefer the most local durable owner, then the one whose scope already includes the architecture type.
+Use the six source families below as a catalog, consulting route-relevant cached inventory and project evidence in locality order. Match by **capability and boundary**, not by agent title. Record actual sources checked (including empty results), cache references and reasons for skipping route-relevant sources in `dispatchEnvelopePacket.capabilityInventory`. Stop when a qualified provider fits; perform a full applicable scan only when the machine contract's `fullScanTriggers` applies. Prefer a global owner that already fits over creating a project-local copy. When multiple candidates match, prefer the most local durable owner, then the one whose scope already includes the architecture type.
 
 ## Do not
 
-Do not hardcode an agent name before discovery. Do not skip a source because it "probably" has nothing. Do not silently synthesize a new owner when a global one fits. Do not copy a reusable global asset into the project when `use_global_directly` applies. Do not emit local absolute home paths in route reports.
+Do not hardcode an agent name before discovery. Do not skip a route-relevant unresolved source without a reason, or report an unscanned path as freshly checked. Do not silently synthesize a new owner when a global one fits. Do not copy a reusable global asset into the project when `use_global_directly` applies. Do not emit local absolute home paths in route reports.
 
 ## The six global discovery sources
 
-Searched in order of locality then priority:
+Source catalog, considered in order of locality then priority under the machine scan policy:
 
 1. **Local canonical assets** — `canonical/agents/`, `canonical/skills/`, `canonical/runtime-assets/shared/`, `canonical/runtime-assets/<runtime>/`. These are the durable sources of truth for Meta_Kim and must be searched first for any meta-owned capability.
 2. **Capability indexes** — `config/capability-index/` and the runtime capability-index mirrors under `.claude/capability-index/`, `.codex/capability-index/`, `.cursor/capability-index/`. These are query-first indices that resolve capability → owner without reading every agent file.
@@ -34,6 +34,40 @@ Searched in order of locality then priority:
 ## Capability-first matching
 
 The search query is the **capability needed** (e.g. "frontend Next.js", "graph code review", "i18n string extraction"), not the agent name. Match by boundary, not by title. The result of discovery is a shortlist of owner candidates with file refs, never a hardcoded dispatch.
+
+Use the read-only, bounded query entrypoint instead of relying on the host to list
+every installed skill in one prompt:
+
+```sh
+meta-kim capability search --query "code security review" --runtime codex --type agents --limit 5 --json
+meta-kim capability search --query "安全审查" --keyword security --keyword review --runtime codex --type skills --limit 5
+```
+
+`--keyword` may be repeated up to eight times to add domain terms or translated
+synonyms. Types include agents, skills, commands, tools, hooks, plugins and their
+cached index types; `tools` searches MCP and runtime-tool entries. Runtime
+filtering is exact (`codexapp` is distinct from `codex`). Canonical entries without
+declared runtime coverage remain reference candidates only in an unfiltered query.
+The result contains bounded descriptions, portable source references, qualified
+provider identity, source/collision provenance, and the terms and fields that
+matched. It reuses the inventory's source-aware winner and explicit alias mapping;
+different providers with the same name remain distinct.
+
+The command reads the existing global inventory and packaged canonical index. It
+does not rescan runtime homes, read all capability bodies, access the network,
+install, create, select or invoke providers. Missing/malformed indexes yield an
+explicit gap; caches older than seven days are marked stale, and future timestamps
+are disclosed. The output names the existing `discover:global` refresh command;
+refresh is a separate explicit action. `--inventory` and `--canonical` permit
+read-only queries against explicit index files, and `--profile` selects a global
+state profile. A no-match query is a gap to refine or record, never an excuse to
+guess an owner.
+
+Relevance scores only order text matches. They are not the 85-point provider
+qualification gate, native support, safety approval, or execution evidence. Check
+the candidate's current source and task boundary before choosing it, then retain
+the actual native dispatch result and worker artifact separately. A cached match
+remains `not_invoked`, even if its cached definition was valid when discovered.
 
 When multiple candidates match:
 
@@ -47,7 +81,7 @@ Discovery must be cross-runtime portable. Use repo-relative refs, runtime ids, o
 
 ## When the gap is real
 
-If no source 1-5 returns a fit:
+If the relevant existing inventory sources (1-5) return no qualified fit:
 
 - Source 6 (external discovery) is consulted only with recorded reason and routing impact.
 - The result is a `capabilityGapPacket` with `capabilityNeed`, `globalCandidateChecked[]`, `recommendedAction` (`create` / `upgrade` / `accept_reference_only`), and `ownerCandidate`.
@@ -55,15 +89,15 @@ If no source 1-5 returns a fit:
 
 ## Required packet
 
-The dispatcher writes `dispatchEnvelopePacket.capabilityInventory` before any Wave 1 fan-out. Required fields: `searchLog[]` (each of the six sources with checked-at, result count, top candidates), `capabilityInventory` (agents / skills / commands / hooks / mcp / runtime-tools / plugins / dependencies), `ownerCandidates[]` per capability need, and `selectedOwner` with boundary-fit reason. A `capabilityGapPacket` is emitted when no source 1-5 owner fits.
+The dispatcher merges `dispatchEnvelopePacket.capabilityInventory` at the Fetch stage boundary before Thinking closes its owner route. Independent discovery inside Fetch may run in parallel. Required fields: `searchLog[]` (actual consulted sources with checked-at, result count, top candidates or cached-inventory references, and reasons for skipping route-relevant sources), `capabilityInventory` (route-relevant agents / skills / commands / hooks / mcp / runtime-tools / plugins / dependencies), `ownerCandidates[]` per capability need, and `selectedOwner` with boundary-fit reason. A `capabilityGapPacket` is emitted when no qualified existing owner fits.
 
 ## Pass
 
-Discovery passes when `capabilityInventory` is written, every one of the six sources appears in `searchLog` (empty results recorded explicitly), each capability need has at least one candidate or a recorded gap, and the selected owner is a real provider (not `general-purpose`, not a governance agent acting as implementation worker, not a runtime alias).
+Discovery passes when `capabilityInventory` is written, `searchLog` identifies the actual consulted sources and cache evidence (empty results recorded explicitly), route-relevant omissions have reasons, each capability need has at least one candidate or a recorded gap, and the selected owner is a real provider (not `general-purpose`, not a governance agent acting as implementation worker, not a runtime alias). A qualified match may end further discovery under the machine contract.
 
 ## Fail
 
-Discovery fails when the inventory is missing, when `searchLog` omits a source without a recorded reason, when an owner is named without any search evidence (hardcoded dispatch), or when a selected owner is `general-purpose` / a runtime alias / a governance agent used as an implementation worker. Review rejects fake discovery on the same chain, not via a separate gate.
+Discovery fails when the inventory is missing, when `searchLog` omits a route-relevant unresolved source without a reason or claims a fresh scan that did not occur, when an owner is named without search evidence (hardcoded dispatch), or when a selected owner is `general-purpose` / a runtime alias / a governance agent used as an implementation worker. Review rejects fake discovery on the same chain, not via a separate gate.
 
 ## Block
 
@@ -71,11 +105,11 @@ Block (return upstream, do not advance to Execution) when sources 1-5 return no 
 
 ## Return to stage
 
-On fake discovery or missing inventory: return to **Fetch** to complete the six-source scan. On a real capability gap: return to **Thinking** with the `capabilityGapPacket` to decide `create` / `upgrade` / `accept_reference_only`. On a `general-purpose` or alias owner: return to **Thinking** to re-resolve against the inventory.
+On fake discovery or missing inventory: return to **Fetch** to complete the missing route-relevant discovery under the machine scan policy. On a real capability gap: return to **Thinking** with the `capabilityGapPacket` to decide `create` / `upgrade` / `accept_reference_only`. On a `general-purpose` or alias owner: return to **Thinking** to re-resolve against the inventory.
 
 ## Verification
 
-Verification confirms the inventory file exists, `searchLog` lists all six sources with timestamps, each `ownerCandidate` resolves to a real file or provider, and the selected owner's boundary fits the capability need. A `capabilityInvocationProbePacket` may be required for callable local families (MCP / command-script / runtime-tool) before product-experience pass.
+Verification confirms the inventory exists, `searchLog` identifies actual consulted sources and cache freshness with reasons for route-relevant omissions, each `ownerCandidate` resolves to a real file or provider, and the selected owner's boundary fits the capability need. Check full-scan coverage only when `capabilityDiscovery.fullScanTriggers` applies. `capabilityInvocationProbePacket` may record readiness for callable local families, but it never proves that the selected provider binding was invoked and never satisfies product-experience live evidence.
 
 ## Writeback
 

@@ -1,9 +1,18 @@
-import test from "node:test";
+import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createGovernanceRuntimeFixture } from "../helpers/governance-runtime-fixture.mjs";
+import { fixtureCritical, fixtureReadWorkOrder, refreshFixtureSourcePins, runFixtureHostCli } from "../helpers/host-reasoning-fixture.mjs";
+import { localProtocolFixtureTaskFacts } from "../helpers/task-design-facts.mjs";
+
+let runtimeFixture;
+before(() => {
+  runtimeFixture = createGovernanceRuntimeFixture(null, { graph: true });
+  refreshFixtureSourcePins(runtimeFixture);
+});
+after(() => runtimeFixture?.cleanup());
 
 const CORE_LOOP = JSON.parse(readFileSync("config/contracts/core-loop-contract.json", "utf8"));
 
@@ -22,6 +31,18 @@ function getPath(value, dottedPath) {
   return dottedPath.split(".").reduce((current, key) => current?.[key], value);
 }
 
+// These protocol tests deliberately supply host judgment. The public entry
+// without those inputs is separately checked below and must remain pending.
+function runCoreProtocol(argv, options = {}) {
+  const task = argv[argv.indexOf("--task") + 1];
+  const criticalInput = fixtureCritical({ task, successCriteria: ["The bounded source-inspection plan preserves the eight-stage contract and never claims execution or user acceptance."] });
+  const governanceTaskFacts = localProtocolFixtureTaskFacts(task);
+  return runFixtureHostCli(runtimeFixture, argv, { criticalInput, governanceTaskFacts,
+    workOrders: preparation => [fixtureReadWorkOrder(preparation, { id: "core-contract-read", todayTask: task,
+      output: "Source-bound protocol report", criterionIds: ["user-outcome"], taskFacts: governanceTaskFacts })],
+  }, options);
+}
+
 test("core-loop contract binds the default governed execution path", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 
@@ -34,12 +55,72 @@ test("core-loop contract binds the default governed execution path", () => {
   assert.equal(CORE_LOOP.defaultEntry.packageScript, "meta:theory:run");
   assert.equal(
     packageJson.scripts["meta:theory:run"],
-    "node scripts/run-meta-theory-governed-execution.mjs",
+    "node scripts/run-meta-theory-governed-execution.mjs --emit-conversation-notice",
+  );
+  assert.equal(
+    packageJson.scripts["meta:theory:run:notice"],
+    packageJson.scripts["meta:theory:run"],
+  );
+  assert.equal(
+    packageJson.scripts["meta:theory:run:json"],
+    "node scripts/run-meta-theory-governed-execution.mjs --no-emit-conversation-notice",
   );
   assert.deepEqual(
     CORE_LOOP.stages.map((stage) => stage.stage),
     EXPECTED_STAGES,
   );
+});
+
+test("default CLI keeps stdout machine-readable while progress uses stderr", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "meta-kim-cli-streams-"));
+  try {
+    const visible = runCoreProtocol(
+      [
+        "scripts/run-meta-theory-governed-execution.mjs",
+        "--emit-conversation-notice",
+        "--task",
+        "Build and review a configurable workflow",
+        "--run-id",
+        "stream-routing-visible",
+        "--output-language",
+        "en",
+        "--state-dir",
+        tempDir,
+        "--db",
+        path.join(tempDir, "visible.sqlite"),
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(visible.status, 0, visible.stderr);
+    const visibleSummary = JSON.parse(visible.stdout);
+    assert.equal(visibleSummary.runId, "stream-routing-visible");
+    for (const marker of ["[Critical]", "[Fetch]", "[Thinking]", "[Execution]", "[Review]", "[Closure]"]) {
+      assert.equal(visible.stderr.includes(marker), true, `missing stderr progress marker ${marker}`);
+    }
+
+    const machine = runCoreProtocol(
+      [
+        "scripts/run-meta-theory-governed-execution.mjs",
+        "--no-emit-conversation-notice",
+        "--task",
+        "Build a machine-readable workflow summary",
+        "--run-id",
+        "stream-routing-json",
+        "--output-language",
+        "en",
+        "--state-dir",
+        tempDir,
+        "--db",
+        path.join(tempDir, "json.sqlite"),
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(machine.status, 0, machine.stderr);
+    assert.equal(JSON.parse(machine.stdout).runId, "stream-routing-json");
+    assert.doesNotMatch(machine.stderr, /\[(?:Critical|Fetch|Thinking|Execution|Review|Closure)\]/u);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("core-loop stages have IO, skip, gate, and blocking policy", () => {
@@ -130,8 +211,7 @@ test("capability discovery is multi-type and verification is a fuse", () => {
 test("governed execution emits a coreLoop artifact summary", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "meta-kim-core-loop-contract-"));
   const runId = "core-loop-contract-test";
-  const result = spawnSync(
-    process.execPath,
+  const result = runCoreProtocol(
     [
       "scripts/run-meta-theory-governed-execution.mjs",
       "--task",
@@ -152,6 +232,11 @@ test("governed execution emits a coreLoop artifact summary", () => {
 
   const artifact = JSON.parse(readFileSync(path.join(tempDir, `${runId}.json`), "utf8"));
   assert.equal(artifact.runId, runId);
+  assert.deepEqual(
+    artifact.coreLoop.preDecisionOptionFrame,
+    artifact.preDecisionOptionFrame,
+    "coreLoop and workflow packaging must expose one plan-challenge frame without recomputation drift",
+  );
   assert.equal(artifact.coreLoop.contractRef, "config/contracts/core-loop-contract.json");
   assert.deepEqual(artifact.coreLoop.spine, EXPECTED_STAGES);
   for (const packetName of [
@@ -198,6 +283,21 @@ test("governed execution emits a coreLoop artifact summary", () => {
     }
   }
   assert.ok(artifact.coreLoop.intentPacket.realIntent);
+  assert.equal(artifact.coreLoop.stageDagPacket.status, "planned_not_invoked");
+  for (const stage of EXPECTED_STAGES) {
+    const summary = artifact.coreLoop.stageDagPacket.stageSummaries.find(
+      (item) => item.stage === stage,
+    );
+    assert.ok(summary, `${stage} must exist in the stage DAG`);
+    const optionalGate = { Review: "review", "Meta-Review": "metaReview", Evolution: "evolution" }[stage];
+    if (optionalGate && artifact.governanceRequirementPlanPacket.gates[optionalGate].effectiveRequired === false) {
+      assert.equal(summary.laneNodeIds.length, 1, `${stage} retains only its control barrier when no work is required`);
+      assert.equal(artifact.coreLoop.stageDagPacket.nodes.find(node => node.nodeId === summary.laneNodeIds[0]).laneKind, "stage_control");
+    } else assert.ok(summary.laneNodeIds.length >= (stage === "Execution" ? 1 : 2),
+      `${stage} must expose its materialized contract or worker lanes`);
+    const contractStage = CORE_LOOP.stages.find((item) => item.stage === stage);
+    assert.equal(summary.mergeAuthority, contractStage.parallelPolicy.mergeAuthority);
+  }
   assert.ok(artifact.coreLoop.fetchPacket.capabilityDiscovery.capabilityInventory.length > 250);
   const providerTypes = new Set(
     artifact.coreLoop.fetchPacket.capabilityDiscovery.capabilityInventory.map(
@@ -285,16 +385,19 @@ test("governed execution emits a coreLoop artifact summary", () => {
   const invocationByFamily = new Map(
     artifact.coreLoop.capabilityInvocationTruthPacket.rows.map((row) => [row.family, row]),
   );
+  const expectedSubagentState = artifact.coreLoop.runtimeSubagentInvocationPacket.fanoutEligible
+    ? "unavailable"
+    : "not_required";
   assert.equal(
     artifact.coreLoop.runtimeSubagentInvocationPacket.status,
-    artifact.coreLoop.agentTeamsPlaybookPacket.status === "pass" ? "unavailable" : "not_required",
+    expectedSubagentState,
   );
   assert.equal(
     invocationByFamily.get("agent_subagent").state,
-    artifact.coreLoop.agentTeamsPlaybookPacket.status === "pass" ? "unavailable" : "not_required",
+    expectedSubagentState,
   );
   assert.equal(invocationByFamily.get("app_visible_subagent").state, "not_required");
-  assert.equal(invocationByFamily.get("worker_task").state, "invoked");
+  assert.equal(invocationByFamily.get("worker_task").state, "blocked");
   assert.equal(invocationByFamily.get("prompt_rule").state, "applied");
   assert.equal(
     invocationByFamily.get("agent_teams_playbook").state,
@@ -341,8 +444,15 @@ test("governed execution emits a coreLoop artifact summary", () => {
   assert.ok(["pass", "partial"].includes(artifact.coreLoop.visibleMetaTheorySurfacePacket.status));
   assert.equal(artifact.coreLoop.visibleMetaTheorySurfacePacket.capabilityInventory.notSkillOnly, true);
   assert.equal(
-    artifact.coreLoop.visibleMetaTheorySurfacePacket.capabilityInvocationTruth.status,
-    artifact.coreLoop.capabilityInvocationTruthPacket.status,
+    Object.hasOwn(
+      artifact.coreLoop.visibleMetaTheorySurfacePacket,
+      "capabilityInvocationTruth",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    artifact.capabilityInvocationTruthPacket,
+    artifact.coreLoop.capabilityInvocationTruthPacket,
   );
   assert.equal(
     artifact.coreLoop.visibleMetaTheorySurfacePacket.dynamicWorkflow.status,
@@ -377,7 +487,7 @@ test("governed execution emits a coreLoop artifact summary", () => {
   assert.equal(artifact.coreLoop.conductorConsumptionEvidence.status, "pass");
   assert.ok(artifact.coreLoop.thinkingPacket.governanceInputsConsumed.length > 0);
   assert.equal(artifact.coreLoop.executionResult.mainThreadRole, "scope_delegate_review_synthesize");
-  assert.equal(artifact.coreLoop.executionResult.actualWorkerExecution, true);
+  assert.equal(artifact.coreLoop.executionResult.actualWorkerExecution, false);
   assert.ok(artifact.coreLoop.executionResult.workerExecutionEvidence.length > 0);
   assert.ok(
     artifact.coreLoop.executionResult.workerExecutionEvidence.every(
@@ -385,11 +495,11 @@ test("governed execution emits a coreLoop artifact summary", () => {
     ),
   );
   assert.ok(
-    artifact.coreLoop.executionResult.workerExecutionEvidence.some(
-      (item) => item.liveWorkerExecution === true,
+    artifact.coreLoop.executionResult.workerExecutionEvidence.every(
+      (item) => item.liveWorkerExecution === false,
     ),
   );
-  assert.equal(artifact.coreLoop.executionResult.mergeResult.liveExecutionMerged, true);
+  assert.equal(artifact.coreLoop.executionResult.mergeResult.liveExecutionMerged, false);
   assert.equal(artifact.coreLoop.reviewPacket.upstreamQuality.critical, true);
   assert.equal(artifact.coreLoop.reviewPacket.protocolCompliance.executionEvidenceLayerIsHonest, true);
   assert.equal(artifact.coreLoop.metaReviewPacket.reviewStandardChecked, true);
@@ -406,11 +516,10 @@ test("governed execution emits a coreLoop artifact summary", () => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("host-visible subagents are observed, not relabeled as runner invocations", () => {
+test("caller-provided host-visible names remain unverified hints", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "meta-kim-host-visible-"));
   const runId = "core-loop-host-visible-subagent-test";
-  const result = spawnSync(
-    process.execPath,
+  const result = runCoreProtocol(
     [
       "scripts/run-meta-theory-governed-execution.mjs",
       "--task",
@@ -435,9 +544,15 @@ test("host-visible subagents are observed, not relabeled as runner invocations",
   const invocationByFamily = new Map(
     artifact.coreLoop.capabilityInvocationTruthPacket.rows.map((row) => [row.family, row]),
   );
-  assert.equal(invocationByFamily.get("app_visible_subagent").state, "host_visible_observed");
-  assert.equal(invocationByFamily.get("app_visible_subagent").observedCount, 2);
-  assert.equal(invocationByFamily.get("agent_subagent").state, "not_required");
+  assert.equal(invocationByFamily.get("app_visible_subagent").state, "not_required");
+  assert.equal(invocationByFamily.get("agent_subagent").state, "not_required", "Unscoped host-visible names do not create an executable fanout demand");
+  assert.equal(artifact.coreLoop.stageDagPacket.status, "planned_not_invoked");
+  assert.ok(
+    artifact.coreLoop.stageDagPacket.nodes.some(
+      (node) => node.stage === "Execution" && node.laneKind === "execution_worker",
+    ),
+  );
+  assert.equal(artifact.coreLoop.capabilityInvocationPresentationPacket.executionState, "not_confirmed");
   assert.equal(
     artifact.coreLoop.capabilityInvocationTruthPacket.truthAssertions.noHostUiSubagentOverclaim,
     true,
@@ -513,15 +628,14 @@ test("core-loop contract declares three product goals plus support gates", () =>
     (rule) => rule.includes("app-visible host subagent"),
   ));
   assert.ok(CORE_LOOP.productExperienceCoreGoals.supportGateRequirements["P-110"].some(
-    (rule) => rule.includes("agent-teams-playbook"),
+    (rule) => rule.includes("native Agent/Task/spawn_agent"),
   ));
 });
 
 test("project-understanding governed run records deep Fetch source classes", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "meta-kim-project-understanding-"));
   const runId = "core-loop-project-understanding-fetch-test";
-  const result = spawnSync(
-    process.execPath,
+  const result = runCoreProtocol(
     [
       "scripts/run-meta-theory-governed-execution.mjs",
       "--task",
@@ -573,11 +687,10 @@ test("project-understanding governed run records deep Fetch source classes", () 
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("default governed run is route-driven instead of old capability-gap orchestration", () => {
+test("ordinary subjective intent waits for current host judgment before producing a worker route", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "meta-kim-route-driven-"));
   const runId = "route-driven-subjective-ui";
-  const result = spawnSync(
-    process.execPath,
+  const result = runtimeFixture.run(
     [
       "scripts/run-meta-theory-governed-execution.mjs",
       "--task",
@@ -594,39 +707,20 @@ test("default governed run is route-driven instead of old capability-gap orchest
   assert.equal(result.status, 0, result.stderr || result.stdout);
 
   const artifact = JSON.parse(readFileSync(path.join(tempDir, `${runId}.json`), "utf8"));
-  const report = artifact.sourceArtifacts.orchestrationReport;
-  assert.equal(
-    report.selectedExecutionRoute.recommendedRoute.id,
-    "subjective-ui-design-orchestration:codex:windows",
-  );
-  assert.equal(report.decisionCounts.oldDefaultPath, 0);
-  assert.equal(artifact.workerTaskPackets.length, 6);
-  assert.ok(
-    artifact.workerTaskPackets.every(
-      (packet) => packet.packetKind === "run_scoped_task_not_agent_definition",
-    ),
-    "worker task cards must be marked as run tasks, not durable agent settings",
-  );
-  for (const packet of artifact.workerTaskPackets) {
-    assert.ok(Array.isArray(packet.skillLoadout), `${packet.roleInstanceId} missing skillLoadout`);
-    assert.ok(Array.isArray(packet.mcpLoadout), `${packet.roleInstanceId} missing mcpLoadout`);
-    assert.ok(Array.isArray(packet.toolLoadout), `${packet.roleInstanceId} missing toolLoadout`);
-    assert.ok(Array.isArray(packet.commandLoadout), `${packet.roleInstanceId} missing commandLoadout`);
-  }
-  assert.equal(
-    artifact.workerTaskPackets.some(
-      (packet) =>
-        packet.roleInstanceId === "read-before-edit-implementation" &&
-        packet.readBeforeEditRequired === true,
-    ),
-    true,
-  );
+  assert.equal(artifact.artifactKind, "host_preparation");
+  assert.equal(artifact.task, "这个页面不好看，帮我弄高级一点");
+  assert.equal(artifact.preparation.status, "needs_thinking");
+  assert.equal(artifact.thinkingPacket.status, "host_reasoning_required");
+  assert.deepEqual(artifact.workerTaskPackets, []);
+  assert.equal(artifact.coreLoop.stageDagPacket, undefined);
+  assert.equal(artifact.stageRunnerBridgePacket, undefined);
+  assert.equal(artifact.publicReadyDecision.publicReady, false);
+  assert.ok(artifact.hostInvocationRequestPacket.nextAction);
   rmSync(tempDir, { recursive: true, force: true });
 });
 
 test("core-loop release strict fixture validates with workflow run validator", () => {
-  const result = spawnSync(
-    process.execPath,
+  const result = runtimeFixture.run(
     [
       "scripts/validate-run-artifact.mjs",
       "tests/fixtures/run-artifacts/valid-core-loop-release-run.json",

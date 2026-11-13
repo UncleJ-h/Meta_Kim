@@ -8,6 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { runMetaTheoryGovernedExecution } from "./run-meta-theory-governed-execution.mjs";
+import { runDiagnosticReadPlan } from "./diagnostic-host-protocol.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(scriptDir, "..");
@@ -163,7 +164,7 @@ function validateContract(contract, coreLoop, pkg) {
     "package.json missing P-067 validator script",
   );
   assert.ok(
-    pkg.scripts?.["meta:verify:governance"]?.includes("meta:prd:smooth-capability:validate"),
+    `${pkg.scripts?.["meta:verify:governance"] ?? ""} ${pkg.scripts?.["meta:verify:governance:core"] ?? ""}`.includes("meta:prd:smooth-capability:validate"),
     "meta:verify:governance must include P-067 validator",
   );
 }
@@ -261,15 +262,16 @@ async function main() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-smooth-capability-"));
   let governedExecutionStatus = "unknown";
   try {
-    const report = await runMetaTheoryGovernedExecution({
+    const report = await runDiagnosticReadPlan(runMetaTheoryGovernedExecution, {
       task: [
         "验证顺滑能力发现：需要同时保留 agent、skill、script、MCP provider、tools、runtime、hook、memory、graph、external dependency 与 workerTask。",
         "只有路线、权限、风险、调用或验证需要时才展开具体子工具；安全时允许 no_expansion_needed。",
       ].join("\n"),
       runId: "validate-smooth-capability-discovery",
+      projectRoot: REPO_ROOT,
       stateDir: tempDir,
       dbPath: path.join(tempDir, "runs.sqlite"),
-    });
+    }, [path.relative(REPO_ROOT, CONTRACT_PATH)]);
     validateDefaultArtifact(report);
     governedExecutionStatus = report.status;
   } finally {

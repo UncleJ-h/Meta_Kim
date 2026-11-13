@@ -19,6 +19,45 @@ function normalizeHookCommand(command) {
   return command.replace(/\\\\/g, "\\");
 }
 
+function nodeHookCommandParts(command) {
+  const normalized = normalizeHookCommand(command).replace(/\\/g, "/");
+  const match = normalized.match(
+    /^\s*node(?:\.exe)?\s+(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>]+))([\s\S]*)$/u,
+  );
+  return match ? { script: match[1] ?? match[2] ?? match[3], tail: match[4] } : null;
+}
+
+function normalizedScriptPath(scriptPath) {
+  const normalized = normalizeHookCommand(scriptPath).replace(/\\/g, "/");
+  return /^[a-z]:\//iu.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+/** Match the exact plain Node invocation written by the dependency installer. */
+export function isNodeHookScriptCommand(command, scriptPath) {
+  const parsed = nodeHookCommandParts(command);
+  return Boolean(
+    parsed && !parsed.tail.trim() &&
+    normalizedScriptPath(parsed.script) === normalizedScriptPath(scriptPath),
+  );
+}
+
+function templateHookPromptScriptPaths(template) {
+  const paths = new Set();
+  for (const blocks of Object.values(template)) {
+    for (const hook of blocks.flatMap((block) => block.hooks ?? [])) {
+      const parsed = nodeHookCommandParts(hook.command);
+      if (!parsed) continue;
+      if (isRawHookPromptUserPromptSubmitCommand(hook.command)) paths.add(parsed.script);
+      const home = parsed.script.match(/^(.*)\/hooks\/meta-kim\/[^/]+$/u)?.[1];
+      if (!home) continue;
+      paths.add(`${home}/hooks/user-prompt-submit.js`);
+      paths.add(`${home}/skills/hookprompt/.claude/hooks/user-prompt-submit.js`);
+      paths.add(`${home}/skills/hookprompt/.codex/hooks/user-prompt-submit.js`);
+    }
+  }
+  return [...paths];
+}
+
 export function isGlobalMetaKimManagedHookCommand(command) {
   if (typeof command !== "string") {
     return false;
@@ -30,16 +69,7 @@ export function isGlobalMetaKimManagedHookCommand(command) {
   if (norm.includes("/hooks/hookprompt-adapter.mjs")) {
     return true;
   }
-  const managedFiles = [
-    ...REPO_META_KIM_HOOK_FILES,
-    ...RETIRED_META_KIM_HOOK_FILES,
-  ];
-  return managedFiles.some(
-    (file) =>
-      norm.includes(`/hooks/${file}`) ||
-      norm.includes(`.claude/hooks/${file}`) ||
-      norm.includes(`/hooks/${file} `),
-  );
+  return false;
 }
 
 export function isRawHookPromptUserPromptSubmitCommand(command) {
@@ -82,6 +112,23 @@ export function hookCommandNode(absScriptPath) {
   return `node "${absScriptPath.replace(/\\/g, "/")}"`;
 }
 
+/**
+ * Budget for the native HookPrompt UserPromptSubmit hook.
+ *
+ * Claude Code reads the settings `timeout` field in SECONDS (`e.timeout * 1000`),
+ * defaulting to 600000 ms when omitted. This entry previously carried `10000`,
+ * written as if the field were milliseconds — which granted the hook 2.78 hours,
+ * i.e. no effective budget at all.
+ *
+ * 60 is a judgement value, not a measured p99. The hook issues a model request,
+ * and every transcript record for it is a `hook_cancelled` batch abort
+ * (222..3164 ms), so those durations are lower bounds and cannot pin a true
+ * ceiling. 60 leaves ~19x headroom over the longest observed run, and the cost
+ * of undershooting is mild: the prompt is submitted without optimization rather
+ * than failing.
+ */
+export const HOOK_PROMPT_TIMEOUT_SECONDS = 60;
+
 /** Hook blocks matching Meta_Kim canonical runtime (absolute paths under meta-kim/). */
 export function buildMetaKimHooksTemplate(
   absHooksDir,
@@ -97,23 +144,31 @@ export function buildMetaKimHooksTemplate(
   });
 
   const userPromptHooks = [];
+  const spineHook = () => cmd(
+    "activate-meta-theory-spine.mjs",
+    ["--runtime", "claude", ...(packageRoot ? ["--package-root", packageRoot] : [])],
+  );
   if (hookPromptCommand) {
     userPromptHooks.push({
       type: "command",
       command: hookPromptCommand,
-      timeout: 10000,
+      timeout: HOOK_PROMPT_TIMEOUT_SECONDS,
     });
   } else if (hookPromptAdapter) {
     userPromptHooks.push(cmd("hookprompt-adapter.mjs"));
   }
   userPromptHooks.push(
-    cmd(
-      "activate-meta-theory-spine.mjs",
-      packageRoot ? ["--package-root", packageRoot] : [],
-    ),
+    spineHook(),
   );
+  userPromptHooks.push(cmd("planning-continuity.mjs", ["--event", "user-prompt", "--runtime", "claude"]));
 
   return {
+    SessionStart: [
+      {
+        matcher: "startup|resume",
+        hooks: [cmd("planning-continuity.mjs", ["--event", "session-start", "--runtime", "claude"])],
+      },
+    ],
     UserPromptSubmit: [
       {
         hooks: userPromptHooks,
@@ -124,11 +179,50 @@ export function buildMetaKimHooksTemplate(
         matcher: "Bash",
         hooks: [cmd("block-dangerous-bash.mjs")],
       },
+      {
+        matcher:
+          "Write|Edit|Bash|Agent|Task|TaskCreate|TaskUpdate|TodoWrite|TaskStop|EnterPlanMode|ExitPlanMode|MultiEdit|NotebookEdit",
+        hooks: [cmd("enforce-agent-dispatch.mjs", ["--runtime", "claude"])],
+      },
+      {
+        matcher: "Agent|Task",
+        hooks: [spineHook()],
+      },
+    ],
+    PostToolUse: [
+      {
+        matcher: "Agent|Task",
+        hooks: [spineHook()],
+      },
+      {
+        matcher: "Edit|Write",
+        hooks: [cmd("planning-continuity.mjs", ["--event", "post-tool", "--runtime", "claude"])],
+      },
+    ],
+    SubagentStart: [
+      {
+        matcher: "*",
+        hooks: [spineHook()],
+      },
+    ],
+    SubagentStop: [
+      {
+        matcher: "*",
+        hooks: [spineHook()],
+      },
+    ],
+    PreCompact: [
+      {
+        matcher: "*",
+        hooks: [cmd("planning-continuity.mjs", ["--event", "pre-compact", "--runtime", "claude"])],
+      },
     ],
     Stop: [
       {
         matcher: "*",
         hooks: [
+          spineHook(),
+          cmd("planning-continuity.mjs", ["--event", "stop", "--runtime", "claude"]),
           cmd("stop-compaction.mjs"),
           cmd("stop-console-log-audit.mjs"),
           cmd("stop-completion-guard.mjs"),
@@ -141,15 +235,20 @@ export function buildMetaKimHooksTemplate(
   };
 }
 
-export function stripGlobalMetaKimHookEntriesFromBlocks(blocks) {
+export function stripGlobalMetaKimHookEntriesFromBlocks(
+  blocks,
+  {
+    isManagedHookCommand = isGlobalMetaKimManagedHookCommand,
+    isHookPromptCommand = () => false,
+  } = {},
+) {
   return blocks
     .map((block) => ({
       ...block,
       hooks: (block.hooks || []).filter(
         (h) =>
-          !isGlobalMetaKimManagedHookCommand(h.command || "") &&
-          !isRetiredMetaKimHookCommand(h.command || "") &&
-          !isRawHookPromptUserPromptSubmitCommand(h.command || ""),
+          !isManagedHookCommand(h.command || "") &&
+          !isHookPromptCommand(h.command || ""),
       ),
     }))
     .filter((block) => (block.hooks || []).length > 0);
@@ -163,6 +262,7 @@ const REPO_META_KIM_HOOK_FILES = [
   "enforce-agent-dispatch.mjs",
   "graphify-context.mjs",
   "meta-kim-memory-save.mjs",
+  "planning-continuity.mjs",
   "post-format.mjs",
   "post-typecheck.mjs",
   "post-console-log-warn.mjs",
@@ -224,7 +324,24 @@ export function stripRepoMetaKimHooksFromSettings(settings) {
 export function mergeHookMatcherBlocks(existing, additions) {
   const result = structuredClone(existing);
   for (const addBlock of additions) {
-    const idx = result.findIndex((b) => b.matcher === addBlock.matcher);
+    // Cursor's hooks.json declares `{command, timeout}` directly on the event,
+    // with no matcher and no inner hooks array. Keying those by matcher collapses
+    // every one of them onto the first matcher-less block, and the inner loop
+    // below then iterates an absent `hooks` array — so each addition after the
+    // first is discarded with no error. Identify flat blocks by their command.
+    if (!Array.isArray(addBlock.hooks) && typeof addBlock.command === "string") {
+      if (!result.some((block) => block.command === addBlock.command)) {
+        result.push(structuredClone(addBlock));
+      }
+      continue;
+    }
+    // A nested addition may itself carry `matcher: undefined` (Codex's
+    // UserPromptSubmit block does). Without the shape check it adopts a flat
+    // block as its target and grafts a `hooks` array onto a block that already
+    // declares its own command, producing a block no runtime can read.
+    const idx = result.findIndex(
+      (b) => b.matcher === addBlock.matcher && typeof b.command !== "string",
+    );
     if (idx === -1) {
       result.push(structuredClone(addBlock));
       continue;
@@ -246,14 +363,28 @@ export function mergeHookMatcherBlocks(existing, additions) {
 }
 
 /** Merge Meta_Kim global hooks (hooks/meta-kim/) into existing settings; preserves other keys. */
-export function mergeGlobalMetaKimHooksIntoSettings(settings, template) {
+export function mergeGlobalMetaKimHooksIntoSettings(
+  settings,
+  template,
+  options = {},
+) {
   const next = { ...settings };
+  // The target template establishes the runtime home. A matching basename in
+  // another home, a suffix collision, or a shell wrapper is not ownership proof.
+  const hookPromptScripts = templateHookPromptScriptPaths(template);
   if (!next.hooks) {
     next.hooks = {};
   }
   const hooks = {};
   for (const [event, blocks] of Object.entries(next.hooks)) {
-    const cleaned = stripGlobalMetaKimHookEntriesFromBlocks(blocks || []);
+    const cleaned = stripGlobalMetaKimHookEntriesFromBlocks(
+      blocks || [],
+      {
+        ...options,
+        isHookPromptCommand: (command) => event === "UserPromptSubmit" &&
+          hookPromptScripts.some((script) => isNodeHookScriptCommand(command, script)),
+      },
+    );
     if (cleaned.length > 0) {
       hooks[event] = cleaned;
     }

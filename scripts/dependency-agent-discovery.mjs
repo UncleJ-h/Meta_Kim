@@ -1,0 +1,274 @@
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { checkedPath, componentHash, stableJson, sha256 } from "../src/infrastructure/capabilities/source-integrity.mjs";
+import { dependencyRootBinding } from "./managed-dependency-source.mjs";
+import { OS_TARGETS, RUNTIMES, repoRoot, toPosix } from "./governance-lib.mjs";
+import { matchDependencyAgentContracts } from "./dependency-agent-matching.mjs";
+import { sanitizeCapabilityPublicationText } from "./capability-publication-sanitizer.mjs";
+import { loadMethodKnowledgeAssets } from "../src/infrastructure/capabilities/dependency-method-knowledge.mjs";
+
+export { matchDependencyAgentContracts };
+
+const INDEX_FORMAT = "component-capabilities-v1";
+const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const READ_ONLY_PERMISSIONS = new Set([
+  "filesystem:read-user-materials", "network:read-web-search", "network:read-web-fetch",
+]);
+const TOOL_PERMISSIONS = {
+  Read: "filesystem:read-user-materials",
+  Grep: "filesystem:read-user-materials",
+  Glob: "filesystem:read-user-materials",
+  WebSearch: "network:read-web-search",
+  WebFetch: "network:read-web-fetch",
+};
+const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+
+// Shared source-integrity checks; exporting them does not widen Agent permissions.
+export { checkedPath, componentHash, stableJson, uniqueIds, stringArray, sha256 };
+
+
+function uniqueIds(records, label) {
+  assert(Array.isArray(records), `${label} must be an array`);
+  const ids = records.map((entry) => entry?.id);
+  assert(ids.every((id) => typeof id === "string" && ID.test(id)), `${label} contains an invalid id`);
+  assert.equal(new Set(ids).size, ids.length, `${label} contains duplicate ids`);
+}
+
+function stringArray(value, label, required = false) {
+  assert(Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim()), `${label} must be a string array`);
+  assert(!required || value.length > 0, `${label} must not be empty`);
+}
+
+function validateCapability(capability) {
+  assert(typeof capability.summary === "string" && capability.summary.trim(), "agent summary is required");
+  for (const field of ["useWhen", "doNotUseWhen", "validation"]) stringArray(capability[field], field, true);
+  for (const field of ["input", "output"]) {
+    assert.equal(capability[field]?.type, "object", `agent ${field} must be an object contract`);
+    stringArray(capability[field].required, `${field}.required`);
+  }
+  stringArray(capability.permissions, "permissions");
+  assert(capability.permissions.every((permission) => READ_ONLY_PERMISSIONS.has(permission)), "agent contract requires unsupported execution permissions");
+  assert.deepEqual(capability.sideEffects, [], "agent contract must not authorize external side effects");
+  assert.equal(typeof capability.humanGate?.required, "boolean", "agent humanGate is required");
+  stringArray(capability.humanGate.when, "humanGate.when", capability.humanGate.required);
+}
+
+function declaredRoot(project, localOverrides, environment) {
+  return dependencyRootBinding(project, localOverrides, environment);
+}
+
+/** Local bindings belong to the caller project; registry policy stays in the package. */
+export async function readDependencyProjectOverrides(projectRoot) {
+  assert(typeof projectRoot === "string" && path.isAbsolute(projectRoot), "caller project root must be absolute");
+  try { return JSON.parse(await fs.readFile(path.join(projectRoot, ".meta-kim/local.overrides.json"), "utf8")); }
+  catch (error) { if (error.code === "ENOENT") return {}; throw error; }
+}
+
+export async function resolveDependencyProjectRoot({ dependencyId, projectRoot, environment = process.env }) {
+  const { projects } = JSON.parse(await fs.readFile(path.join(repoRoot, "config/capability-index/dependency-project-registry.json"), "utf8"));
+  const project = projects.find((entry) => entry.id === dependencyId && entry.interface?.capabilityIndex);
+  if (!project) return null;
+  const binding = declaredRoot(project, await readDependencyProjectOverrides(projectRoot), environment);
+  if (binding.error) throw new Error(binding.error);
+  return typeof binding.value === "string" && binding.value.trim() ? path.resolve(projectRoot, binding.value) : null;
+}
+
+async function readDependency(project, root, projectRoot) {
+  const rootStat = await fs.lstat(root);
+  assert(rootStat.isDirectory() && !rootStat.isSymbolicLink(), "dependency root must be a directory, not a symlink or junction");
+  const indexFile = await checkedPath(root, project.interface.capabilityIndex.path);
+  const index = JSON.parse(await fs.readFile(indexFile, "utf8"));
+  assert.equal(index.schemaVersion, 1, "unsupported dependency capability index schema");
+  uniqueIds(index.components, "index components");
+  uniqueIds(index.capabilities, "index capabilities");
+  assert.equal(index.componentCount, index.components.length, "index component count mismatch");
+  assert.equal(index.capabilityCount, index.capabilities.length, "index capability count mismatch");
+  const agents = [];
+  const capabilities = [];
+  for (const component of index.components.filter((entry) => entry.componentType === "agent")) {
+    assert.equal(component.path, `agents/${component.id}`, "agent component path must match its id");
+    const componentRoot = await checkedPath(root, component.path, true);
+    const contractFile = await checkedPath(componentRoot, "capability.json");
+    const contract = JSON.parse(await fs.readFile(contractFile, "utf8"));
+    assert.equal(contract.schemaVersion, 1, "unsupported agent contract schema");
+    assert.equal(contract.id, component.id, "agent contract id mismatch");
+    assert.equal(contract.componentType, "agent", "agent contract type mismatch");
+    assert.equal(contract.componentVersion, component.componentVersion, "agent contract version mismatch");
+    assert.equal(contract.entrypoint, "AGENT.md", "agent entrypoint must be AGENT.md");
+    assert.equal(component.entrypoint, contract.entrypoint, "index entrypoint differs from contract");
+    assert.equal(sha256(stableJson(contract)), component.contractSha256, "agent contract hash mismatch");
+    assert.equal(await componentHash(componentRoot), component.contentSha256, "agent content hash mismatch; rebuild the package index after review");
+    uniqueIds(contract.capabilities, "agent capabilities");
+    assert(contract.capabilities.length > 0, "agent has no capabilities");
+    assert.deepEqual([...component.capabilityIds].sort(compare), contract.capabilities.map((entry) => entry.id).sort(compare), "index capability ids differ from contract");
+    const indexedCapabilities = index.capabilities.filter((entry) => entry.componentId === component.id);
+    assert.equal(indexedCapabilities.length, contract.capabilities.length, "index capability count differs from contract");
+    const expectedValidation = [...new Set(contract.capabilities.flatMap((entry) => entry.validation))].sort(compare);
+    assert.deepEqual(component.validation, expectedValidation, "index validation differs from contract");
+    const entrypointPath = await checkedPath(componentRoot, contract.entrypoint);
+    const prompt = await fs.readFile(entrypointPath, "utf8");
+    const frontmatter = prompt.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
+    assert(frontmatter, "agent prompt must have frontmatter");
+    assert.equal(frontmatter.match(/^name:\s*(.+)$/mu)?.[1]?.trim(), contract.id, "agent prompt name differs from contract");
+    const tools = (frontmatter.match(/^tools:\s*(.+)$/mu)?.[1] ?? "").replace(/[\[\]"']/gu, "").split(",").map((tool) => tool.trim());
+    assert(tools.length > 0 && tools.every((tool) => Object.hasOwn(TOOL_PERMISSIONS, tool)), "agent tools must stay within the read-only permission contract");
+    assert.deepEqual([...new Set(tools.map((tool) => TOOL_PERMISSIONS[tool]))].sort(),
+      [...new Set(contract.capabilities.flatMap((capability) => capability.permissions))].sort(), "agent tools and contract permissions differ");
+    const sourceRef = toPosix(path.relative(projectRoot, entrypointPath));
+    const contentDigest = sha256(prompt);
+    const ownerId = `${project.id}:${component.id}`;
+    for (const capability of contract.capabilities) {
+      validateCapability(capability);
+      for (const validation of capability.validation) await checkedPath(componentRoot, validation);
+      const expected = {
+        ...capability, componentId: component.id, componentType: "agent", componentVersion: contract.componentVersion,
+        componentPath: component.path, entrypoint: contract.entrypoint,
+        componentContentSha256: component.contentSha256, contractSha256: component.contractSha256,
+      };
+      assert.equal(stableJson(indexedCapabilities.find((entry) => entry.id === capability.id)), stableJson(expected), "generated index differs from source contract");
+      capabilities.push({
+        id: `${project.id}:${capability.id}`, capabilityId: `${project.id}:${capability.id}`, type: "agent", providerType: "agent",
+        sourcePath: sourceRef, sourceRef, triggerWords: [component.id, capability.summary, ...capability.useWhen],
+        ownerCandidates: [ownerId], ownerBoundary: "professional_execution_contract",
+        weaponCandidates: [], dependencyCandidates: [project.id],
+        runtimeSupport: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, "unknown"])),
+        osSupport: Object.fromEntries(OS_TARGETS.map((os) => [os, "unknown"])),
+        routeEligibility: "owner_contract_candidate", canExecute: false, canReview: false, canVerify: false, canCreateOrUpgrade: false,
+        missingDependencies: [], missingFields: [], mustPreserve: true,
+        risk: { requiresTrustReview: true, canMutateFiles: false, sideEffects: [] },
+        confidence: "verified_local", invocationPath: sourceRef,
+        verificationMethod: "Read the contract and run its declared checks in an isolated package copy after trust review.",
+        evidence: { source: "local_dependency_contract", sourceRef, confidence: "verified_local", contentDigest, contractSha256: component.contractSha256, componentContentSha256: component.contentSha256, liveVerification: false },
+        writebackKey: `dependency-agent:${project.id}:${component.id}`,
+        reason: "Source contract and component bytes match the index; selection remains run-scoped and does not prove native loading or invocation.",
+      });
+    }
+    agents.push({
+      id: ownerId, componentId: component.id, dependencyId: project.id, layer: "execution",
+      displayName: prompt.match(/^#\s+(.+)$/mu)?.[1]?.trim() ?? contract.capabilities[0].summary.split(/[：:]/u)[0],
+      source: "dependency_agent_contract", sourceClass: "external_dependency", sourceRef,
+      sourceRoot: toPosix(path.relative(projectRoot, root)), sourceKey: `${project.id}:agent:${component.id}:${contentDigest}`,
+      contentDigest, description: contract.capabilities.map((entry) => entry.summary).join("; "),
+      trigger: contract.capabilities.flatMap((entry) => entry.useWhen),
+      boundary: contract.capabilities.flatMap((entry) => entry.doNotUseWhen),
+      executionBlock: false, routeEligible: true,
+      ownerBindingMode: "run_scoped_owner_contract", nativeAgentType: null, validCustomAgentDefinition: false,
+      ownerContract: {
+        dependencyId: project.id, sourceRef, contentDigest, componentContentSha256: component.contentSha256,
+        ...(contract.capabilities.length === 1 ? contract.capabilities[0] : {}), capabilities: contract.capabilities,
+        reviewOwner: "meta-prism", verificationOwner: "meta-prism",
+        runtimeStatus: "needs_probe", invocationStatus: "not_invoked",
+      },
+    });
+  }
+  return { agents, capabilities };
+}
+
+export async function discoverDependencyAgentContracts({ projects = [], projectRoot = process.cwd(), localOverrides = {}, environment = process.env } = {}) {
+  const result = { agents: [], capabilities: [], sources: [] };
+  for (const project of projects.filter((entry) => entry.interface?.capabilityIndex)) {
+    const binding = declaredRoot(project, localOverrides, environment);
+    const source = { dependencyId: project.id, sourceRef: `dependency:${project.id}/${project.interface.capabilityIndex.path}`, rootBinding: binding.source };
+    if (binding.error) { result.sources.push({ ...source, status: "invalid", reason: binding.error }); continue; }
+    if (project.interface.invokeAs === "reference"
+      || ["reference_only", "external_reference", "blocked", "blocked_for_execution"].includes(project.capabilityCard?.routeEligibility)) {
+      result.sources.push({ ...source, status: "reference_only", reason: "The dependency registry does not authorize owner-contract selection from this project." });
+      continue;
+    }
+    if (binding.value === null || binding.value === undefined) {
+      result.sources.push({ ...source, status: "not_configured", reason: "No explicit local dependency root; no sibling or home scan was attempted." });
+      continue;
+    }
+    try {
+      assert.equal(project.interface.capabilityIndex.format, INDEX_FORMAT, "unsupported dependency capability index format");
+      assert(typeof binding.value === "string" && binding.value.trim(), "dependency root binding must be a non-empty path");
+      const discovered = await readDependency(project, path.resolve(projectRoot, binding.value), projectRoot);
+      result.agents.push(...discovered.agents);
+      result.capabilities.push(...discovered.capabilities);
+      result.sources.push({ ...source, status: "verified_local", agentCount: discovered.agents.length, reason: "Index, contracts and component hashes agree; no dependency code was executed." });
+    } catch (error) {
+      result.sources.push({ ...source, status: error.code === "ENOENT" ? "missing" : "invalid", reason: error.message });
+    }
+  }
+  return result;
+}
+
+/** Resolve authority from the installed package, never from worker-supplied paths
+ * or prompt text. Discovery is selection evidence; reread it at invocation time. */
+export async function loadDependencyAgentMethod({ packet, environment = process.env, projectRoot = environment.META_KIM_CALLER_CWD || repoRoot } = {}) {
+  const ownerId = packet?.ownerAgent ?? packet?.owner;
+  if (packet?.ownerSource !== "dependency_agent_contract" && !packet?.ownerContract && !String(ownerId ?? "").includes(":")) return null;
+  const { projects } = JSON.parse(await fs.readFile(path.join(repoRoot, "config/capability-index/dependency-project-registry.json"), "utf8"));
+  const candidates = projects.filter((project) => project.interface?.capabilityIndex &&
+    typeof ownerId === "string" && ownerId.startsWith(`${project.id}:`));
+  if (packet?.ownerSource !== "dependency_agent_contract" && !packet?.ownerContract && candidates.length === 0) return null;
+  assert.equal(candidates.length, 1, "selected dependency owner is unknown or ambiguous");
+  assert.equal(packet.ownerSource, "dependency_agent_contract", "dependency owner source must be explicit");
+  assert.equal(packet.ownerBindingMode, "run_scoped_owner_contract", "dependency Markdown owner is a run-scoped contract");
+  assert(!packet.nativeAgentType, "dependency Markdown owner cannot claim a native agent type");
+  assert(!packet.owner || packet.owner === ownerId, "worker owner identities disagree");
+  const project = candidates[0];
+  const localOverrides = await readDependencyProjectOverrides(projectRoot);
+  const binding = declaredRoot(project, localOverrides, environment);
+  assert(typeof binding.value === "string" && binding.value.trim(), "explicit dependency root is required");
+  const root = path.resolve(projectRoot, binding.value);
+  const realRoot = await fs.realpath(root);
+  const samePath = (left, right) => process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+  assert(samePath(root, realRoot), "dependency root cannot traverse a symlink or junction");
+  const discovered = await discoverDependencyAgentContracts({ projects: [project], projectRoot, localOverrides, environment });
+  const owners = discovered.agents.filter((owner) => owner.id === ownerId);
+  assert.equal(owners.length, 1, `selected dependency source is not verified: ${discovered.sources[0]?.reason ?? "missing owner"}`);
+  const owner = owners[0];
+  const publishedSourceRef = sanitizeCapabilityPublicationText(owner.sourceRef, {
+    repoRoot, homeDir: environment.USERPROFILE ?? environment.HOME ?? "",
+  });
+  assert([owner.sourceRef, publishedSourceRef].includes(packet.ownerSourceRef), "owner source differs from discovery");
+  assert([owner.sourceRef, publishedSourceRef].includes(packet.ownerContract?.sourceRef), "owner contract source differs from discovery");
+  // The component digest covers the complete capability.json and AGENT.md.
+  // Publication may redact contract prose/schema keys; none of those advisory
+  // packet fields may become instructions or tool permissions at invocation.
+  for (const field of ["dependencyId", "contentDigest", "componentContentSha256"]) {
+    assert.equal(packet.ownerContract?.[field], owner.ownerContract[field], `owner contract binding differs: ${field}`);
+  }
+  const componentRoot = await checkedPath(root, `agents/${owner.componentId}`, true);
+  const entrypoint = await checkedPath(componentRoot, "AGENT.md");
+  const sourceText = await fs.readFile(entrypoint, "utf8");
+  const contract = JSON.parse(await fs.readFile(await checkedPath(componentRoot, "capability.json"), "utf8"));
+  const requestedCapability = packet.methodCapabilityId;
+  const capabilities = contract.capabilities.filter((capability) => !requestedCapability ||
+    requestedCapability === capability.id || requestedCapability === `${project.id}:${capability.id}`);
+  assert.equal(capabilities.length, 1, "selected dependency method capability is unknown or ambiguous; provide methodCapabilityId");
+  const capability = capabilities[0];
+  let method = null;
+  try {
+    method = JSON.parse(await fs.readFile(await checkedPath(componentRoot, "method.json"), "utf8"));
+    assert.equal(method.schemaVersion, 1, "unsupported dependency method schema");
+    assert.equal(method.roleId, owner.componentId, "dependency method role differs from selected owner");
+    assert.equal(method.protocol, "host-bound-task-method-v1", "unsupported dependency method protocol");
+    stringArray(method.steps, "method.steps", true);
+    stringArray(method.acceptance, "method.acceptance", true);
+  } catch (error) { if (error.code !== "ENOENT") throw error; }
+  const knowledgeAssets = await loadMethodKnowledgeAssets({ componentRoot, method, capabilityId: capability.id, packet });
+  assert.equal(sha256(sourceText), owner.contentDigest, "owner method changed after discovery");
+  assert.equal(await componentHash(componentRoot), owner.ownerContract.componentContentSha256, "owner component changed after discovery");
+  return {
+    ownerAgent: owner.id,
+    componentId: owner.componentId,
+    description: owner.description,
+    tools: sourceText.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)[1]
+      .match(/^tools:\s*(.+)$/mu)[1].replace(/[\[\]"']/gu, "").split(",").map((tool) => tool.trim()),
+    sourceText,
+    sourceRef: owner.sourceRef,
+    contentDigest: owner.contentDigest,
+    componentContentSha256: owner.ownerContract.componentContentSha256,
+    ownerContractSha256: sha256(stableJson(owner.ownerContract)),
+    capabilityId: `${project.id}:${capability.id}`,
+    inputContract: capability.input,
+    outputContract: capability.output,
+    method,
+    knowledgeAssets,
+    methodStatus: method ? "structured_method_loaded" : "legacy_agent_text_only",
+    methodSha256: method ? sha256(stableJson(method)) : null,
+  };
+}

@@ -3,7 +3,12 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { assert, readJson, repoPath } from "./governance-lib.mjs";
 
-const README_FILES = ["README.md", "README.zh-CN.md", "README.ja-JP.md", "README.ko-KR.md"];
+const README_LOCALES = new Map([
+  ["README.md", "en"],
+  ["README.zh-CN.md", "zh-CN"],
+  ["README.ja-JP.md", "ja-JP"],
+  ["README.ko-KR.md", "ko-KR"],
+]);
 const REQUIRED_PUBLIC_IMAGES = [
   "docs/images/contact-qr.png",
   "docs/images/wechat-pay.jpg",
@@ -42,7 +47,7 @@ function extractDocsImages(markdown) {
 }
 
 const referenced = new Set();
-for (const file of README_FILES) {
+for (const [file, locale] of README_LOCALES) {
   const markdown = await fs.readFile(repoPath(file), "utf8");
   const refs = extractDocsImages(markdown);
   assert(refs.length > 0, `${file} must keep README image references explicit`);
@@ -50,6 +55,13 @@ for (const file of README_FILES) {
     referenced.add(ref);
     await fs.access(repoPath(ref));
     assert(gitTracked(ref), `${ref} referenced by ${file} must be tracked`);
+    if (ref.endsWith(".svg")) {
+      const svg = await fs.readFile(repoPath(ref), "utf8");
+      const language = svg.match(/<svg\b[^>]*\slang="([^"]+)"/)?.[1];
+      assert(language === locale, `${file} illustration ${ref} must use ${locale}, found ${language ?? "no language"}`);
+      assert(/<title\b[^>]*>[^<]+<\/title>/.test(svg), `${ref} needs an accessible title`);
+      assert(/<desc\b[^>]*>[^<]+<\/desc>/.test(svg), `${ref} needs a localized description`);
+    }
   }
 }
 

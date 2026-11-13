@@ -1,23 +1,29 @@
-import { describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { generateRunDeliverables } from "../../scripts/generate-meta-theory-run-deliverables.mjs";
-import { runMetaTheoryGovernedExecution } from "../../scripts/run-meta-theory-governed-execution.mjs";
+import { createGovernanceRuntimeFixtureScope } from "../helpers/governance-runtime-fixture.mjs";
+import { runDiagnosticReadPlan } from "../../scripts/diagnostic-host-protocol.mjs";
+import { FIXTURE_DIAGNOSTIC_PROVIDERS, fixtureCritical, fixtureReadWorkOrder, runFixtureHostCli } from "../helpers/host-reasoning-fixture.mjs";
+import { localProtocolFixtureTaskFacts } from "../helpers/task-design-facts.mjs";
+import { assertOptionalPlaybookContract } from "../helpers/optional-playbook-contract.mjs";
 import { getReportLabels } from "../../scripts/meta-kim-i18n.mjs";
 import { buildAgentProjectionTargets } from "../../scripts/runtime-tool-profiles.mjs";
 import { readJson, readFile as readRepoFile } from "./_helpers.mjs";
 
-const task = [
-  "同一套 PRD review standard 需要 skill。",
-  "长期 test coverage owner 需要 agent。",
-  "release summary JSON 需要脚本。",
-  "内部知识库需要 MCP provider 边界。",
-].join("\n");
+const task = "只读核对 package.json、AGENTS.md、README.md 和工作流合同，输出当前源文件的核对记录，不修改文件。";
+const scopes = ["package.json", "AGENTS.md", "README.md", "config/contracts/workflow-contract.json"];
+let runtimeFixture, generateRunDeliverables, agentTeamsCandidateSkillPaths, runMetaTheoryGovernedExecution;
+before(async () => {
+  runtimeFixture = createGovernanceRuntimeFixtureScope(null, { graph: true });
+  ({ generateRunDeliverables } = await runtimeFixture.import("scripts/generate-meta-theory-run-deliverables.mjs"));
+  ({ agentTeamsCandidateSkillPaths, runMetaTheoryGovernedExecution } = await runtimeFixture.import("scripts/run-meta-theory-governed-execution.mjs"));
+});
+after(() => runtimeFixture?.cleanup());
 
 const naturalUserTask = "帮我做个小红书营销自动发布器";
 
@@ -255,12 +261,13 @@ describe("34 — Meta-theory run deliverables", () => {
   test("generates separate UI, readability, rubric, and case-pack deliverables", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-deliverables-"));
     try {
-      await runMetaTheoryGovernedExecution({
+      await runDiagnosticReadPlan(runMetaTheoryGovernedExecution, {
+        diagnosticProviders: FIXTURE_DIAGNOSTIC_PROVIDERS,
         task,
         runId: "test-run-deliverables",
         stateDir: tempDir,
         dbPath: path.join(tempDir, "runs.sqlite"),
-      });
+      }, scopes);
       const runArtifact = JSON.parse(
         await readFile(path.join(tempDir, "test-run-deliverables.json"), "utf8")
       );
@@ -293,7 +300,7 @@ describe("34 — Meta-theory run deliverables", () => {
       assert.equal(runArtifact.userExperienceNotice.primarySurface, "user_readable_run_report");
       assert.equal(
         runArtifact.userExperienceNotice.pendingPrimarySurface,
-        "localized_conversation_notice"
+        "localized_conversation_notice_host_observation_required"
       );
       assert.equal(runArtifact.userExperienceNotice.secondarySurface, "user_readable_run_report");
       assert.equal(runArtifact.userExperienceNotice.conversationNoticeEmitted, false);
@@ -438,19 +445,14 @@ describe("34 — Meta-theory run deliverables", () => {
       assert.match(runArtifact.governanceStartReasonPacket.spineReason, /触发 8 阶段/);
       assert.match(runArtifact.governanceStartReasonPacket.workflowReason, /触发 11 阶段/);
       assert.match(runArtifact.governanceStartReasonPacket.cardReason, /触发发牌/);
-      assert.match(markdownReport, /用户可见发牌摘要/u);
-      assert.match(markdownReport, /过程发牌事件/u);
-      assert.match(
+      assert.match(markdownReport, /## 用户目标/u);
+      assert.match(markdownReport, /## 工作协调与调用情况/u);
+      assert.match(markdownReport, /## 阶段进展/u);
+      assert.match(markdownReport, /## 验证与下一步/u);
+      assert.doesNotMatch(
         markdownReport,
-        /Critical 进行中[\s\S]*触发发牌：发现目标或验收边界可能改变路线，触发澄清牌/u
+        /cardPlanPacket|status=|owner=|next=|selected_not_invoked|missingBindings/u,
       );
-      assert.match(markdownReport, /本轮生成 \d+ 次发牌事件，涉及 \d+ 类牌/u);
-      assert.doesNotMatch(markdownReport, /已发 \d+\/10|发 \d+\/10|dealt \d+\/10/u);
-      assert.doesNotMatch(markdownReport, /cardPlanPacket/u);
-      assert.match(markdownReport, /澄清/u);
-      assert.match(markdownReport, /用户.*相关/u);
-      assert.match(markdownReport, /同一类牌可以/u);
-      assert.match(markdownReport, /不是 native choice popup 证据/u);
       for (const line of [
         runArtifact.governanceStartReasonPacket.summary,
         runArtifact.governanceStartReasonPacket.spineReason,
@@ -553,10 +555,15 @@ describe("34 — Meta-theory run deliverables", () => {
       const revisionPhase = runArtifact.businessPhasePlanPacket.phases.find(
         (item) => item.phase === "revision"
       );
-      assert.equal(
-        revisionPhase.triggerEvaluation.activationState,
-        reviewPhase.status === "done" ? "accurate_skip" : "pending_without_enough_evidence"
-      );
+      assert.equal(runArtifact.governanceRequirementPlanPacket.gates.review.effectiveRequired, false);
+      assert.equal(reviewPhase.status, "skipped", "The bounded read does not require an independent Review phase");
+      assert.equal(runArtifact.sourceArtifacts.orchestrationReport.reviewResult.status, "pass",
+        "The structural review still checks the actual discovered inventory");
+      assert.equal(revisionPhase.status, "skipped");
+      assert.equal(revisionPhase.triggerEvaluation.activationState, "accurate_skip");
+      assert.equal(runArtifact.executionResult.actualWorkerExecution, false);
+      assert.equal(runArtifact.selectedExecutionRoute.recommendedRoute.nativeInvocationVerified, false);
+      assert.equal(runArtifact.publicReadyDecision.publicReady, false);
       assert.equal(
         runArtifact.businessPhasePlanPacket.phases.find((item) => item.phase === "feedback")
           .triggerEvaluation.activationState,
@@ -578,57 +585,22 @@ describe("34 — Meta-theory run deliverables", () => {
         computedPhaseCoveragePass
       );
       const markdown = await readFile(path.join(tempDir, "test-run-deliverables.zh-CN.md"), "utf8");
-      assert.match(markdown, /Critical \/ Fetch \/ Thinking \/ Review/);
-      assert.match(markdown, /## 开始原因/);
-      assert.match(markdown, /触发 8 阶段/);
-      assert.match(markdown, /触发 11 阶段/);
-      assert.match(markdown, /触发发牌/);
-      assert.match(markdown, /## 发牌/);
-      assert.match(markdown, /Deal standard/);
-      assert.match(markdown, /accurate_interrupt/);
-      assert.match(markdown, fixCardWasDealt ? /accurate_deal/ : /accurate_suppress/);
-      assert.match(markdown, /## 用户体验提示/);
-      assert.match(markdown, /用户只用普通自然语言输入/);
-      assert.match(markdown, /还没有发出 runtime conversation notice/);
-      assert.match(markdown, /内部 artifact/);
-      assert.match(markdown, /## Meta-Theory 可见编排面/);
-      assert.match(markdown, /Dynamic Workflow/);
-      assert.match(markdown, /能力发现/);
-      assert.match(markdown, /Peer Agent Mesh/);
-      assert.match(markdown, /LangGraph-style/);
-      assert.match(markdown, /能力发现矩阵/);
-      assert.match(markdown, /真实能力调用状态/);
-      assert.match(markdown, /agent_subagent/);
-      assert.match(markdown, /app_visible_subagent/);
-      assert.match(markdown, /selected_not_invoked/);
-      assert.match(markdown, /## 阶段执行说明/);
-      assert.match(markdown, /要做什么/);
-      assert.match(markdown, /结果长什么样/);
-      assert.match(markdown, /## 三目标产品验收/);
-      assert.match(markdown, /P-102/);
-      assert.match(markdown, /P-103/);
-      assert.match(markdown, /P-104/);
-      assert.match(markdown, /P-105/);
-      assert.match(markdown, /P-106/);
-      assert.match(markdown, /P-107/);
-      assert.match(markdown, /P-108/);
-      assert.match(markdown, /P-109/);
-      assert.match(markdown, /## 执行编排明细/);
-      assert.match(markdown, /Agent/);
-      assert.match(markdown, /Skill/);
-      assert.match(markdown, /MCP/);
-      assert.match(markdown, /npm run meta:gap:orchestrate/);
-      assert.match(markdown, /11 阶段业务流/);
-      assert.match(markdown, /Trigger standard/);
-      assert.match(markdown, computedPhaseCoveragePass ? /triggered/ : /blocked_without_enough_evidence/);
-      assert.match(markdown, /pending_external_input/);
-      assert.match(markdown, /能力路线/);
-      assert.match(markdown, /持久 Agent 策略/);
-      assert.match(markdown, /\.claude\/agents\/\{agent\}\.md/);
-      assert.match(markdown, /\.codex\/agents\/\{agent\}\.toml/);
-      assert.match(markdown, /openclaw\/workspaces\/\{agent\}\/SOUL\.md/);
-      assert.match(markdown, /\.cursor\/agents\/\{agent\}\.md/);
-      assert.match(markdown, /partial 或 needs_probe/);
+      assert.match(markdown, /Critical：确认目标与边界/u);
+      assert.match(markdown, /Fetch：核对证据与可用能力/u);
+      assert.match(markdown, /Execution：准备或执行选定工作/u);
+      assert.match(markdown, /Meta_Kim 协调能力/u);
+      assert.match(markdown, /运行记录待关联（以当前聊天中的实际调用结果为准）/u);
+      assert.equal(runArtifact.verificationPacket.verified, false);
+      assert.equal(runArtifact.summaryPacket.verifyPassed, false);
+      assert.equal(runArtifact.runtimeProjectionEvidence.status, "pass", "Projection checks alone must not claim task verification");
+      assert.match(markdown, /验证仍需补充证据/u);
+      assert.match(markdown, /当前助手继续处理未完成的执行与复核/u);
+      assert.match(markdown, /计划已记录，执行和验收仍需当前证据/u);
+      assert.doesNotMatch(markdown, /验证检查已完成|本次工作已部分完成|本次工作及相关检查已完成/u);
+      assert.doesNotMatch(
+        markdown,
+        /Packet|packet|status=|owner=|next=|selected_not_invoked|missingBindings|accurate_interrupt/u,
+      );
       const manifest = await generateRunDeliverables({
         runId: "test-run-deliverables",
         stateDir: tempDir,
@@ -694,344 +666,86 @@ describe("34 — Meta-theory run deliverables", () => {
     }
   });
 
-  test("natural-language meta-theory trigger still shows stage and execution handoff", async () => {
+  test("a short product intent preserves its goal and next host action without fabricated execution", async () => {
     assert.doesNotMatch(naturalUserTask, /agent|skill|MCP|command|阶段|packet|JSON/i);
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-natural-user-"));
     try {
-      await runMetaTheoryGovernedExecution({
-        task: naturalUserTask,
-        runId: "natural-user-task",
-        stateDir: tempDir,
-        dbPath: path.join(tempDir, "runs.sqlite"),
-      });
-      const runArtifact = JSON.parse(
-        await readFile(path.join(tempDir, "natural-user-task.json"), "utf8")
-      );
+      const result = await runMetaTheoryGovernedExecution({ task: naturalUserTask, runId: "natural-user-task",
+        stateDir: tempDir, dbPath: path.join(tempDir, "runs.sqlite") });
+      const runArtifact = JSON.parse(await readFile(result.paths.json, "utf8"));
       assert.equal(runArtifact.task, naturalUserTask);
-      assert.equal(
-        runArtifact.stageOperationPlan.schemaVersion,
-        "stage-operation-plan-v0.1"
-      );
-      assert.equal(
-        runArtifact.stageOperationPlan.stages.find((item) => item.stage === "Execution")
-          .workerTasks.length,
-        runArtifact.runReportPanelContract.ownerHandoff.length
-      );
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.status, "partial");
-      assert.ok(
-        runArtifact.cardPlanPacket.cardEvents.some(
-          (event) => event.cardKey === "pause" && event.repeatOrdinal >= 2
-        ),
-        "high-risk multi-lane run should emit repeated pause events for separate reasons"
-      );
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.capabilityInventory.notSkillOnly, true);
-      assert.equal(runArtifact.capabilityInvocationTruthPacket.status, "partial");
-      const invocationByFamily = new Map(
-        runArtifact.capabilityInvocationTruthPacket.rows.map((row) => [row.family, row])
-      );
-      assert.equal(runArtifact.runtimeSubagentInvocationPacket.status, "unavailable");
-      assert.equal(invocationByFamily.get("agent_subagent").state, "unavailable");
-      assert.equal(invocationByFamily.get("app_visible_subagent").state, "not_required");
-      assert.equal(invocationByFamily.get("worker_task").state, "invoked");
-      assert.equal(invocationByFamily.get("prompt_rule").state, "applied");
-      assert.equal(invocationByFamily.get("agent_teams_playbook").state, "selected_not_invoked");
-      assert.equal(invocationByFamily.get("mcp").state, "selected_not_invoked");
-      assert.equal(runArtifact.capabilityInvocationProbePacket.status, "not_run");
-      assert.equal(runArtifact.capabilityInvocationTruthPacket.realInvocationCoverage.status, "partial");
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.status, "pass");
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.selected, true);
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.fanoutSafetyPacket.safeForParallelFanout, true);
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.acceptance.independentLanesProven, true);
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.acceptance.parallelWaveExists, true);
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.acceptance.dagAndCollisionSafe, true);
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.acceptance.waveSizeWithinRuntimeCapacity, true);
-      assert.equal(runArtifact.agentTeamsPlaybookPacket.acceptance.noArbitraryMetaKimCap, true);
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.capabilityInvocationTruth.status, "partial");
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.dynamicWorkflow.status, "pass");
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.agentTeamsPlaybook.status, "pass");
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.peerAgentMesh.status, "pass");
-      assert.equal(runArtifact.visibleMetaTheorySurfacePacket.langGraph.status, "pass");
-      assert.equal(runArtifact.langGraphRunPacket.runtimeDependency, "none");
-      assert.equal(runArtifact.langGraphRunPacket.runtimeExecutionEvidence, "not_claimed");
-      assert.match(
-        runArtifact.langGraphRunPacket.runtimeBoundary,
-        /does not claim execution by a LangGraph runtime/
-      );
-      assert.equal(
-        runArtifact.langGraphRunPacket.checkpoint.count,
-        runArtifact.langGraphRunPacket.nodes.length
-      );
-      assert.equal(runArtifact.langGraphRunPacket.replay.supported, true);
-      assert.match(
-        runArtifact.visibleMetaTheorySurfacePacket.langGraph.architectureStyle,
-        /without adding a LangGraph runtime dependency/
-      );
-      assert.equal(
-        runArtifact.visibleMetaTheorySurfacePacket.langGraph.runtimeExecutionEvidence,
-        "not_claimed"
-      );
-      assert.deepEqual(
-        runArtifact.productExperiencePacket.goals.map((goal) => goal.id),
-        ["P-102", "P-103", "P-104"]
-      );
-      assert.deepEqual(
-        runArtifact.productExperiencePacket.supportGates.map((gate) => gate.id),
-        ["P-105", "P-106", "P-107", "P-108", "P-109", "P-110"]
-      );
-      assert.equal(runArtifact.productExperiencePacket.noOverclaimGate.status, "pass");
-      assert.equal(
-        runArtifact.productExperiencePacket.nativeChoiceSurfaceGate.liveRuntimeBoundary.status,
-        "needs-host-invocation"
-      );
-      assert.equal(runArtifact.productExperiencePacket.nativeChoiceSurfaceGate.status, "partial");
-      assert.equal(
-        runArtifact.productExperiencePacket.repeatFailureDesignGate.actionOnSecondOccurrence,
-        "bottom_design_failure_return_to_critical_fetch_thinking"
-      );
-      assert.equal(runArtifact.productExperiencePacket.generalizationGate.status, "pass");
-      assert.equal(runArtifact.productExperiencePacket.capabilityInvocationTruthGate.status, "partial");
-      assert.equal(runArtifact.productExperiencePacket.agentTeamsPlaybookGate.status, "pass");
-      assert.equal(runArtifact.productExperiencePacket.automationDecisionBoundary.status, "pass");
-      assert.equal(
-        runArtifact.productExperiencePacket.automationDecisionBoundary.decisionAuthority,
-        "human_required"
-      );
-      assert.deepEqual(
-        runArtifact.productExperiencePacket.automationDecisionBoundary.humanJudgmentStages,
-        ["Critical", "Fetch", "Thinking", "Review"]
-      );
-      assert.equal(
-        runArtifact.userPerceptionPacket.humanDecisionControl.automationRole,
-        "assistive_only"
-      );
-      const markdown = await readFile(path.join(tempDir, "natural-user-task.zh-CN.md"), "utf8");
-      assert.match(markdown, /## Meta-Theory 可见编排面/);
-      assert.match(markdown, /## 自动化与人工决策边界/);
-      assert.match(markdown, /Automation assists; humans decide\./);
-      assert.match(markdown, /Dynamic Workflow/);
-      assert.match(markdown, /能力发现/);
-      assert.match(markdown, /Agent Teams Playbook/);
-      assert.match(markdown, /Peer Agent Mesh/);
-      assert.match(markdown, /LangGraph-style/);
-      assert.match(markdown, /## 阶段执行说明/);
-      assert.match(markdown, /## 执行编排明细/);
-      assert.match(markdown, /## 三目标产品验收/);
-      assert.match(markdown, /用户只用普通自然语言输入/);
-      assert.match(markdown, /要做什么/);
-      assert.match(markdown, /结果长什么样/);
-      assert.match(markdown, /下一项工作/);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+      assert.equal(runArtifact.artifactKind, "host_preparation");
+      assert.equal(runArtifact.preparation.status, "needs_thinking");
+      assert.equal(runArtifact.hostInvocationRequestPacket.nextAction.stage, "Critical");
+      assert.equal(runArtifact.hostInvocationRequestPacket.nextAction.producer, "current_host_ai");
+      assert.equal(runArtifact.hostInvocationRequestPacket.executionAllowed, false);
+      assert.deepEqual(runArtifact.workerTaskPackets, []);
+      assert.equal(runArtifact.coreLoop.stageDagPacket, undefined);
+      assert.equal(runArtifact.publicReadyDecision.publicReady, false);
+      assert.equal(runArtifact.machineExecution.actualWorkerExecution, undefined);
+      assert.equal(runArtifact.coreLoop.executionResult.actualWorkerExecution, false);
+      assert.match(await readFile(result.paths.markdown, "utf8"), /尚未形成正式执行工单/u);
+    } finally { await rm(tempDir, { recursive: true, force: true }); }
   });
 
-  test("CLI emits a localized conversation notice for wish-style human input", async () => {
-    assert.equal(naturalUserTask, "帮我做个小红书营销自动发布器");
+  test("CLI emits an honest localized preparation notice and strict mode keeps the pending exit", async () => {
     assert.doesNotMatch(naturalUserTask, /Critical|Fetch|Thinking|Review|agent|skill|MCP|packet|JSON/i);
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-conversation-notice-"));
     try {
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/run-meta-theory-governed-execution.mjs",
-          "--task",
-          naturalUserTask,
-          "--run-id",
-          "wish-style-conversation-notice",
-          "--state-dir",
-          tempDir,
-          "--db",
-          path.join(tempDir, "runs.sqlite"),
-          "--emit-conversation-notice",
-        ],
-        { cwd: process.cwd(), encoding: "utf8" }
-      );
+      const args = ["scripts/run-meta-theory-governed-execution.mjs", "--task", naturalUserTask,
+        "--run-id", "wish-style-conversation-notice", "--state-dir", tempDir, "--db", path.join(tempDir, "runs.sqlite"),
+        "--emit-conversation-notice"];
+      const result = runtimeFixture.run(args);
       assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /^Meta_Kim 对话提示:/u);
-      assert.match(result.stdout, /开始原因: 进入 Meta-Theory/u);
-      assert.match(result.stdout, /8 阶段: 触发 8 阶段/u);
-      assert.match(result.stdout, /11 阶段: 触发 11 阶段/u);
-      assert.match(result.stdout, /过程发牌事件:/u);
-      assert.match(
-        result.stdout,
-        /Critical 进行中\s*\n\s*触发发牌：发现目标或验收边界可能改变路线，触发澄清牌/u
-      );
-      assert.match(
-        result.stdout,
-        /Thinking 进行中\s*\n\s*触发发牌：发现存在多个可行路径，需要选择，触发选项牌/u
-      );
-      assert.match(result.stdout, /发牌摘要: 触发发牌/u);
-      assert.match(result.stdout, /本轮生成 \d+ 次发牌事件，涉及 \d+ 类牌/u);
-      assert.doesNotMatch(result.stdout, /已发 \d+\/10|发 \d+\/10|dealt \d+\/10/u);
-      assert.match(result.stdout, /澄清/u);
-      assert.match(result.stdout, /选项/u);
-      assert.match(result.stdout, /用户相关牌/u);
-      assert.match(result.stdout, /同一类牌可以/u);
-      assert.match(result.stdout, /风险已插入|风险未触发/u);
-      assert.match(result.stdout, /暂停已触发|暂停未触发/u);
-      assert.match(result.stdout, /不是 native choice popup 证据/u);
-      assert.match(result.stdout, /许愿式自然语言需求/u);
-      assert.match(result.stdout, /阶段进度/u);
-      assert.match(result.stdout, /Meta-Review/u);
-      assert.match(result.stdout, /Verification/u);
-      assert.match(result.stdout, /Evolution/u);
-      assert.match(result.stdout, /能力路线/u);
-      assert.match(result.stdout, /产品定义/u);
-      assert.match(result.stdout, /市场与平台规则研究/u);
-      assert.match(result.stdout, /内容策略与生成/u);
-      assert.match(result.stdout, /后端 API/u);
-      assert.match(result.stdout, /测试验收/u);
-      assert.match(result.stdout, /验证/u);
-      assert.doesNotMatch(
-        result.stdout,
-        /ownerDiscoveryPacket|orchestrationTaskBoardPacket|workerTaskPackets|cardPlanPacket/u
-      );
-
-      const emittedText = result.stdout.split("\n\n")[0];
-      const artifact = JSON.parse(
-        await readFile(path.join(tempDir, "wish-style-conversation-notice.json"), "utf8")
-      );
-      assert.equal(
-        artifact.governanceStartReasonPacket.schemaVersion,
-        "governance-start-reason-v0.1"
-      );
-      assert.ok(artifact.governanceStartReasonPacket.spineReason.length <= 120);
-      assert.ok(artifact.governanceStartReasonPacket.workflowReason.length <= 120);
-      assert.match(artifact.governanceStartReasonPacket.cardReason, /触发发牌/);
-      assert.ok(artifact.governanceStartReasonPacket.cardReason.length <= 120);
-      assert.equal(artifact.cardPlanPacket.dealStandard.coveragePass, true);
-      assert.ok(artifact.cardPlanPacket.dealStandard.minimumScore >= 80);
-      const emittedHash = createHash("sha256").update(emittedText, "utf8").digest("hex");
-      assert.equal(artifact.conversationNotice.status, "emitted");
-      assert.ok(artifact.conversationNotice.routeSummary.workerTaskCount >= 2);
-      assert.equal(artifact.conversationNotice.emitted, true);
-      assert.equal(artifact.conversationNotice.channel, "stdout");
-      assert.equal(artifact.conversationNotice.adapter, "meta-theory-governed-execution-cli");
-      assert.equal(artifact.conversationNotice.text, emittedText);
-      assert.equal(artifact.conversationNotice.textSha256, emittedHash);
-      assert.equal(artifact.conversationNotice.emittedTextSha256, emittedHash);
-      assert.equal(artifact.conversationNotice.evidenceKind, "adapter_emitted_notice");
-      assert.ok(
-        artifact.conversationNotice.routeSummary.cardSummary.activeCards.includes("澄清")
-      );
-      assert.ok(
-        artifact.conversationNotice.routeSummary.cardSummary.userRelevantCards.includes("选项")
-      );
-      assert.match(
-        artifact.conversationNotice.routeSummary.cardSummary.nativeChoiceBoundary,
-        /不是 native choice popup 证据/u
-      );
-      assert.equal(artifact.userExperienceNotice.status, "ready");
-      assert.equal(artifact.userExperienceNotice.primarySurface, "localized_conversation_notice");
-      assert.equal(artifact.userExperienceNotice.pendingPrimarySurface, null);
-      assert.equal(artifact.userExperienceNotice.conversationNoticeEmitted, true);
-      const selectedLaneIds = artifact.defaultRuntimePath.workerTaskPackets.map(
-        (packet) => packet.businessFlowLaneId
-      );
-      const omittedLaneIds = artifact.coreLoop.thinkingPacket.omittedLanesWithReason ?? [];
-      assert.ok(selectedLaneIds.includes("product-definition"));
-      assert.ok(selectedLaneIds.includes("market-research"));
-      assert.ok(selectedLaneIds.includes("content-strategy"));
-      assert.ok(selectedLaneIds.includes("backend-api"));
-      assert.ok(omittedLaneIds.includes("frontend-ui"));
-      assert.equal(artifact.defaultRuntimePath.workerTaskPackets.length, selectedLaneIds.length);
-      assert.equal(artifact.defaultRuntimePath.agentTeamsPlaybookPacket.status, "pass");
-      assert.equal(artifact.defaultRuntimePath.agentTeamsPlaybookPacket.selected, true);
-      assert.equal(
-        artifact.defaultRuntimePath.agentTeamsPlaybookPacket.fanoutSafetyPacket.safeForParallelFanout,
-        true
-      );
-      assert.equal(
-        artifact.defaultRuntimePath.agentTeamsPlaybookPacket.acceptance.independentLanesProven,
-        true
-      );
-      assert.equal(
-        artifact.defaultRuntimePath.agentTeamsPlaybookPacket.acceptance.parallelWaveExists,
-        true
-      );
-      assert.equal(
-        artifact.defaultRuntimePath.agentTeamsPlaybookPacket.acceptance.dagAndCollisionSafe,
-        true
-      );
-      assert.equal(
-        artifact.defaultRuntimePath.agentTeamsPlaybookPacket.acceptance.waveSizeWithinRuntimeCapacity,
-        true
-      );
-      assert.equal(
-        artifact.defaultRuntimePath.agentTeamsPlaybookPacket.acceptance.noArbitraryMetaKimCap,
-        true
-      );
-      assert.ok(selectedLaneIds.includes("ux-flow"));
-      assert.ok(selectedLaneIds.includes("data-model"));
-      assert.ok(selectedLaneIds.includes("platform-integration"));
-      assert.ok(selectedLaneIds.includes("security-approval"));
-      assert.ok(selectedLaneIds.includes("test-qa"));
-      assert.ok(selectedLaneIds.includes("release-ops"));
-      assert.ok(!selectedLaneIds.includes("frontend-ui"));
-      assert.equal(
-        artifact.userExperienceNotice.conversationNoticeEvidence.textSha256,
-        emittedHash
-      );
-      assert.match(
-        artifact.userExperienceNotice.statusReason,
-        /conversation notice 已通过 stdout/
-      );
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+      const summary = JSON.parse(result.stdout);
+      assert.equal(summary.status, "needs_thinking");
+      assert.equal(summary.executionAllowed, false);
+      assert.match(result.stderr, /Meta_Kim 对话提示/u);
+      assert.match(result.stderr, /需求和当前准备状态已保存/u);
+      assert.match(result.stderr, /当前助手整理目标、现有条件与验收标准/u);
+      assert.doesNotMatch(result.stderr, /验证检查已完成|本次工作已部分完成|本次工作及相关检查已完成/u);
+      assert.doesNotMatch(result.stderr, /ownerDiscoveryPacket|workerTaskPackets|cardPlanPacket|status=|owner=|next=/u);
+      const artifact = JSON.parse(await readFile(summary.input, "utf8"));
+      assert.equal(artifact.artifactKind, "host_preparation");
+      assert.deepEqual(artifact.workerTaskPackets, []);
+      assert.equal(artifact.publicReadyDecision.publicReady, false);
+      assert.equal(artifact.conversationNotice, undefined, "CLI transport must not manufacture a persisted host observation");
+      const strict = runtimeFixture.run([...args, "--strict-exit-code", "--no-emit-conversation-notice"]);
+      assert.equal(strict.status, 1, strict.stderr);
+      assert.equal(JSON.parse(strict.stdout).status, "needs_thinking");
+      assert.equal(strict.stderr, "");
+    } finally { await rm(tempDir, { recursive: true, force: true }); }
   });
 
-  test("CLI emits card dealing summary when explicitly requested for governed runs", async () => {
+  test("CLI emits the full plan notice after an explicit current host preparation and decision", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-default-conversation-notice-"));
+    const cliTask = "只读核对 package.json 的版本并报告，不修改文件。";
+    const criticalInput = fixtureCritical({ task: cliTask, successCriteria: [{ id: "package-version", condition: "报告当前 package.json 版本", evidenceRequired: "package.json 的当前字节" }] });
     try {
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/run-meta-theory-governed-execution.mjs",
-          "--task",
-          naturalUserTask,
-          "--run-id",
-          "default-conversation-notice",
-          "--state-dir",
-          tempDir,
-          "--db",
-          path.join(tempDir, "runs.sqlite"),
-          "--emit-conversation-notice",
-        ],
-        { cwd: process.cwd(), encoding: "utf8" }
-      );
+      const result = runFixtureHostCli(runtimeFixture,
+        ["scripts/run-meta-theory-governed-execution.mjs", "--task", cliTask, "--run-id", "default-conversation-notice",
+          "--state-dir", tempDir, "--db", path.join(tempDir, "runs.sqlite"), "--emit-conversation-notice"],
+        { criticalInput, governanceTaskFacts: localProtocolFixtureTaskFacts(cliTask), workOrders: preparation => [fixtureReadWorkOrder(preparation,
+          { id: "package-read", todayTask: cliTask, output: "当前版本核对记录", criterionIds: ["package-version"], taskFacts: localProtocolFixtureTaskFacts(cliTask) })] });
       assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /^Meta_Kim 对话提示:/u);
-      assert.match(result.stdout, /过程发牌事件:/u);
-      assert.match(
-        result.stdout,
-        /Critical 进行中\s*\n\s*触发发牌：发现目标或验收边界可能改变路线，触发澄清牌/u
-      );
-      assert.match(result.stdout, /发牌摘要: 触发发牌/u);
-      assert.match(result.stdout, /本轮生成 \d+ 次发牌事件，涉及 \d+ 类牌/u);
-      assert.doesNotMatch(result.stdout, /已发 \d+\/10|发 \d+\/10|dealt \d+\/10/u);
-      assert.match(result.stdout, /澄清/u);
-      assert.match(result.stdout, /用户相关牌/u);
-      assert.match(result.stdout, /同一类牌可以/u);
-      assert.match(result.stdout, /不是 native choice popup 证据/u);
-      assert.match(result.stdout, /"status": "partial"/u);
-
-      const artifact = JSON.parse(
-        await readFile(path.join(tempDir, "default-conversation-notice.json"), "utf8")
-      );
+      const summary = JSON.parse(result.stdout);
+      assert.equal(summary.status, "partial");
+      assert.match(result.stderr, /Meta_Kim 对话提示/u);
+      assert.doesNotMatch(result.stderr, /status=|owner=|next=|selected_not_invoked|missingBindings/u);
+      const artifact = JSON.parse(await readFile(path.join(tempDir, "default-conversation-notice.json"), "utf8"));
       assert.equal(artifact.conversationNotice.status, "emitted");
-      assert.equal(artifact.conversationNotice.evidenceKind, "adapter_emitted_notice");
-      assert.ok(
-        artifact.conversationNotice.routeSummary.cardSummary.activeCards.includes("澄清")
-      );
-      assert.match(
-        artifact.conversationNotice.routeSummary.cardSummary.nativeChoiceBoundary,
-        /不是 native choice popup 证据/u
-      );
-      assert.equal(artifact.userExperienceNotice.status, "ready");
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+      assert.equal(artifact.conversationNotice.evidenceKind, "transport_emitted_notice");
+      assert.equal(artifact.conversationNotice.outputBoundary, "stderr_progress_channel");
+      assert.equal(artifact.conversationNotice.hostObservation.status, "host_observation_required");
+      assert.equal(artifact.conversationNotice.textSha256, createHash("sha256").update(artifact.conversationNotice.text, "utf8").digest("hex"));
+      assert.ok(result.stderr.includes(artifact.conversationNotice.text));
+      assert.match(artifact.conversationNotice.routeSummary.cardSummary.nativeChoiceBoundary, /不是 native choice popup 证据/u);
+      assert.equal(artifact.userExperienceNotice.status, "partial");
+      assert.equal(artifact.userExperienceNotice.conversationNoticeEmitted, true);
+      assert.equal(artifact.userExperienceNotice.conversationNoticeObserved, false);
+      assert.equal(artifact.publicReadyDecision.publicReady, false);
+      assert.equal(artifact.coreLoop.executionResult.actualWorkerExecution, false);
+    } finally { await rm(tempDir, { recursive: true, force: true }); }
   });
 
   test("CLI temp-output keeps governed run artifacts outside the project state tree", async () => {
@@ -1084,12 +798,13 @@ describe("34 — Meta-theory run deliverables", () => {
   test("CLI writes a manifest for the latest run", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-deliverables-cli-"));
     try {
-      await runMetaTheoryGovernedExecution({
+      await runDiagnosticReadPlan(runMetaTheoryGovernedExecution, {
+        diagnosticProviders: FIXTURE_DIAGNOSTIC_PROVIDERS,
         task,
         runId: "test-run-deliverables-cli",
         stateDir: tempDir,
         dbPath: path.join(tempDir, "runs.sqlite"),
-      });
+      }, scopes);
       const result = spawnSync(
         process.execPath,
         [
@@ -1105,6 +820,110 @@ describe("34 — Meta-theory run deliverables", () => {
       assert.equal(manifest.runId, "test-run-deliverables-cli");
       assert.equal(manifest.files.panelHtml.endsWith("run-panel.html"), true);
       assert.equal(hasLocalAbsolutePath(manifest), false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("report latest never treats an external lookalike state tree as the repository lifecycle", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-report-latest-"));
+    try {
+      const profileDir = path.join(tempDir, ".meta-kim", "state", "default");
+      const executionDir = path.join(profileDir, "governed-executions");
+      await mkdir(executionDir, { recursive: true });
+
+      const committedRunId = "meta-latest-committed-demo";
+      const jsonPath = path.join(executionDir, `${committedRunId}.json`);
+      const markdownPath = path.join(executionDir, `${committedRunId}.zh-CN.md`);
+      await writeFile(
+        jsonPath,
+        `${JSON.stringify(
+          {
+            runId: committedRunId,
+            status: "partial",
+            runReport: {
+              language: "zh-CN",
+              markdownPath: `.meta-kim/state/default/governed-executions/${committedRunId}.zh-CN.md`,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await writeFile(markdownPath, "# committed report\n", "utf8");
+      await writeFile(
+        path.join(executionDir, "latest.json"),
+        `${JSON.stringify(
+          {
+            runId: committedRunId,
+            jsonPath: `.meta-kim/state/default/governed-executions/${committedRunId}.json`,
+            markdownPath: `.meta-kim/state/default/governed-executions/${committedRunId}.zh-CN.md`,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(profileDir, "active-run.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 2,
+            active: true,
+            runId: "meta-2999-01-01t00-00-00-000z-active-demo",
+            lifecycleStatus: "active",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const latestCommitted = spawnSync(
+        process.execPath,
+        [
+          "scripts/run-meta-theory-governed-execution.mjs",
+          "--read",
+          "latest",
+          "--state-dir",
+          executionDir,
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+      assert.equal(latestCommitted.status, 0, latestCommitted.stderr);
+      const latestSummary = JSON.parse(latestCommitted.stdout);
+      assert.equal(latestSummary.runId, committedRunId);
+      assert.equal(latestSummary.status, "partial");
+      assert.equal(latestSummary.selection.selectionSource, "latest_committed_pointer");
+      assert.equal(
+        latestSummary.selection.selectionReason,
+        "last_committed_governed_report",
+      );
+      assert.match(latestSummary.selection.selectionExplanation, /latest\.json/u);
+      assert.equal(latestSummary.selection.activeRunRelation, "not_checked_custom_output");
+      assert.equal(latestSummary.selection.activeRunId, null);
+      assert.equal(latestSummary.selection.continuationMode, "report_only");
+      assert.equal(latestSummary.selection.nextCommand, null);
+
+      const explicitHistoricalReport = spawnSync(
+        process.execPath,
+        [
+          "scripts/run-meta-theory-governed-execution.mjs",
+          "--read",
+          committedRunId,
+          "--state-dir",
+          executionDir,
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+      assert.equal(explicitHistoricalReport.status, 0, explicitHistoricalReport.stderr);
+      const summary = JSON.parse(explicitHistoricalReport.stdout);
+      assert.equal(summary.runId, committedRunId);
+      assert.equal(summary.status, "partial");
+      assert.equal(summary.selection.selectionSource, "explicit_run_id");
+      assert.equal(summary.selection.selectionReason, "explicit_committed_run_id");
+      assert.match(summary.selection.selectionExplanation, /explicit runId/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

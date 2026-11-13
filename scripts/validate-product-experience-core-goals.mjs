@@ -7,9 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { runMetaTheoryGovernedExecution } from "./run-meta-theory-governed-execution.mjs";
+import { runDiagnosticReadPlan } from "./diagnostic-host-protocol.mjs";
 
 const PRODUCT_EXPERIENCE_TASK =
-  "帮我做个小红书营销自动发布器，需要动态规划、平台规则研究、内容策略、前端界面、后端 API、数据模型、平台集成、权限风控、测试验收和发布运维，但不要真实发布或使用生产凭证。";
+  "帮团队做一个内容工作台：成员能把零散素材整理成草稿，编辑审核后安排发布时间；失败时能看出原因并重试，不同成员权限不同。先完成可审查的方案和本地验证，不连接生产账号，也不要真实发布。";
+const BOUNDED_FANOUT_TASK =
+  "Run meta-theory. In parallel inspect package.json; review AGENTS.md; read README.md; audit config/contracts/workflow-contract.json.";
 
 const REQUIRED_GOAL_IDS = ["P-102", "P-103", "P-104"];
 const REQUIRED_SUPPORT_GATE_IDS = ["P-105", "P-106", "P-107", "P-108", "P-109", "P-110"];
@@ -27,16 +30,13 @@ const REQUIRED_INVOCATION_FAMILIES = [
 ];
 const REQUIRED_BINDING_COVERAGE = [
   "skill",
-  "mcp",
-  "command",
-  "tools",
   "hooks",
   "abstractPromptCapability",
   "agentTeamsPlaybook",
   "workerResults",
 ];
 
-const SELF_TEST_HOST_INVOCATION_EVIDENCE = [
+const SYNTHETIC_NEGATIVE_CONTROL = [
   {
     family: "agent_subagent",
     state: "invoked",
@@ -63,24 +63,13 @@ const SELF_TEST_HOST_INVOCATION_EVIDENCE = [
   },
 ];
 
-const SELF_TEST_NATIVE_CHOICE_EVIDENCE = [
-  {
-    runtime: "codex",
-    stage: "Thinking",
-    state: "answered",
-    surface: "request_user_input",
-    evidenceKind: "request_user_input_answer",
-    evidenceRef: "self-test:request_user_input_answer:interactive-surface-validated",
-  },
-];
-
 function assertPacketStatus(report) {
   assert.equal(report.coreLoop.goalContractPacket.status, "pass");
   assert.equal(report.coreLoop.langGraphRunPacket.status, "pass");
-  assert.equal(report.coreLoop.dynamicWorkflowRuntimePacket.status, "pass");
+  assert.equal(report.coreLoop.dynamicWorkflowRuntimePacket.status, "partial");
   assert.equal(report.coreLoop.peerAgentMeshPacket.status, "pass");
   assert.equal(report.coreLoop.agentTeamsPlaybookPacket.status, "pass");
-  assert.equal(report.coreLoop.capabilityInvocationTruthPacket.status, "partial");
+  assert.equal(report.capabilityInvocationTruthPacket.status, "partial");
   assert.equal(report.coreLoop.userPerceptionPacket.status, "partial");
   assert.equal(report.coreLoop.productExperiencePacket.status, "partial");
   assert.equal(report.productExperiencePacket.status, "partial");
@@ -111,15 +100,20 @@ function assertDynamicWorkflow(report) {
       `dynamic workflow missing ${field} coverage`,
     );
   }
+  assert.equal(
+    packet.capabilityBindingCoverage.tools,
+    false,
+    "offline product-experience validation must not manufacture executable runtime-tool evidence",
+  );
+  assert.ok(
+    packet.capabilityBindingRows.every((row) => row.runtimeTools.length === 0),
+    "offline product-experience validation must leave runtime tools unbound without current host evidence",
+  );
   assert.ok(packet.capabilityBindingRows.length > 0);
-  assert.ok(
-    packet.capabilityBindingRows.some((row) => row.commands.length > 0),
-    "commands must be bound",
-  );
-  assert.ok(
-    packet.capabilityBindingRows.some((row) => row.mcp.length > 0),
-    "MCP provider/tool must be bound",
-  );
+  assert.equal(packet.capabilityBindingCoverage.command, false);
+  assert.equal(packet.capabilityBindingCoverage.mcp, false);
+  assert.ok(packet.capabilityBindingRows.every(row => row.commands.length === 0 && row.mcp.length === 0),
+    "The fixed source-read work orders must not manufacture unnecessary command or MCP selection");
   assert.ok(
     packet.capabilityBindingRows.every((row) => row.hookMatches.length > 0),
     "hooks must be matched",
@@ -179,18 +173,42 @@ function assertVisibleMetaTheorySurface(report) {
   assert.ok(packet.requiredVisibleTopics.includes("orchestration"));
   assert.ok(packet.requiredVisibleTopics.includes("dynamic_workflow"));
   assert.ok(packet.requiredVisibleTopics.includes("capability_inventory_not_skill_only"));
-  assert.ok(packet.requiredVisibleTopics.includes("capability_invocation_truth"));
+  assert.ok(packet.requiredVisibleTopics.includes("capability_invocation_presentation"));
   assert.ok(packet.requiredVisibleTopics.includes("agent_teams_playbook"));
   assert.ok(packet.requiredVisibleTopics.includes("peer_agent_mesh"));
   assert.ok(packet.requiredVisibleTopics.includes("langgraph_style_control_graph"));
   assert.equal(packet.capabilityInventory.notSkillOnly, true);
   assert.ok(packet.capabilityInventory.nonSkillCapabilityTypeCount > 0);
-  assert.equal(packet.dynamicWorkflow.status, "pass");
+  assert.equal(packet.dynamicWorkflow.status, "partial");
   assert.ok(packet.dynamicWorkflow.visibleRows.length > 0);
-  assert.equal(packet.capabilityInvocationTruth.status, "partial");
-  assert.ok(packet.capabilityInvocationTruth.visibleRows.length >= REQUIRED_INVOCATION_FAMILIES.length);
+  assert.ok(
+    [
+      "completed",
+      "called",
+      "called_with_failures",
+      "failed",
+      "denied",
+      "blocked",
+      "not_confirmed",
+      "unavailable",
+    ].includes(
+      packet.capabilityInvocationPresentation.executionState,
+    ),
+  );
+  assert.equal(packet.capabilityInvocationPresentation.executionState, "not_confirmed");
+  assert.match(packet.capabilityInvocationPresentation.userSummary, /当前聊天中的实际调用结果为准/);
+  assert.deepEqual(
+    Object.keys(packet.capabilityInvocationPresentation).sort(),
+    ["executionLabel", "executionState", "schemaVersion", "userSummary"],
+  );
+  assert.doesNotMatch(
+    packet.capabilityInvocationPresentation.userSummary,
+    /exact[_ -]?binding|live[_ -]?certification|provider|lane|精确(?:绑定|认证)|实时认证/i,
+  );
+  assert.equal(Object.hasOwn(packet, "capabilityInvocationTruth"), false);
+  assert.equal(Object.hasOwn(packet.capabilityInvocationPresentation, "rows"), false);
   assert.equal(packet.agentTeamsPlaybook.status, "pass");
-  assert.equal(packet.agentTeamsPlaybook.selected, true);
+  assert.equal(packet.agentTeamsPlaybook.selected, report.coreLoop.agentTeamsPlaybookPacket.selected);
   assert.ok(packet.agentTeamsPlaybook.waveCount >= 1);
   assert.equal(packet.peerAgentMesh.status, "pass");
   assert.ok(packet.peerAgentMesh.peerCount > 0);
@@ -198,11 +216,38 @@ function assertVisibleMetaTheorySurface(report) {
   assert.ok(packet.langGraph.nodeCount >= 8);
   assert.ok(packet.langGraph.edgeCount >= 7);
   assert.ok(packet.langGraph.checkpointCount >= 8);
-  assert.equal(report.runReportPanelContract.visibleMetaTheorySurface.status, "partial");
+  const panelSurface = report.runReportPanelContract.visibleMetaTheorySurface;
+  assert.equal(panelSurface.status, "partial");
+  assert.equal(Object.hasOwn(panelSurface, "capabilityInvocationTruth"), false);
+  assert.deepEqual(
+    Object.keys(panelSurface.capabilityInvocationPresentation).sort(),
+    ["executionLabel", "executionState", "schemaVersion", "userSummary"],
+  );
+}
+
+function assertFailurePresentationSemantics(report) {
+  const strictPresentation = report.capabilityInvocationPresentationPacket;
+  const visiblePresentation = report.visibleMetaTheorySurfacePacket.capabilityInvocationPresentation;
+  const failureDisposition = strictPresentation.failureDisposition;
+  if (failureDisposition) {
+    assert.ok(["failed", "denied", "blocked"].includes(failureDisposition));
+    assert.equal(visiblePresentation.executionState, failureDisposition);
+    assert.notEqual(visiblePresentation.executionState, "unavailable");
+  }
+  if (visiblePresentation.executionState === "unavailable") {
+    assert.equal(failureDisposition, null);
+    assert.equal(
+      report.runtimeSubagentInvocationPacket.availabilityDisposition,
+      "genuinely_unavailable",
+    );
+    assert.equal(strictPresentation.evidenceBoundary.successfulBindingCount, 0);
+    assert.equal(strictPresentation.evidenceBoundary.verifiedFailedBindingCount, 0);
+  }
 }
 
 function assertCapabilityInvocationTruth(report) {
-  const packet = report.coreLoop.capabilityInvocationTruthPacket;
+  const packet = report.capabilityInvocationTruthPacket;
+  assert.equal(report.coreLoop.capabilityInvocationTruthPacket, packet);
   assert.equal(packet.status, "partial");
   for (const state of [
     "invoked",
@@ -211,6 +256,7 @@ function assertCapabilityInvocationTruth(report) {
     "selected_not_invoked",
     "discovered_not_selected",
     "unavailable",
+    "not_authorized",
     "blocked",
     "not_required",
   ]) {
@@ -223,24 +269,34 @@ function assertCapabilityInvocationTruth(report) {
   assert.equal(report.coreLoop.runtimeSubagentInvocationPacket.status, "unavailable");
   assert.equal(byFamily.get("agent_subagent").state, "unavailable");
   assert.equal(byFamily.get("app_visible_subagent").state, "not_required");
-  assert.equal(byFamily.get("worker_task").state, "invoked");
-  assert.equal(byFamily.get("mcp").state, "invoked");
+  assert.equal(byFamily.get("worker_task").state, "blocked");
+  assert.equal(byFamily.get("mcp").state, "not_required");
   assert.equal(byFamily.get("hook").state, "selected_not_invoked");
   assert.equal(byFamily.get("skill").state, "selected_not_invoked");
   assert.equal(byFamily.get("prompt_rule").state, "applied");
-  assert.equal(byFamily.get("command_script").state, "invoked");
-  assert.equal(byFamily.get("runtime_tool").state, "invoked");
-  assert.equal(byFamily.get("agent_teams_playbook").state, "selected_not_invoked");
+  assert.equal(byFamily.get("command_script").state, "not_required");
+  assert.equal(byFamily.get("runtime_tool").state, "not_required");
+  const playbookInvocation = byFamily.get("agent_teams_playbook");
+  const playbookSelected = report.coreLoop.agentTeamsPlaybookPacket.selected;
+  assert.equal(playbookInvocation.state, playbookSelected ? "selected_not_invoked" : "not_required");
+  assert.equal(playbookInvocation.selectedCount, playbookSelected ? 1 : 0);
+  assert.equal(playbookInvocation.invokedCount, 0);
   assert.equal(packet.realInvocationCoverage.status, "partial");
-  assert.deepEqual(packet.realInvocationCoverage.missingFamilies.sort(), [
+  for (const family of [
     "agent_subagent",
-    "agent_teams_playbook",
     "skill",
-  ]);
+    "hook",
+  ]) {
+    assert.ok(packet.realInvocationCoverage.missingFamilies.includes(family));
+  }
+  assert.ok(packet.realInvocationCoverage.missingBindings.length > 0);
   assert.deepEqual(packet.callableInvocationCoverage.missingFamilies, []);
-  assert.ok(packet.callableInvocationCoverage.invokedFamilies.includes("mcp"));
-  assert.ok(packet.callableInvocationCoverage.invokedFamilies.includes("command_script"));
-  assert.ok(packet.callableInvocationCoverage.invokedFamilies.includes("runtime_tool"));
+  assert.equal(packet.callableInvocationCoverage.callableFamilies.includes("mcp"), false);
+  assert.equal(packet.callableInvocationCoverage.callableFamilies.includes("command_script"), false);
+  assert.equal(
+    packet.callableInvocationCoverage.callableFamilies.includes("runtime_tool"),
+    false,
+  );
   assert.equal(packet.truthAssertions.noLiveSubagentOverclaim, true);
   assert.equal(packet.truthAssertions.noHostUiSubagentOverclaim, true);
   assert.equal(packet.truthAssertions.noAgentTeamsPlaybookOverclaim, true);
@@ -263,30 +319,52 @@ function assertCapabilityInvocationTruth(report) {
       .get("agent_teams_playbook")
       .mustNotClaimAs.includes("live_agent_team_created"),
   );
-  assert.equal(report.runReportPanelContract.capabilityInvocationTruth.status, "partial");
+  assert.equal(packet.rows.length >= REQUIRED_INVOCATION_FAMILIES.length, true);
+  assert.equal(report.capabilityInvocationTruthPacket, packet);
+  assert.equal(Object.hasOwn(report.runReportPanelContract, "capabilityInvocationTruth"), false);
+  assert.equal(
+    report.runReportPanelContract.capabilityInvocationPresentation.executionState,
+    "not_confirmed",
+  );
+  assert.deepEqual(
+    Object.keys(report.runReportPanelContract.capabilityInvocationPresentation).sort(),
+    ["executionLabel", "executionState", "schemaVersion", "userSummary"],
+  );
 }
 
 function assertInvocationProbes(report) {
   const packet = report.coreLoop.capabilityInvocationProbePacket;
   assert.equal(packet.status, "pass");
   assert.deepEqual(packet.missingFamilies, []);
+  assert.deepEqual(packet.requiredFamilies, [], "The source-read scenario selects no callable MCP or command family");
   const byFamily = new Map(packet.probes.map((probe) => [probe.family, probe]));
-  for (const family of ["mcp", "command_script", "runtime_tool"]) {
-    assert.equal(byFamily.get(family)?.status, "pass", `${family} probe did not pass`);
-    assert.equal(byFamily.get(family)?.exitCode, 0, `${family} probe exitCode was not 0`);
-  }
+  assert.equal(byFamily.has("mcp"), false);
+  assert.equal(byFamily.has("command_script"), false);
+  assert.equal(
+    byFamily.has("runtime_tool"),
+    false,
+    "offline product-experience validation must not probe an unbound runtime tool",
+  );
 }
 
 function assertAgentTeamsPlaybook(report) {
   const packet = report.coreLoop.agentTeamsPlaybookPacket;
+  const resolution = packet.providerResolution;
+  const nearestProvider = resolution.candidates.find((candidate) => candidate.found) ?? null;
+  const providerAvailable = nearestProvider !== null;
+  assert.equal(resolution.found, providerAvailable);
+  assert.equal(resolution.selectedSource, nearestProvider?.source ?? null);
+  assert.equal(resolution.selectedPathRef, nearestProvider?.pathRef ?? null);
+  assert.equal(resolution.selectedVersion, nearestProvider?.version ?? null);
+  assert.equal(packet.selected, providerAvailable);
+  assert.equal(packet.acceptance.optionalProviderDoesNotGateNativeFanout, !providerAvailable);
   assert.equal(packet.status, "pass");
   assert.equal(packet.triggered, true);
-  assert.equal(packet.selected, true);
   assert.equal(packet.providerId, "agent-teams-playbook");
   assert.ok(packet.executableLaneCount >= 2);
   assert.ok(packet.waves.length >= 1);
   assert.equal(packet.fanoutSafetyPacket.safeForParallelFanout, true);
-  assert.equal(packet.acceptance.selectedWhenParallelLanes, true);
+  assert.equal(packet.acceptance.orchestrationReadyWhenParallelLanes, true);
   assert.equal(packet.acceptance.independentLanesProven, true);
   assert.equal(packet.acceptance.parallelWaveExists, true);
   assert.equal(packet.acceptance.dagAndCollisionSafe, true);
@@ -297,32 +375,43 @@ function assertAgentTeamsPlaybook(report) {
   assert.ok(packet.capacitySource);
   assert.equal(packet.acceptance.workerPacketsPreserved, true);
   assert.equal(packet.acceptance.noLiveSubagentOverclaim, true);
-  assert.ok(
-    packet.providerResolution.configuredInSkills || packet.providerResolution.found,
-    "agent-teams-playbook must be found by config or local/global skill resolver",
+  assert.equal(
+    packet.selected || packet.acceptance.optionalProviderDoesNotGateNativeFanout,
+    true,
+    "native stage-DAG fan-out must pass whether the optional playbook is selected or not",
   );
 }
 
 async function assertReadableReportShowsVisibleSurface(report) {
   const markdown = await readFile(report.paths.markdown, "utf8");
+  const visibleChrome = markdown.slice(markdown.indexOf("## 用户目标"));
   for (const marker of [
-    "## Meta-Theory 可见编排面",
-    "Dynamic Workflow",
-    "能力发现",
-    "Agent Teams Playbook",
-    "Peer Agent Mesh",
-    "LangGraph-style",
-    "自动化与人工决策边界",
-    "Automation assists; humans decide.",
-    "human_required",
-    "能力发现矩阵",
-    "真实能力调用状态",
-    "agent_subagent",
-    "agent_teams_playbook",
-    "selected_not_invoked",
+    "## 用户目标",
+    "## 工作协调与调用情况",
+    "调用记录",
+    "协作情况",
+    "工作流概览",
+    "## 阶段进展",
+    "Critical",
+    "Fetch",
+    "Thinking",
+    "Execution",
+    "Review",
+    "Verification",
+    "Evolution",
+    "## 验证与下一步",
   ]) {
     assert.match(markdown, new RegExp(marker), `readable report missing ${marker}`);
   }
+  assert.doesNotMatch(
+    visibleChrome,
+    /调用记录[^\n]*不可用/,
+    "a user-visible provider summary must not say unavailable when invocation is only awaiting evidence linkage",
+  );
+  assert.doesNotMatch(
+    visibleChrome,
+    /selected_not_invoked|capabilityInvocationTruthPacket\.rows|exact[_ -]?binding|live[_ -]?certification|provider|lane|精确(?:绑定|认证)|实时认证/i,
+  );
 }
 
 function assertProductExperience(report) {
@@ -344,12 +433,12 @@ function assertProductExperience(report) {
   const supportGateById = new Map(packet.supportGates.map((gate) => [gate.id, gate]));
   assert.equal(supportGateById.get("P-105").status, "pass");
   assert.equal(supportGateById.get("P-106").status, "partial");
-  assert.equal(supportGateById.get("P-107").status, "pass");
+  assert.equal(supportGateById.get("P-107").status, "declared_not_evaluated");
   assert.equal(supportGateById.get("P-108").status, "pass");
   assert.equal(supportGateById.get("P-109").status, "partial");
   assert.equal(supportGateById.get("P-110").status, "pass");
   assert.equal(packet.noOverclaimGate.status, "pass");
-  assert.equal(packet.noOverclaimGate.acceptedEvidenceTier, "product_experience_pass");
+  assert.equal(packet.noOverclaimGate.acceptedEvidenceTier, "live_host_observed");
   assert.ok(packet.noOverclaimGate.forbiddenAsProductPass.includes("chat_card_as_native_popup"));
   assert.ok(packet.noOverclaimGate.forbiddenAsProductPass.includes("demo_fixture_as_framework_goal"));
   assert.ok(packet.noOverclaimGate.forbiddenAsProductPass.includes("hidden orchestration artifacts"));
@@ -433,6 +522,7 @@ function assertMcpSelfTest() {
 }
 
 function summarizeReport(report) {
+  const invocationTruth = report.capabilityInvocationTruthPacket;
   return {
     status: report.status,
     evidenceTier: report.coreLoop.productExperiencePacket.evidenceTier,
@@ -449,18 +539,26 @@ function summarizeReport(report) {
     productExperience: report.coreLoop.productExperiencePacket.status,
     visibleMetaTheorySurface: report.coreLoop.visibleMetaTheorySurfacePacket.status,
     capabilityInvocationTruth: {
-      status: report.coreLoop.capabilityInvocationTruthPacket.status,
-      states: report.coreLoop.capabilityInvocationTruthPacket.stateCounts,
-      callableInvocationCoverage:
-        report.coreLoop.capabilityInvocationTruthPacket.callableInvocationCoverage,
-      realInvocationCoverage:
-        report.coreLoop.capabilityInvocationTruthPacket.realInvocationCoverage,
+      status: invocationTruth.status,
+      states: invocationTruth.stateCounts,
+      callableInvocationCoverage: invocationTruth.callableInvocationCoverage,
+      realInvocationCoverage: {
+        status: invocationTruth.realInvocationCoverage.status,
+        requiredFamilies: invocationTruth.realInvocationCoverage.requiredFamilies,
+        invokedFamilies: invocationTruth.realInvocationCoverage.invokedFamilies,
+        missingFamilies: invocationTruth.realInvocationCoverage.missingFamilies,
+        requiredBindingCount: invocationTruth.realInvocationCoverage.requiredBindings.length,
+        invokedBindingCount: invocationTruth.realInvocationCoverage.invokedBindings.length,
+        missingBindingCount: invocationTruth.realInvocationCoverage.missingBindings.length,
+        hostEvidenceCount: invocationTruth.realInvocationCoverage.hostEvidenceCount,
+        rejectedEvidenceCount: invocationTruth.realInvocationCoverage.rejectedEvidenceCount,
+      },
       appVisibleSubagentState:
-        report.coreLoop.capabilityInvocationTruthPacket.rows.find(
+        invocationTruth.rows.find(
           (row) => row.family === "app_visible_subagent",
         )?.state ?? "missing",
       agentTeamsPlaybookState:
-        report.coreLoop.capabilityInvocationTruthPacket.rows.find(
+        invocationTruth.rows.find(
           (row) => row.family === "agent_teams_playbook",
         )?.state ?? "missing",
     },
@@ -470,15 +568,36 @@ function summarizeReport(report) {
 async function main() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-product-experience-"));
   try {
-    const report = await runMetaTheoryGovernedExecution({
+    const planningReport = await runMetaTheoryGovernedExecution({
       task: PRODUCT_EXPERIENCE_TASK,
+      runId: "validate-content-workbench-planning",
+      stateDir: tempDir,
+      dbPath: path.join(tempDir, "runs.sqlite"),
+    });
+    assert.equal(planningReport.task, PRODUCT_EXPERIENCE_TASK);
+    assert.equal(planningReport.artifactKind, "host_preparation");
+    assert.equal(planningReport.preparation.status, "needs_thinking");
+    assert.equal(planningReport.publicReadyDecision.publicReady, false);
+    const plannedWorkers = planningReport.workerTaskPackets;
+    assert.deepEqual(plannedWorkers, [], "A raw product request must wait for host Critical and Thinking before manufacturing a worker plan");
+    assert.equal(planningReport.coreLoop.stageDagPacket, undefined);
+    assert.ok(planningReport.hostInvocationRequestPacket.nextAction);
+    const scopes = ["package.json", "AGENTS.md", "README.md", "config/contracts/workflow-contract.json"];
+    const report = await runDiagnosticReadPlan(runMetaTheoryGovernedExecution, {
+      task: BOUNDED_FANOUT_TASK,
+      outputLanguage: "zh-CN",
       runId: "validate-product-experience-core-goals",
       stateDir: tempDir,
       dbPath: path.join(tempDir, "runs.sqlite"),
       emitConversationNotice: true,
       invokeCapabilityProbes: true,
-    });
+    }, scopes);
     assert.equal(report.status, "partial");
+    assert.equal(report.workerTaskPackets.length, 4,
+      "The four bounded actions require discoverable execution-owner sources in this validation environment");
+    assert.ok(report.workerTaskPackets.every((packet) => packet.workOrderReadiness === "ready" && packet.mutationPolicy === "read_only"));
+    assert.equal(report.executionResult.actualWorkerExecution, false,
+      "Discoverable owner fixtures or installed definitions never prove native invocation");
     assertPacketStatus(report);
     assertLangGraphStyle(report);
     assertDynamicWorkflow(report);
@@ -487,34 +606,35 @@ async function main() {
     assertCapabilityInvocationTruth(report);
     assertAgentTeamsPlaybook(report);
     assertVisibleMetaTheorySurface(report);
+    assertFailurePresentationSemantics(report);
     assertUserPerception(report);
     assertProductExperience(report);
     await assertReadableReportShowsVisibleSurface(report);
 
-    const selfTestReport = await runMetaTheoryGovernedExecution({
-      task: PRODUCT_EXPERIENCE_TASK,
-      runId: "validate-product-experience-self-test-pass",
+    const negativeControlReport = await runDiagnosticReadPlan(runMetaTheoryGovernedExecution, {
+      task: BOUNDED_FANOUT_TASK,
+      outputLanguage: "zh-CN",
+      runId: "validate-product-experience-synthetic-negative-control",
       stateDir: tempDir,
       dbPath: path.join(tempDir, "runs.sqlite"),
       emitConversationNotice: false,
       invokeCapabilityProbes: true,
       hostInvocationEvidenceTrusted: true,
-      hostInvocationEvidence: SELF_TEST_HOST_INVOCATION_EVIDENCE,
-      nativeChoiceEvidenceTrusted: true,
-      nativeChoiceEvidence: SELF_TEST_NATIVE_CHOICE_EVIDENCE,
-    });
-    assert.equal(selfTestReport.status, "pass");
+      hostInvocationEvidence: SYNTHETIC_NEGATIVE_CONTROL,
+    }, scopes);
+    assert.equal(negativeControlReport.status, "partial");
     assert.equal(
-      selfTestReport.coreLoop.productExperiencePacket.status,
-      "product_experience_pass",
+      negativeControlReport.coreLoop.productExperiencePacket.status,
+      "partial",
+    );
+    assert.ok(
+      negativeControlReport.coreLoop.runtimeInvocationPlanPacket.evidence.every(
+        (item) => item.passEligible === false,
+      ),
     );
     assert.equal(
-      selfTestReport.coreLoop.productExperiencePacket.nativeChoiceSurfaceGate.status,
-      "pass",
-    );
-    assert.equal(
-      selfTestReport.coreLoop.capabilityInvocationTruthPacket.realInvocationCoverage.status,
-      "pass",
+      negativeControlReport.capabilityInvocationTruthPacket.realInvocationCoverage.status,
+      "partial",
     );
 
     const mcp = assertMcpSelfTest();
@@ -523,12 +643,25 @@ async function main() {
         {
           status: "pass",
           validationStatus: "pass",
-          evidenceMode: "default-boundary-plus-trusted-self-test",
+          evidenceMode: "structural-boundary-plus-synthetic-negative-control",
+          boundedPlanningRun: {
+            plannedWorkers: report.workerTaskPackets.length,
+            actualWorkerExecution: report.executionResult.actualWorkerExecution,
+            ownerEvidence: "current_environment_discovery_only",
+          },
+          productRequirementsPlanningRun: {
+            status: planningReport.preparation.status,
+            artifactKind: planningReport.artifactKind,
+            publicReady: false,
+            preparationRequired: true,
+            plannedWorkers: plannedWorkers.length,
+            executionReady: false,
+          },
           defaultBoundaryRun: summarizeReport(report),
-          selfTestEvidenceRun: summarizeReport(selfTestReport),
+          syntheticNegativeControlRun: summarizeReport(negativeControlReport),
           noPopupDuringSelfTest: true,
           selfTestEvidenceBoundary:
-            "The validator supplies trusted self-test evidence instead of opening a native choice surface; defaultBoundaryRun still proves Meta_Kim does not relabel missing live host evidence.",
+            "Synthetic/self-test evidence is deliberately rejected. This command validates structural boundaries only and never claims a live host orchestration pass.",
           repeatFailureDesign:
             report.coreLoop.productExperiencePacket.repeatFailureDesignGate.actionOnSecondOccurrence,
           generalizationGate: report.coreLoop.productExperiencePacket.generalizationGate.status,

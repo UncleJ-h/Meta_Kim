@@ -1,15 +1,149 @@
 {
   "schemaVersion": 1,
+  "absorptionQueuePolicy": {
+    "contractRef": "config/contracts/dependency-absorption-contract.json",
+    "reviewRef": "config/contracts/dependency-absorption-contract.json#currentReview",
+    "mode": "per_dependency_evidence_gated",
+    "activeProjectId": null,
+    "state": "DISPOSITION_IMPLEMENTED_PENDING_REVIEW",
+    "crossProjectEvidenceReuse": false,
+    "deletionRequiresUserAuthorization": true,
+    "historicalPlanningClosure": {
+      "contractRef": "config/contracts/dependency-absorption-contract.json",
+      "maxActiveResearch": 1,
+      "activeProjectId": null,
+      "state": "DEPENDENCY_REMOVED_CLOSED",
+      "crossProjectEvidenceReuse": false,
+      "nextProjectActivationAllowed": false,
+      "deletionRequiresUserAuthorization": true
+    }
+  },
   "projects": [
+    {
+      "id": "kim-service",
+      "name": "Kim Service professional agent packs",
+      "source": {
+        "type": "github",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
+        "localPath": null,
+        "inspectionStatus": "declared_contract_index",
+        "lastInspectedAt": null
+      },
+      "capabilityCard": {
+        "oneLine": "First-party professional agent and method contracts for software, design, finance, data, operations and everyday work; discover exact coverage from the versioned generated capability index.",
+        "taskShapes": [
+          "professional_content",
+          "industry_analysis",
+          "learning_support"
+        ],
+        "triggerConditions": [
+          "自媒体选题、标题封面、脚本文案",
+          "电商商品页、客服回复、店铺数据",
+          "简历、面试、周报邮件",
+          "备课、知识讲解、练习题",
+          "副业方向、启动计划、报价成本",
+          "软件开发、架构、测试、故障诊断与恢复",
+          "产品设计、设计系统、品牌、动效与可访问性",
+          "财务建模、经营预测、会计核对与量化研究",
+          "数据分析、制造、能源、供应链与运营"
+        ],
+        "inputContract": {
+          "requires": [
+            "explicit local dependency root",
+            "v1 generated capability index",
+            "matching source contracts and component hashes"
+          ]
+        },
+        "outputContract": {
+          "produces": [
+            "professional owner candidates",
+            "scoped input/output and permission contracts",
+            "source integrity evidence or explicit discovery gap"
+          ]
+        },
+        "canDo": [
+          "provide independent professional agent contracts",
+          "supply plain-language role triggers and complete examples"
+        ],
+        "canNotDo": [
+          "governance routing",
+          "final user-goal acceptance",
+          "automatic external writes",
+          "prove runtime-native agent loading"
+        ],
+        "notFor": [
+          "replacing the nine governance owners",
+          "implicit global installation",
+          "adopting third-party governance architecture"
+        ],
+        "verificationMethod": "node scripts/run-node-tests.mjs tests/governance/dependency-agent-discovery.test.mjs --concurrency 1",
+        "verificationMethods": [
+          "node scripts/run-node-tests.mjs tests/governance/dependency-agent-discovery.test.mjs --concurrency 1",
+          "npm run meta:route:validate"
+        ],
+        "risk": [
+          "index discovery is not live invocation",
+          "review source contracts before binding",
+          "do not execute dependency validation code during discovery"
+        ],
+        "routeEligibility": "needs_probe",
+        "writebackKey": "dependency:kim-service"
+      },
+      "interface": {
+        "invokeAs": "agent_contract",
+        "invocationPath": "explicit-root/agents/<component>/AGENT.md",
+        "requiredFiles": [
+          "generated/capabilities.json"
+        ],
+        "requiredEnv": [],
+        "requiredRuntime": [],
+        "capabilityIndex": {
+          "format": "component-capabilities-v1",
+          "path": "generated/capabilities.json",
+          "rootEnv": "META_KIM_KIM_SERVICE_ROOT"
+        }
+      },
+      "runtimeSupport": {
+        "claude_code": "unknown",
+        "codex": "unknown",
+        "cursor": "unknown",
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
+      },
+      "osSupport": {
+        "macos": "unknown",
+        "windows": "unknown",
+        "linux": "unknown",
+        "wsl2": "unknown"
+      },
+      "supportEvidence": {
+        "source": "declared_source_contract_index",
+        "confidence": "repo_claim",
+        "verificationCommand": "node scripts/run-node-tests.mjs tests/governance/dependency-agent-discovery.test.mjs --concurrency 1",
+        "lastVerifiedAt": null
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=kim-service]"
+    },
     {
       "id": "agent-teams-playbook",
       "name": "agent-teams-playbook",
       "source": {
         "type": "github",
-        "uri": "https://github.com/KimYx0207/agent-teams-playbook",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
         "localPath": null,
+        "subdir": "skills/agent-teams-playbook",
         "inspectionStatus": "installed_skill_candidate",
-        "lastInspectedAt": "2026-06-14"
+        "lastInspectedAt": null,
+        "history": [
+          {
+            "type": "github",
+            "uri": "https://github.com/KimYx0207/agent-teams-playbook",
+            "localPath": null,
+            "inspectionStatus": "installed_skill_candidate",
+            "lastInspectedAt": "2026-06-14"
+          }
+        ]
       },
       "capabilityCard": {
         "oneLine": "Parallel agent-team orchestration playbook.",
@@ -92,7 +226,7 @@
         "failureCount": 0,
         "lastFailureReason": null,
         "nextRunHints": [
-          "Use only after Thinking when 2+ executable worker lanes exist.",
+          "Optional after Thinking when it materially improves a 2+ ready-lane stage DAG; native Agent/Task/spawn_agent fan-out does not depend on it.",
           "Record agent_teams_playbook as selected_not_invoked unless live Skill/Agent Team/spawn_agent evidence is attached."
         ]
       },
@@ -100,7 +234,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "partial"
+        "openclaw": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -113,7 +249,8 @@
         "confidence": "validated_default_route",
         "verificationCommand": "npm run meta:prd:product-experience:validate",
         "lastVerifiedAt": "2026-06-14"
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=agent-teams-playbook]"
     },
     {
       "id": "meta-kim-runtime",
@@ -210,7 +347,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "unknown"
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -223,17 +362,28 @@
         "confidence": "repo_claim",
         "verificationCommand": "npm run meta:deps:compat",
         "lastVerifiedAt": null
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=meta-kim-runtime]"
     },
     {
       "id": "findskill",
       "name": "findskill",
       "source": {
         "type": "github",
-        "uri": "${skillOwner}/findskill",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
         "localPath": null,
+        "subdir": "skills/find-skill",
         "inspectionStatus": "external_reference",
-        "lastInspectedAt": null
+        "lastInspectedAt": null,
+        "history": [
+          {
+            "type": "github",
+            "uri": "${skillOwner}/findskill",
+            "localPath": null,
+            "inspectionStatus": "external_reference",
+            "lastInspectedAt": null
+          }
+        ]
       },
       "capabilityCard": {
         "oneLine": "Dependency capability for findskill.",
@@ -261,7 +411,7 @@
         "risk": [
           "third_party_skill_requires_trust_review"
         ],
-        "routeEligibility": "external_reference",
+        "routeEligibility": "reference_only",
         "notFor": [
           "automatic execution without trust review"
         ],
@@ -306,7 +456,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "partial"
+        "openclaw": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -319,17 +471,28 @@
         "confidence": "repo_claim",
         "verificationCommand": "npm run meta:deps:compat",
         "lastVerifiedAt": null
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=findskill]"
     },
     {
       "id": "hookprompt",
       "name": "hookprompt",
       "source": {
         "type": "github",
-        "uri": "${skillOwner}/HookPrompt",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
         "localPath": null,
+        "subdir": "hooks/hookprompt",
         "inspectionStatus": "external_reference",
-        "lastInspectedAt": null
+        "lastInspectedAt": null,
+        "history": [
+          {
+            "type": "github",
+            "uri": "${skillOwner}/HookPrompt",
+            "localPath": null,
+            "inspectionStatus": "external_reference",
+            "lastInspectedAt": null
+          }
+        ]
       },
       "capabilityCard": {
         "oneLine": "Dependency capability for hookprompt.",
@@ -402,7 +565,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "unknown"
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -415,7 +580,8 @@
         "confidence": "repo_claim",
         "verificationCommand": "npm run meta:deps:compat",
         "lastVerifiedAt": null
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=hookprompt]"
     },
     {
       "id": "superpowers",
@@ -498,7 +664,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "partial"
+        "openclaw": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -511,7 +679,8 @@
         "confidence": "repo_claim",
         "verificationCommand": "npm run meta:deps:compat",
         "lastVerifiedAt": null
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=superpowers]"
     },
     {
       "id": "ecc",
@@ -594,7 +763,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "unknown"
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -607,7 +778,8 @@
         "confidence": "repo_claim",
         "verificationCommand": "npm run meta:deps:compat",
         "lastVerifiedAt": null
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=ecc]"
     },
     {
       "id": "planning-with-files",
@@ -616,68 +788,64 @@
         "type": "github",
         "uri": "OthmanAdi/planning-with-files",
         "localPath": null,
-        "inspectionStatus": "external_reference",
-        "lastInspectedAt": null
+        "inspectionStatus": "absorbed_removed_historical_reference",
+        "lastInspectedAt": "2026-08-30"
       },
       "capabilityCard": {
-        "oneLine": "Dependency capability for planning-with-files.",
+        "oneLine": "Historical evidence for the retired planning-with-files dependency; runtime planning is owned by Meta_Kim planning-continuity.",
         "canDo": [
-          "external_capability"
+          "historical_reference_evidence"
         ],
         "canNotDo": [
-          "automatic execution without trust review"
+          "runtime execution",
+          "installation",
+          "automatic routing"
         ],
         "inputContract": {
           "requires": [
-            "matched task shape",
-            "trust review when third-party"
+            "dependency absorption audit or provenance review"
           ]
         },
         "outputContract": {
           "produces": [
-            "skill-specific artifact or reference evidence"
+            "source provenance and absorption evidence"
           ]
         },
-        "triggerConditions": [
-          "planning-with-files"
-        ],
-        "verificationMethod": "npm run meta:deps:compat",
+        "triggerConditions": [],
+        "verificationMethod": "npm run meta:deps:absorption:validate",
         "risk": [
           "third_party_skill_requires_trust_review"
         ],
-        "routeEligibility": "external_reference",
+        "routeEligibility": "historical_evidence_only",
         "notFor": [
-          "automatic execution without trust review"
+          "runtime execution",
+          "installation",
+          "automatic routing"
         ],
         "taskShapes": [
-          "external_capability"
+          "historical_reference"
         ],
         "writebackKey": "dependency:planning-with-files",
         "verificationMethods": [
-          "npm run meta:deps:compat"
+          "npm run meta:deps:absorption:validate"
         ]
       },
       "interface": {
-        "invokeAs": "reference",
+        "invokeAs": "historical_reference",
         "invocationPath": null,
-        "preferredWeaponId": "planning-with-files-skill",
+        "preferredWeaponId": null,
         "requiredFiles": [],
         "requiredEnv": [],
-        "requiredRuntime": [
-          "claude_code",
-          "codex",
-          "cursor",
-          "openclaw"
-        ]
+        "requiredRuntime": []
       },
       "scoring": {
-        "overall": 62
+        "overall": 0
       },
       "reusePolicy": {
         "reuseWhenScoreAbove": 80,
         "requiresHumanConfirmationAboveRisk": "medium",
-        "writebackOnUse": true,
-        "recordUsageStats": true
+        "writebackOnUse": false,
+        "recordUsageStats": false
       },
       "evolution": {
         "usageCount": 0,
@@ -687,23 +855,26 @@
         "nextRunHints": []
       },
       "runtimeSupport": {
-        "claude_code": "partial",
-        "codex": "partial",
-        "cursor": "partial",
-        "openclaw": "partial"
+        "claude_code": "blocked",
+        "codex": "blocked",
+        "cursor": "blocked",
+        "openclaw": "blocked",
+        "gemini": "blocked",
+        "zcode": "blocked"
       },
       "osSupport": {
-        "macos": "partial",
-        "windows": "partial",
-        "linux": "partial",
-        "wsl2": "partial"
+        "macos": "blocked",
+        "windows": "blocked",
+        "linux": "blocked",
+        "wsl2": "blocked"
       },
       "supportEvidence": {
-        "source": "repo_claim",
-        "confidence": "repo_claim",
-        "verificationCommand": "npm run meta:deps:compat",
-        "lastVerifiedAt": null
-      }
+        "source": "independent_absorption_review",
+        "confidence": "verified",
+        "verificationCommand": "npm run meta:deps:absorption:validate",
+        "lastVerifiedAt": "2026-08-30"
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=planning-with-files]"
     },
     {
       "id": "cli-anything",
@@ -786,7 +957,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "partial"
+        "openclaw": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -799,7 +972,8 @@
         "confidence": "repo_claim",
         "verificationCommand": "npm run meta:deps:compat",
         "lastVerifiedAt": null
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=cli-anything]"
     },
     {
       "id": "gstack",
@@ -809,15 +983,16 @@
         "uri": "garrytan/gstack",
         "localPath": null,
         "inspectionStatus": "inspected_reference",
-        "lastInspectedAt": "2026-06-01"
+        "lastInspectedAt": "2026-11-12"
       },
       "capabilityCard": {
-        "oneLine": "Reference capability catalog for generated SKILL.md providers, host projections, browser/QA/review workflows, and agent-facing metadata.",
+        "oneLine": "Reference capability catalog for generated SKILL.md providers, host projections, browser/QA/review workflows, actionable error recovery, and agent-facing metadata.",
         "canDo": [
           "model capability-provider-first design",
           "show generated SKILL.md catalog patterns",
           "show host-specific projection config for Claude, Codex, Cursor, and OpenClaw",
-          "provide reference evidence for keeping concrete work in skill/runtime context instead of durable agent identity"
+          "provide reference evidence for keeping concrete work in skill/runtime context instead of durable agent identity",
+          "review errors for an explicit cause, safe next step, receipt state and verification"
         ],
         "canNotDo": [
           "automatic execution without trust review",
@@ -842,13 +1017,14 @@
           "gstack",
           "skill catalog design",
           "capability provider before execution agent",
-          "host projection pattern"
+          "host projection pattern",
+          "actionable error recovery and developer experience review"
         ],
         "verificationMethod": "npm run meta:deps:compat",
         "risk": [
           "third_party_skill_requires_trust_review"
         ],
-        "routeEligibility": "external_reference",
+        "routeEligibility": "reference_only",
         "notFor": [
           "automatic execution without trust review",
           "direct agent creation without existing provider discovery"
@@ -896,7 +1072,9 @@
         "claude_code": "partial",
         "codex": "partial",
         "cursor": "partial",
-        "openclaw": "partial"
+        "openclaw": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -908,77 +1086,108 @@
         "source": "gh_readonly_inspection",
         "confidence": "verified_local",
         "verificationCommand": "gh repo view garrytan/gstack --json nameWithOwner,description,url,defaultBranchRef && gh api repos/garrytan/gstack/git/trees/HEAD?recursive=1 --jq '.tree[].path'",
-        "lastVerifiedAt": "2026-06-01",
+        "lastVerifiedAt": "2026-11-12",
         "evidence": [
-          "Repository description presents gstack as 23 opinionated tools for CEO, Designer, Eng Manager, Release Manager, Doc Engineer, and QA roles.",
-          "Tree inspection found many generated SKILL.md / SKILL.md.tmpl providers and only agents/openai.yaml as interface metadata.",
-          "Host configs under hosts/ define Codex, Claude, Cursor, and OpenClaw projection rules, path rewrites, frontmatter policy, and suppressed resolvers."
+          "Historical source inspection (2026-06-01): Repository description presents gstack as 23 opinionated tools for CEO, Designer, Eng Manager, Release Manager, Doc Engineer, and QA roles.",
+          "Historical source inspection (2026-06-01): Tree inspection found many generated SKILL.md / SKILL.md.tmpl providers and only agents/openai.yaml as interface metadata.",
+          "Historical source inspection (2026-06-01): Host configs under hosts/ define Codex, Claude, Cursor, and OpenClaw projection rules, path rewrites, frontmatter policy, and suppressed resolvers.",
+          "Current method inspection: https://github.com/garrytan/gstack/blob/0ead11c8e20a82e249f36c3abf89599dfe602324/devex-review/SKILL.md distinguishes observed error paths from inferred behavior and requires actionable recovery, verification and redaction. This is source-reference evidence, not host execution acceptance."
         ]
-      }
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=gstack]"
     },
     {
-      "id": "skill-creator",
-      "name": "skill-creator",
+      "id": "meta-skill-creator",
+      "name": "meta-skill-creator",
       "source": {
         "type": "github",
-        "uri": "anthropics/skills",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
         "localPath": null,
-        "inspectionStatus": "external_reference",
-        "lastInspectedAt": null
+        "subdir": "skills/meta-skill-creator",
+        "inspectionStatus": "inspected_reference",
+        "lastInspectedAt": null,
+        "history": [
+          {
+            "type": "github",
+            "uri": "https://github.com/KimYx0207/meta-skill-creator",
+            "localPath": null,
+            "inspectionStatus": "inspected_reference",
+            "lastInspectedAt": "2026-07-11",
+            "revision": "ace057d771c1baaa58811a00a2cbbdcad30d8e72",
+            "subdir": "skills/meta-skill-creator"
+          }
+        ]
       },
       "capabilityCard": {
-        "oneLine": "Dependency capability for skill-creator.",
+        "oneLine": "Design, refactor, review, and validate reusable Agent Skill packages with evidence-backed release gates.",
         "canDo": [
-          "external_capability"
+          "skill_package_design",
+          "skill_package_refactor",
+          "skill_package_review",
+          "skill_package_validation"
         ],
         "canNotDo": [
-          "automatic execution without trust review"
+          "turn one-off prompts into durable skills without gap proof",
+          "claim runtime or release proof from structural validation alone"
         ],
         "inputContract": {
           "requires": [
-            "matched task shape",
-            "trust review when third-party"
+            "repeatable workflow or existing skill package",
+            "target runtime and desired delivery boundary",
+            "evidence and acceptance criteria"
           ]
         },
         "outputContract": {
           "produces": [
-            "skill-specific artifact or reference evidence"
+            "reviewable Agent Skill package",
+            "validation evidence",
+            "release readiness and writeback decision"
           ]
         },
         "triggerConditions": [
-          "skill-creator"
+          "meta-skill-creator",
+          "create, refactor, review, or validate a reusable skill package"
         ],
         "verificationMethod": "npm run meta:deps:compat",
         "risk": [
-          "third_party_skill_requires_trust_review"
+          "external skill content requires trust review before execution",
+          "upstream main can change after the inspected revision"
         ],
-        "routeEligibility": "external_reference",
+        "routeEligibility": "installed_skill_candidate",
         "notFor": [
-          "automatic execution without trust review"
+          "one-off prompt rewriting",
+          "automatic durable writeback without review"
         ],
         "taskShapes": [
-          "external_capability"
+          "skill_creation",
+          "skill_refactor",
+          "skill_review",
+          "skill_release_preparation"
         ],
-        "writebackKey": "dependency:skill-creator",
+        "writebackKey": "dependency:meta-skill-creator",
         "verificationMethods": [
-          "npm run meta:deps:compat"
+          "npm run meta:deps:compat",
+          "python scripts/check_meta_skill_package.py .",
+          "python scripts/check_closed_loop.py ."
         ]
       },
       "interface": {
-        "invokeAs": "reference",
-        "invocationPath": null,
-        "preferredWeaponId": "skill-creator-skill",
-        "requiredFiles": [],
+        "invokeAs": "skill",
+        "invocationPath": "runtime-discovered meta-skill-creator skill root",
+        "preferredWeaponId": "meta-skill-creator-skill",
+        "requiredFiles": [
+          "SKILL.md",
+          "scripts/check_meta_skill_package.py",
+          "scripts/check_closed_loop.py"
+        ],
         "requiredEnv": [],
         "requiredRuntime": [
           "claude_code",
-          "codex",
-          "cursor",
-          "openclaw"
+          "codex"
         ]
       },
       "scoring": {
-        "overall": 62
+        "overall": 88
       },
       "reusePolicy": {
         "reuseWhenScoreAbove": 80,
@@ -991,13 +1200,18 @@
         "successCount": 0,
         "failureCount": 0,
         "lastFailureReason": null,
-        "nextRunHints": []
+        "nextRunHints": [
+          "Prefer meta-skill-creator for skill package creation routes.",
+          "Keep structural checks separate from runtime and human acceptance evidence."
+        ]
       },
       "runtimeSupport": {
         "claude_code": "partial",
         "codex": "partial",
-        "cursor": "partial",
-        "openclaw": "partial"
+        "cursor": "unknown",
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
       },
       "osSupport": {
         "macos": "partial",
@@ -1006,11 +1220,557 @@
         "wsl2": "partial"
       },
       "supportEvidence": {
-        "source": "repo_claim",
-        "confidence": "repo_claim",
+        "source": "github_source_inspection_and_local_runtime_home_presence",
+        "confidence": "inspected_source_and_local_presence",
         "verificationCommand": "npm run meta:deps:compat",
-        "lastVerifiedAt": null
-      }
+        "lastVerifiedAt": "2026-07-11",
+        "evidence": [
+          "GitHub HEAD ace057d771c1baaa58811a00a2cbbdcad30d8e72 contains skills/meta-skill-creator/SKILL.md and its package validators.",
+          "Upstream README documents global Claude Code and Codex installation paths.",
+          "No upstream Cursor or OpenClaw installation contract was found, so those runtimes remain unknown."
+        ]
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=meta-skill-creator]"
+    },
+    {
+      "id": "goalpro",
+      "name": "GoalPro",
+      "source": {
+        "type": "github",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
+        "localPath": null,
+        "subdir": "skills/goalpro",
+        "inspectionStatus": "inspected_reference",
+        "lastInspectedAt": null,
+        "history": [
+          {
+            "type": "github",
+            "uri": "https://github.com/KimYx0207/GoalPro",
+            "localPath": null,
+            "inspectionStatus": "inspected_reference",
+            "lastInspectedAt": "2026-07-11",
+            "revision": "39adc8db765e0e4ad4df8d4ce02e7059fed69f26",
+            "subdir": ".agents/skills/goalpro"
+          }
+        ]
+      },
+      "capabilityCard": {
+        "oneLine": "Prompt-only Goal Contract skill that turns fuzzy or strategic work into Goal Prompt + Loop Prompt before execution.",
+        "canDo": [
+          "goal_contract",
+          "intent_amplification",
+          "prompt_only_task_contract",
+          "loop_prompt_continuation_protocol"
+        ],
+        "canNotDo": [
+          "execute the generated goal",
+          "create automation or scheduler",
+          "commit or publish changes",
+          "replace Meta_Kim execution governance"
+        ],
+        "inputContract": {
+          "requires": [
+            "user goal or fuzzy task",
+            "desired audience or executor when known",
+            "scope and constraints when available"
+          ]
+        },
+        "outputContract": {
+          "produces": [
+            "Goal Prompt",
+            "Loop Prompt",
+            "scope",
+            "non-goals",
+            "acceptance evidence",
+            "stop and resume conditions"
+          ]
+        },
+        "triggerConditions": [
+          "user asks for a better goal prompt",
+          "fuzzy goal must become an execution contract",
+          "Loop Prompt or post-result continuation protocol is requested",
+          "durable task needs prompt-only handoff before execution"
+        ],
+        "verificationMethod": "npm run meta:deps:compat",
+        "risk": [
+          "prompt-only boundary must stop after producing the contract unless the user separately authorizes execution",
+          "Loop Prompt is not an automation runtime"
+        ],
+        "routeEligibility": "installed_skill_candidate",
+        "notFor": [
+          "direct file mutation",
+          "test execution",
+          "agent orchestration",
+          "scheduler creation",
+          "release or publish operations"
+        ],
+        "taskShapes": [
+          "goal_contract",
+          "intent_amplification",
+          "prompt_contract",
+          "loop_prompt"
+        ],
+        "writebackKey": "dependency:goalpro",
+        "verificationMethods": [
+          "npm run meta:deps:compat",
+          "npm run meta:providers:validate"
+        ]
+      },
+      "interface": {
+        "invokeAs": "skill",
+        "invocationPath": "runtime-discovered goalpro skill root",
+        "preferredWeaponId": "goalpro-skill",
+        "requiredFiles": [
+          "SKILL.md"
+        ],
+        "requiredEnv": [],
+        "requiredRuntime": [
+          "claude_code",
+          "codex",
+          "openclaw",
+          "cursor"
+        ]
+      },
+      "scoring": {
+        "overall": 88
+      },
+      "reusePolicy": {
+        "reuseWhenScoreAbove": 80,
+        "requiresHumanConfirmationAboveRisk": "medium",
+        "writebackOnUse": true,
+        "recordUsageStats": true
+      },
+      "evolution": {
+        "usageCount": 0,
+        "successCount": 0,
+        "failureCount": 0,
+        "lastFailureReason": null,
+        "nextRunHints": [
+          "Use in Critical before execution when the user needs a prompt-only goal contract.",
+          "Do not execute the generated Goal Prompt or Loop Prompt without separate user authorization."
+        ]
+      },
+      "runtimeSupport": {
+        "claude_code": "partial",
+        "codex": "partial",
+        "openclaw": "partial",
+        "cursor": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
+      },
+      "osSupport": {
+        "macos": "partial",
+        "windows": "partial",
+        "linux": "partial",
+        "wsl2": "partial"
+      },
+      "supportEvidence": {
+        "source": "local_source_inspection_and_memory",
+        "confidence": "inspected_source_and_local_presence",
+        "verificationCommand": "npm run meta:deps:compat",
+        "lastVerifiedAt": "2026-07-11",
+        "evidence": [
+          "GoalPro revision 39adc8db765e0e4ad4df8d4ce02e7059fed69f26 contains .agents/skills/goalpro/SKILL.md with a prompt-only Goal Prompt + Loop Prompt contract.",
+          "The inspected GoalPro HEAD was 39adc8db765e0e4ad4df8d4ce02e7059fed69f26."
+        ]
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=goalpro]"
+    },
+    {
+      "id": "kim-decision",
+      "name": "Kim_Decision",
+      "source": {
+        "type": "github",
+        "uri": "https://github.com/KimYx0207/Kim_Service",
+        "localPath": null,
+        "subdir": "skills/kim-decision",
+        "inspectionStatus": "methods_internalized_install_retired",
+        "lastInspectedAt": "2026-11-10",
+        "history": [
+          {
+            "type": "github",
+            "uri": "https://github.com/KimYx0207/Kim_Decision",
+            "localPath": null,
+            "inspectionStatus": "inspected_reference",
+            "lastInspectedAt": "2026-07-11",
+            "revision": "32208316c1900ee25fcc56f255ad178281a7da98",
+            "subdir": ".agents/skills/Kim"
+          }
+        ]
+      },
+      "capabilityCard": {
+        "oneLine": "Reference-only decision protocol for real-intent lock, path selection, minimum test, and pass/kill judgment.",
+        "canDo": [
+          "decision_protocol_reference",
+          "real_intent_judgment",
+          "path_selection",
+          "minimum_test_design",
+          "pass_kill_gate"
+        ],
+        "canNotDo": [
+          "direct code implementation",
+          "code executor",
+          "runtime hook install",
+          "MCP server startup",
+          "security approval",
+          "universal owner"
+        ],
+        "inputContract": {
+          "requires": [
+            "decision question",
+            "evidence labels",
+            "constraints",
+            "candidate paths when available"
+          ]
+        },
+        "outputContract": {
+          "produces": [
+            "decision rationale",
+            "selected path",
+            "minimum test",
+            "passSignal",
+            "killSignal"
+          ]
+        },
+        "triggerConditions": [
+          "route choice is branch-changing",
+          "Critical needs real-intent judgment",
+          "Thinking needs path selection",
+          "Review needs pass/kill judgment"
+        ],
+        "verificationMethod": "npm run meta:deps:compat",
+        "risk": [
+          "reference_only",
+          "not_for_code_execution",
+          "must not become implementation owner or callable dependency"
+        ],
+        "routeEligibility": "reference_only",
+        "notFor": [
+          "code execution",
+          "implementation owner",
+          "security approval",
+          "runtime install authority",
+          "release authority"
+        ],
+        "taskShapes": [
+          "strategy_product_decision",
+          "intent_acceptance",
+          "path_selection",
+          "review_pass_kill"
+        ],
+        "writebackKey": "dependency:kim-decision-state-machine",
+        "verificationMethods": [
+          "npm run meta:deps:compat",
+          "npm run meta:route:validate"
+        ]
+      },
+      "interface": {
+        "invokeAs": "reference",
+        "invocationPath": null,
+        "preferredWeaponId": "meta-kim-decision-patterns",
+        "requiredFiles": [
+          "SKILL.md"
+        ],
+        "requiredEnv": [],
+        "requiredRuntime": [
+          "claude_code",
+          "codex",
+          "openclaw",
+          "cursor"
+        ]
+      },
+      "scoring": {
+        "overall": 72
+      },
+      "reusePolicy": {
+        "reuseWhenScoreAbove": 80,
+        "requiresHumanConfirmationAboveRisk": "medium",
+        "writebackOnUse": true,
+        "recordUsageStats": true
+      },
+      "evolution": {
+        "usageCount": 0,
+        "successCount": 0,
+        "failureCount": 0,
+        "lastFailureReason": null,
+        "nextRunHints": [
+          "Use as decision reference in Critical, Thinking, and Review only.",
+          "Never route Kim_Decision as an implementation worker or code executor."
+        ]
+      },
+      "runtimeSupport": {
+        "claude_code": "partial",
+        "codex": "partial",
+        "openclaw": "partial",
+        "cursor": "partial",
+        "gemini": "unknown",
+        "zcode": "unknown"
+      },
+      "osSupport": {
+        "macos": "partial",
+        "windows": "partial",
+        "linux": "partial",
+        "wsl2": "partial"
+      },
+      "supportEvidence": {
+        "source": "local_source_inspection_and_internalized_patterns",
+        "confidence": "inspected_source_and_reference_only",
+        "verificationCommand": "npm run meta:deps:compat",
+        "lastVerifiedAt": "2026-07-11",
+        "evidence": [
+          "A local sibling inspection found the Kim_Decision skill source at its repository skill root, but Meta_Kim keeps it reference-only.",
+          "config/governance/decision-pattern-catalog.json remains the internalized decision-pattern source for execution routing."
+        ]
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=kim-decision]"
+    },
+    {
+      "id": "agent-desktop",
+      "name": "agent-desktop",
+      "source": {
+        "type": "github",
+        "uri": "https://github.com/vercel-labs/agent-desktop",
+        "localPath": null,
+        "inspectionStatus": "verified_official_documentation",
+        "lastInspectedAt": "2026-11-11"
+      },
+      "capabilityType": "computer_use",
+      "interfaces": [
+        {
+          "type": "cli",
+          "transport": "local_process",
+          "command": "agent-desktop"
+        },
+        {
+          "type": "mcp",
+          "transport": "stdio",
+          "command": "agent-desktop",
+          "args": [
+            "mcp"
+          ],
+          "versionRequirement": {
+            "minimum": "1.2.0",
+            "verification": "requires_host_version_probe"
+          },
+          "sourceRef": "https://github.com/vercel-labs/agent-desktop/tree/v1.2.0"
+        },
+        {
+          "type": "c_library",
+          "transport": "in_process"
+        }
+      ],
+      "capabilityCard": {
+        "oneLine": "Desktop control through upstream CLI, native stdio MCP (version 1.2.0 or later), or C library; no embedded model.",
+        "taskShapes": [
+          "computer_use"
+        ],
+        "triggerConditions": [
+          "desktop application interaction",
+          "computer_use"
+        ],
+        "inputContract": {
+          "requires": [
+            "task-scoped goal and permission boundary",
+            "installed engine and actual native host tool",
+            "fresh snapshot before interaction",
+            "for native MCP: actual agent-desktop version 1.2.0 or later, host registration and a successful task-scoped probe"
+          ]
+        },
+        "outputContract": {
+          "produces": [
+            "native observation/action results",
+            "fresh task verification or explicit capability gap"
+          ]
+        },
+        "canDo": [
+          "Desktop control through OS accessibility snapshots and element references; no embedded model."
+        ],
+        "canNotDo": [
+          "grant model or OS permissions",
+          "replace the host planner or Meta scheduler",
+          "prove live execution by installation"
+        ],
+        "notFor": [
+          "automatic installation during discovery",
+          "a second governance state machine",
+          "custom MCP wrapper presented as upstream behavior"
+        ],
+        "verificationMethod": "node --test tests/governance/optional-engine-discovery.test.mjs",
+        "verificationMethods": [
+          "node --test tests/governance/optional-engine-discovery.test.mjs",
+          "agent-desktop --version",
+          "agent-desktop status"
+        ],
+        "risk": [
+          "observations can contain private desktop/browser content",
+          "external actions require current task authorization",
+          "PATH presence is not version, permission, session or outcome proof"
+        ],
+        "routeEligibility": "needs_probe",
+        "writebackKey": "dependency:agent-desktop"
+      },
+      "interface": {
+        "invokeAs": "command",
+        "invocationPath": "agent-desktop",
+        "requiredFiles": [],
+        "requiredEnv": [],
+        "requiredRuntime": [],
+        "executableDiscovery": {
+          "command": "agent-desktop",
+          "policy": "path_presence_only",
+          "automaticInstall": false,
+          "automaticExecution": false
+        }
+      },
+      "runtimeSupport": {
+        "claude_code": "unknown",
+        "codex": "unknown",
+        "cursor": "unknown",
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
+      },
+      "osSupport": {
+        "macos": "unknown",
+        "windows": "unknown",
+        "linux": "unknown",
+        "wsl2": "unknown"
+      },
+      "supportEvidence": {
+        "source": "https://github.com/vercel-labs/agent-desktop",
+        "confidence": "verified_docs",
+        "lastVerifiedAt": "2026-11-11",
+        "verificationCommand": null,
+        "liveVerified": false
+      },
+      "scoring": {
+        "overall": 0
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=agent-desktop]"
+    },
+    {
+      "id": "agent-browser",
+      "name": "agent-browser",
+      "source": {
+        "type": "github",
+        "uri": "https://github.com/vercel-labs/agent-browser",
+        "localPath": null,
+        "inspectionStatus": "verified_official_documentation",
+        "lastInspectedAt": "2026-11-10"
+      },
+      "capabilityType": "browser_automation",
+      "interfaces": [
+        {
+          "type": "cli",
+          "transport": "local_process",
+          "command": "agent-browser"
+        },
+        {
+          "type": "mcp",
+          "transport": "stdio",
+          "command": "agent-browser",
+          "args": [
+            "mcp"
+          ]
+        },
+        {
+          "type": "skill",
+          "transport": "instruction_loading",
+          "command": "agent-browser",
+          "args": [
+            "skills",
+            "get",
+            "core"
+          ]
+        }
+      ],
+      "capabilityCard": {
+        "oneLine": "Browser automation with snapshots and element references; one upstream engine offers CLI and native stdio MCP.",
+        "taskShapes": [
+          "browser_automation"
+        ],
+        "triggerConditions": [
+          "browser interaction and QA",
+          "browser_automation"
+        ],
+        "inputContract": {
+          "requires": [
+            "task-scoped goal and permission boundary",
+            "installed engine and actual native host tool",
+            "fresh snapshot before interaction"
+          ]
+        },
+        "outputContract": {
+          "produces": [
+            "native observation/action results",
+            "fresh task verification or explicit capability gap"
+          ]
+        },
+        "canDo": [
+          "Browser automation with snapshots and element references; one upstream engine offers CLI and native stdio MCP."
+        ],
+        "canNotDo": [
+          "grant model or OS permissions",
+          "replace the host planner or Meta scheduler",
+          "prove live execution by installation"
+        ],
+        "notFor": [
+          "automatic installation during discovery",
+          "a second governance state machine",
+          "custom MCP wrapper presented as upstream behavior"
+        ],
+        "verificationMethod": "node --test tests/governance/optional-engine-discovery.test.mjs",
+        "verificationMethods": [
+          "node --test tests/governance/optional-engine-discovery.test.mjs",
+          "agent-browser --version",
+          "agent-browser skills get core"
+        ],
+        "risk": [
+          "observations can contain private desktop/browser content",
+          "external actions require current task authorization",
+          "PATH presence is not version, permission, session or outcome proof"
+        ],
+        "routeEligibility": "needs_probe",
+        "writebackKey": "dependency:agent-browser"
+      },
+      "interface": {
+        "invokeAs": "command",
+        "invocationPath": "agent-browser",
+        "requiredFiles": [],
+        "requiredEnv": [],
+        "requiredRuntime": [],
+        "executableDiscovery": {
+          "command": "agent-browser",
+          "policy": "path_presence_only",
+          "automaticInstall": false,
+          "automaticExecution": false
+        }
+      },
+      "runtimeSupport": {
+        "claude_code": "unknown",
+        "codex": "unknown",
+        "cursor": "unknown",
+        "openclaw": "unknown",
+        "gemini": "unknown",
+        "zcode": "unknown"
+      },
+      "osSupport": {
+        "macos": "unknown",
+        "windows": "unknown",
+        "linux": "unknown",
+        "wsl2": "unknown"
+      },
+      "supportEvidence": {
+        "source": "https://github.com/vercel-labs/agent-browser",
+        "confidence": "verified_docs",
+        "lastVerifiedAt": "2026-11-10",
+        "verificationCommand": null,
+        "liveVerified": false
+      },
+      "scoring": {
+        "overall": 0
+      },
+      "integrationDispositionRef": "config/contracts/dependency-absorption-contract.json#currentReview.items[id=agent-browser]"
     }
   ]
 }

@@ -1,14 +1,129 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { recordSetupRuntimeExecutableBindings } from "../../scripts/runtime-executable-binding.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.join(import.meta.dirname, "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "scripts", "sync-global-meta-theory.mjs");
+const RUNTIME_SYNC_SCRIPT = path.join(REPO_ROOT, "scripts", "sync-runtimes.mjs");
+const PROJECTION_PACKAGE_RECEIPT_PURPOSE =
+  "primary-runtime-global-projection-package-runtime-bundle:receipt";
+
+function normalizedPathText(value) {
+  const normalized = String(value).replaceAll("\\", "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function stablePackageRootFromManifest(root) {
+  const manifest = JSON.parse(
+    await readFile(path.join(root, ".meta-kim", "install-manifest.json"), "utf8"),
+  );
+  const receiptEntry = manifest.entries.find((entry) =>
+    entry.source === "sync-global-meta-theory" &&
+    entry.purpose === PROJECTION_PACKAGE_RECEIPT_PURPOSE &&
+    entry.kind === "file"
+  );
+  assert.ok(receiptEntry, "global manifest must identify the stable projection package receipt");
+  const receipt = JSON.parse(await readFile(receiptEntry.path, "utf8"));
+  return path.resolve(path.dirname(receiptEntry.path), receipt.packageRootRelative);
+}
+
+function assertUsesStablePackageRoot(content, stablePackageRoot, label) {
+  const normalized = normalizedPathText(content);
+  assert.ok(
+    normalized.includes(normalizedPathText(stablePackageRoot)),
+    `${label} must reference the manifest-authoritative stable package root`,
+  );
+  assert.equal(
+    normalized.includes(normalizedPathText(REPO_ROOT)),
+    false,
+    `${label} must not retain the source checkout root`,
+  );
+}
+
+function hookCommands(config) {
+  return Object.values(commandsByEvent(config)).flat();
+}
+
+// Two block shapes live in these files: `{matcher, hooks:[...]}` and the flat
+// `{command, timeout}` Cursor uses. Walking only one of them is how a dropped
+// registration reads as zero instead of as a failure.
+function commandsByEvent(config) {
+  const byEvent = {};
+  for (const [event, blocks] of Object.entries(config.hooks ?? {})) {
+    const commands = [];
+    for (const block of Array.isArray(blocks) ? blocks : [blocks]) {
+      if (typeof block?.command === "string") {
+        commands.push(block.command);
+      }
+      for (const hook of block?.hooks ?? []) {
+        if (typeof hook?.command === "string") {
+          commands.push(hook.command);
+        }
+      }
+    }
+    byEvent[event] = commands;
+  }
+  return byEvent;
+}
+
+function isManagedGlobalCommand(command) {
+  const normalized = command.replaceAll("\\", "/");
+  return (
+    normalized.includes("hooks/meta-kim/") ||
+    normalized.includes("/hooks/hookprompt-adapter.mjs")
+  );
+}
+
+function managedCommandsByEvent(config) {
+  const byEvent = {};
+  for (const [event, commands] of Object.entries(commandsByEvent(config))) {
+    const managed = commands.filter(isManagedGlobalCommand);
+    if (managed.length > 0) {
+      byEvent[event] = managed;
+    }
+  }
+  return byEvent;
+}
+
+const MANAGED_HOOKS_JSON_EVENT_MINIMUMS = {
+  codex: {
+    UserPromptSubmit: 3,
+    PreToolUse: 3,
+    PostToolUse: 1,
+    SubagentStart: 1,
+    SubagentStop: 1,
+    Skill: 1,
+    SessionStart: 1,
+    Stop: 2,
+  },
+  cursor: {
+    beforeSubmitPrompt: 3,
+    preToolUse: 3,
+    postToolUse: 1,
+    subagentStart: 1,
+    stop: 2,
+    sessionStart: 1,
+  },
+};
+
+function assertHookConfigUsesStablePackageRoot(config, stablePackageRoot, label) {
+  const commands = hookCommands(config).map(normalizedPathText);
+  assert.ok(
+    commands.some((command) => command.includes(normalizedPathText(stablePackageRoot))),
+    `${label} must reference the manifest-authoritative stable package root`,
+  );
+  assert.equal(
+    commands.some((command) => command.includes(normalizedPathText(REPO_ROOT))),
+    false,
+    `${label} must not retain the source checkout root`,
+  );
+}
 
 async function withTempRuntimeHomes(fn) {
   const root = await mkdtemp(path.join(os.tmpdir(), "meta-kim-global-sync-"));
@@ -29,18 +144,197 @@ async function withTempRuntimeHomes(fn) {
 }
 
 async function runScript(args, env) {
-  return execFileAsync(process.execPath, [SCRIPT, ...args], {
+  if (args.includes("--check")) {
+    recordSetupRuntimeExecutableBindings({
+      roots: [path.resolve(env.HOME)],
+      targets: ["claude", "codex"],
+      pathResolver: () => process.execPath,
+    });
+  }
+  const isolatedArgs = args.includes("--skip-durable-mcp")
+    ? args
+    : [...args, "--skip-durable-mcp"];
+  return execFileAsync(process.execPath, [SCRIPT, ...isolatedArgs], {
     cwd: REPO_ROOT,
     env,
     maxBuffer: 1024 * 1024 * 8,
   });
 }
 
+async function runRuntimeSync(args, env) {
+  return execFileAsync(process.execPath, [RUNTIME_SYNC_SCRIPT, ...args], {
+    cwd: REPO_ROOT,
+    env,
+    maxBuffer: 1024 * 1024 * 8,
+  });
+}
+
+// A failing --check exits 1, which rejects execFile before any assertion runs.
+// Capturing the exit code keeps the reported check line assertable on both sides.
+async function runScriptCapturingExit(args, env) {
+  try {
+    const result = await runScript(args, env);
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
+  } catch (error) {
+    return {
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? "",
+      exitCode: typeof error.code === "number" ? error.code : 1,
+    };
+  }
+}
+
 describe("sync-global-meta-theory hook policy", () => {
+  test("help exits successfully without resolving or writing runtime homes", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      for (const flag of ["--help", "-h"]) {
+        const result = await runScript([flag], env);
+        assert.match(result.stdout, /Usage: node scripts\/sync-global-meta-theory\.mjs/);
+        assert.match(result.stdout, /--with-global-hooks/);
+        assert.match(result.stdout, /--skip-durable-mcp/);
+        assert.deepEqual(
+          await readdir(root),
+          [],
+          `${flag} must not create runtime home or manifest state`,
+        );
+      }
+    });
+  });
+
+  test("unknown and incomplete options fail closed without writing", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      for (const args of [
+        ["--typo"],
+        ["--lang", "zh-CN"],
+        ["--targets"],
+        ["--targets="],
+      ]) {
+        await assert.rejects(
+          () => runScript(args, env),
+          (error) => {
+            assert.match(
+              error.stderr,
+              /Unknown option: --(?:typo|lang)|--targets requires a comma-separated value/,
+            );
+            return true;
+          },
+        );
+        assert.deepEqual(
+          await readdir(root),
+          [],
+          `${args.join(" ")} must fail before creating runtime state`,
+        );
+      }
+    });
+  });
+
+  test("retired Hook cleanup preserves unowned same-name user files", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const hooksDir = path.join(root, "claude", "hooks");
+      const userHook = path.join(hooksDir, "pre-git-push-confirm.mjs");
+      const settingsPath = path.join(root, "claude", "settings.json");
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(userHook, "// user-owned same-name Hook\n", "utf8");
+      await writeFile(
+        settingsPath,
+        `${JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: "Bash",
+                hooks: [{ type: "command", command: `node "${userHook}"` }],
+              },
+            ],
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      const result = await runScript(
+        ["--targets", "claude", "--with-global-hooks"],
+        env,
+      );
+
+      assert.equal(await readFile(userHook, "utf8"), "// user-owned same-name Hook\n");
+      assert.match(await readFile(settingsPath, "utf8"), /pre-git-push-confirm\.mjs/u);
+      assert.match(result.stderr, /Preserved unowned same-name Hook/);
+    });
+  });
+
+  test("owned retired Meta_Kim Hook is backed up before removal", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const hooksDir = path.join(root, "claude", "hooks");
+      const retiredHook = path.join(hooksDir, "pre-git-push-confirm.mjs");
+      const ownedSource = `#!/usr/bin/env node
+// PreToolUse hook: remind before git push
+const readJsonFromStdin = true;
+const decision = { permissionDecision: "allow" };
+console.log("About to git push");
+`;
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(retiredHook, ownedSource, "utf8");
+
+      await runScript(["--targets", "claude", "--with-global-hooks"], env);
+
+      await assert.rejects(() => readFile(retiredHook, "utf8"));
+      const backupRoot = path.join(hooksDir, ".meta-kim-legacy-backup");
+      const stamps = await readdir(backupRoot);
+      assert.ok(stamps.length > 0);
+      assert.equal(
+        await readFile(path.join(backupRoot, stamps[0], path.basename(retiredHook)), "utf8"),
+        ownedSource,
+      );
+    });
+  });
+
+  test("runtime-home writes reject a commands junction that escapes the selected home", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const codexHome = path.join(root, "codex");
+      const outside = path.join(root, "outside-codex-home");
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(outside, { recursive: true });
+      await symlink(outside, path.join(codexHome, "commands"), "junction");
+
+      await assert.rejects(
+        () => runScript(["--targets", "codex"], env),
+        (error) => {
+          assert.match(error.stderr, /Refusing to follow a symlink or junction/);
+          return true;
+        },
+      );
+      assert.deepEqual(await readdir(outside), []);
+    });
+  });
+
+  test("runtime-home writes reject a commands junction into the immutable package store", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const codexHome = path.join(root, "codex");
+      const storeRoot = path.join(
+        root,
+        ".meta-kim",
+        "runtime",
+        "projection-packages",
+      );
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(storeRoot, { recursive: true });
+      await symlink(storeRoot, path.join(codexHome, "commands"), "junction");
+
+      await assert.rejects(
+        () => runScript(["--targets", "codex"], env),
+        (error) => {
+          assert.match(error.stderr, /immutable package store/);
+          return true;
+        },
+      );
+      await assert.rejects(() => readFile(path.join(storeRoot, "meta-theory.md"), "utf8"));
+    });
+  });
+
   test("default global sync/check does not require Claude global hooks", async () => {
     await withTempRuntimeHomes(async ({ env, root }) => {
       const sync = await runScript(["--targets", "claude"], env);
       assert.match(sync.stdout, /Skipped Claude Code global hooks/);
+      const stablePackageRoot = await stablePackageRootFromManifest(root);
 
       for (const commandName of [
         "meta-theory.md",
@@ -51,16 +345,35 @@ describe("sync-global-meta-theory hook policy", () => {
           path.join(root, "claude", "commands", commandName),
           "utf8",
         );
-        assert.ok(
-          command.includes(REPO_ROOT.replace(/\\/g, "/")),
-          `${commandName} must render the installed Meta_Kim package root`,
-        );
+        assertUsesStablePackageRoot(command, stablePackageRoot, commandName);
         assert.doesNotMatch(command, /__META_KIM_PACKAGE_ROOT__/);
       }
 
       const check = await runScript(["--check", "--targets", "claude"], env);
       assert.match(check.stdout, /global hooks skipped/);
       assert.match(check.stdout, /Claude Code commands/);
+    });
+  });
+
+  test("--skip-durable-mcp syncs Claude assets while preserving the running MCP runtime and config", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const sync = await runScript(
+        ["--targets", "claude", "--skip-durable-mcp"],
+        env,
+      );
+      assert.match(sync.stdout, /skipped because explicitly requested with --skip-durable-mcp/);
+      await readFile(
+        path.join(root, "claude", "skills", "meta-theory", "SKILL.md"),
+        "utf8",
+      );
+      await assert.rejects(() => readFile(path.join(root, ".claude.json"), "utf8"));
+
+      const check = await runScript(
+        ["--check", "--targets", "claude", "--skip-durable-mcp"],
+        env,
+      );
+      assert.match(check.stdout, /not checked; skipped because explicitly requested/);
+      assert.match(check.stdout, /Claude Code global skill/);
     });
   });
 
@@ -80,6 +393,262 @@ describe("sync-global-meta-theory hook policy", () => {
     });
   });
 
+  // `--with-global-hooks` gates *writing* into a runtime home, which is why an
+  // absent package stays a non-failure by default. Reading an already installed
+  // package costs nothing, and a package that is present but no longer matches
+  // canonical executes stale code on every prompt entry. Leaving that case
+  // unchecked by default is how a missing hook dependency survived a full
+  // documented maintenance loop.
+  test("stale hook diagnostics identify missing files and the runtime-specific canonical owner", async () => {
+    for (const runtime of ["claude", "codex", "cursor"]) {
+      await withTempRuntimeHomes(async ({ env, root }) => {
+        const hooksRoot = path.join(root, runtime, "hooks", "meta-kim");
+        await mkdir(hooksRoot, { recursive: true });
+        await writeFile(path.join(hooksRoot, "meta-kim-memory-save.mjs"), "PRIVATE_CONTENT_MUST_NOT_BE_LOGGED", "utf8");
+        for (const flags of [[], ["--with-global-hooks"]]) {
+          await assert.rejects(
+            () => runScript(["--check", "--targets", runtime, ...flags], env),
+            (error) => {
+              assert.match(error.stdout, /missing: conversation-binding\.mjs/, `${runtime}: ${error.message}\n${error.stderr ?? ""}`);
+              const owner = runtime === "claude" ? "claude" : "shared";
+              assert.ok(error.stdout.includes(`content-diff: meta-kim-memory-save.mjs (expected source: canonical/runtime-assets/${owner}/hooks/meta-kim-memory-save.mjs)`));
+              assert.doesNotMatch(error.stdout, /PRIVATE_CONTENT_MUST_NOT_BE_LOGGED/);
+              return true;
+            },
+          );
+        }
+      });
+    }
+  });
+
+  for (const runtime of [
+    { id: "claude", home: "claude", label: "Claude Code" },
+    { id: "codex", home: "codex", label: "Codex" },
+    { id: "cursor", home: "cursor", label: "Cursor" },
+  ]) {
+    test(`default check audits an installed ${runtime.label} global hook package`, async () => {
+      await withTempRuntimeHomes(async ({ env, root }) => {
+        await runScript(["--targets", runtime.id, "--with-global-hooks"], env);
+
+        const fresh = await runScript(["--check", "--targets", runtime.id], env);
+        assert.match(
+          fresh.stdout,
+          new RegExp(`${runtime.label} global hooks \\(meta-kim`),
+          "an installed package must be audited by the default check",
+        );
+        assert.doesNotMatch(
+          fresh.stdout,
+          new RegExp(`${runtime.label} global hooks skipped`),
+          "an installed package must not be reported as skipped",
+        );
+
+        await rm(
+          path.join(root, runtime.home, "hooks", "meta-kim", "conversation-binding.mjs"),
+        );
+
+        await assert.rejects(
+          () => runScript(["--check", "--targets", runtime.id], env),
+          (error) => {
+            assert.match(error.stdout, /installed but stale/);
+            assert.match(error.stdout, /meta:sync:global:release/);
+            return true;
+          },
+          "a stale installed hook package must fail the default check",
+        );
+      });
+    });
+  }
+
+  // Codex blocks are all `{matcher, hooks:[...]}`; most Cursor blocks are flat
+  // `{command, timeout}`. A merge that only walks `block.hooks` silently drops
+  // every flat addition after the first one, so a "successful" sync can register
+  // fewer commands than were already there. Assert per event, because a total
+  // count can stay plausible while one event loses all of its entries.
+  for (const runtime of [
+    { id: "codex", home: "codex", label: "Codex" },
+    { id: "cursor", home: "cursor", label: "Cursor" },
+  ]) {
+    test(`global hooks.json registers every managed ${runtime.label} hook command`, async () => {
+      await withTempRuntimeHomes(async ({ env, root }) => {
+        await runScript(["--targets", runtime.id, "--with-global-hooks"], env);
+
+        const hooksJsonPath = path.join(root, runtime.home, "hooks.json");
+        const written = JSON.parse(await readFile(hooksJsonPath, "utf8"));
+        const managed = managedCommandsByEvent(written);
+
+        const managedTotal = Object.values(managed).reduce(
+          (sum, commands) => sum + commands.length,
+          0,
+        );
+        assert.ok(
+          managedTotal >= 7,
+          `${runtime.label} hooks.json must register the full managed set, found ${managedTotal}: ${JSON.stringify(managed, null, 2)}`,
+        );
+
+        // Every managed hook script that was copied into the package must be
+        // reachable from hooks.json. An orphaned script on disk looks installed
+        // and never runs.
+        for (const [event, expectedCount] of Object.entries(
+          MANAGED_HOOKS_JSON_EVENT_MINIMUMS[runtime.id],
+        )) {
+          assert.ok(
+            (managed[event] ?? []).length >= expectedCount,
+            `${runtime.label} hooks.json event ${event} must register at least ${expectedCount} managed command(s), found ${(managed[event] ?? []).length}: ${JSON.stringify(managed[event] ?? [], null, 2)}`,
+          );
+        }
+
+        const allManaged = Object.values(managed).flat().join("\n");
+        assert.match(
+          allManaged,
+          /hookprompt-adapter\.mjs/,
+          `${runtime.label} hooks.json must register the prompt adapter it writes to disk`,
+        );
+        assert.match(
+          allManaged,
+          /meta-kim-memory-save\.mjs --event stop/,
+          `${runtime.label} hooks.json must register the stop-event memory hook`,
+        );
+        assert.match(
+          allManaged,
+          /graphify-context\.mjs/,
+          `${runtime.label} hooks.json must register the graph context hook`,
+        );
+      });
+    });
+  }
+
+  // A Cursor-only sync deliberately runs with no npm and builds no package store
+  // (transient-package-root-portability owns that contract), so its commands name
+  // whatever checkout ran them. The failure worth guarding is the mixed run: the
+  // hand-off re-execs this sync from the pinned bundle, and Cursor's hook template
+  // embeds `--package-root` exactly like Codex's, so once a stable package exists
+  // both runtimes have to land on it. Cursor previously had no such assertion at
+  // all, and the command walker it needs could not see Cursor's flat blocks.
+  test("a Codex+Cursor sync pins Cursor hook commands to the stable package root", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      await runScript(["--targets", "codex,cursor", "--with-global-hooks"], env);
+
+      const stablePackageRoot = await stablePackageRootFromManifest(root);
+      for (const runtime of [
+        { home: "codex", label: "Codex" },
+        { home: "cursor", label: "Cursor" },
+      ]) {
+        const written = JSON.parse(
+          await readFile(path.join(root, runtime.home, "hooks.json"), "utf8"),
+        );
+        assertHookConfigUsesStablePackageRoot(
+          written,
+          stablePackageRoot,
+          `global ${runtime.label} hooks after a Codex+Cursor sync`,
+        );
+      }
+    });
+  });
+
+  test("Cursor global check accepts the native flat config emitted by runtime sync", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      await runScript(["--targets", "cursor", "--with-global-hooks"], env);
+      await runRuntimeSync(
+        ["--scope", "global", "--targets", "cursor", "--global-assets", "hooks"],
+        env,
+      );
+
+      const hooksPath = path.join(root, "cursor", "hooks.json");
+      const config = JSON.parse(await readFile(hooksPath, "utf8"));
+      assert.ok(
+        config.hooks.postToolUse.some((entry) =>
+          entry.command?.includes("post-format.mjs"),
+        ),
+        "runtime sync must retain its native flat postToolUse hook",
+      );
+      // A relative command resolves against whatever directory Cursor starts
+      // in, so a global registration would run another project's copy or
+      // nothing at all. Global scope must register absolute script paths.
+      const globalCommands = Object.values(config.hooks)
+        .flat()
+        .map((entry) => entry?.command)
+        .filter((command) => typeof command === "string");
+      assert.deepEqual(
+        globalCommands.filter((command) =>
+          /node\s+"?\.[\\/]?cursor[\\/]hooks[\\/]/u.test(command),
+        ),
+        [],
+        `global Cursor hook commands must not be project-relative:\n${globalCommands.join("\n")}`,
+      );
+      config.hooks.beforeSubmitPrompt.unshift({
+        command: "node user-owned-cursor-hook.mjs",
+        timeout: 3,
+      });
+      config.hooks.postToolUse.unshift({
+        command: "node .cursor/hooks/post-format.mjs",
+        matcher: "Read",
+        timeout: 17,
+      });
+      await writeFile(hooksPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      const beforeCheck = await readFile(hooksPath, "utf8");
+
+      const check = await runScriptCapturingExit(
+        ["--check", "--targets", "cursor", "--with-global-hooks"],
+        env,
+      );
+      assert.match(
+        check.stdout,
+        /✓[^\n]*Cursor global hooks\.json: [^\n]*cursor[\\/]hooks\.json/,
+        `Cursor global hooks.json must be reported in sync:\n${check.stdout}`,
+      );
+      assert.equal(check.exitCode, 0, check.stderr);
+      const afterCheck = await readFile(hooksPath, "utf8");
+      assert.equal(afterCheck, beforeCheck, "global hooks check must be read-only");
+      assert.match(afterCheck, /user-owned-cursor-hook\.mjs/);
+    });
+  });
+
+  // Cursor assigns its global `hooks` asset to sync-runtimes, so the hook files
+  // it drops under ~/.cursor/hooks/meta-kim must carry that one source. A second
+  // manifest claim from sync-global-meta-theory leaves uninstall and drift
+  // repair reading whichever record they hit first.
+  test("Cursor global hook files land in the manifest under exactly one source", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      await runScript(["--targets", "cursor", "--with-global-hooks"], env);
+      await runRuntimeSync(
+        ["--scope", "global", "--targets", "cursor", "--global-assets", "hooks"],
+        env,
+      );
+
+      const manifest = JSON.parse(
+        await readFile(path.join(root, ".meta-kim", "install-manifest.json"), "utf8"),
+      );
+      const sourcesByPath = new Map();
+      for (const entry of manifest.entries) {
+        if (entry.kind !== "file") continue;
+        const key = path.resolve(entry.path);
+        if (!sourcesByPath.has(key)) sourcesByPath.set(key, new Set());
+        sourcesByPath.get(key).add(entry.source);
+      }
+      const contested = [...sourcesByPath]
+        .filter(([, sources]) => sources.size > 1)
+        .map(([filePath, sources]) => `${filePath} <- ${[...sources].sort().join(" + ")}`)
+        .sort();
+      assert.deepEqual(contested, [], `contested global files:\n${contested.join("\n")}`);
+
+      const cursorHookDir = path.join(root, "cursor", "hooks", "meta-kim");
+      const cursorHookEntries = manifest.entries.filter(
+        (entry) =>
+          entry.kind === "file" &&
+          path.resolve(entry.path).startsWith(path.resolve(cursorHookDir) + path.sep),
+      );
+      assert.ok(
+        cursorHookEntries.length > 0,
+        "the Cursor global hook package must stay recorded, not merely uncontested",
+      );
+      assert.deepEqual(
+        [...new Set(cursorHookEntries.map((entry) => entry.source))],
+        ["sync-runtimes"],
+        "Cursor assigns its global hooks asset to sync-runtimes",
+      );
+    });
+  });
+
   test("--with-global-hooks installs prompt-entry bootstrap hook package", async () => {
     await withTempRuntimeHomes(async ({ env, root }) => {
       const claudeHooksDir = path.join(root, "claude", "hooks");
@@ -91,17 +660,27 @@ describe("sync-global-meta-theory hook policy", () => {
       );
 
       await runScript(["--targets", "claude", "--with-global-hooks"], env);
+      const stablePackageRoot = await stablePackageRootFromManifest(root);
 
       const hookDir = path.join(root, "claude", "hooks", "meta-kim");
       for (const fileName of [
         "activate-meta-theory-spine.mjs",
         "block-dangerous-bash.mjs",
+        "spine-state-gates.mjs",
         "spine-state.mjs",
+        "spine-state-utils.mjs",
+        "governed-task-reference.mjs",
+        "governed-host-checkpoint.mjs",
         "stop-save-progress.mjs",
         "stop-memory-save.mjs",
         "utils.mjs",
       ]) {
-        await readFile(path.join(hookDir, fileName), "utf8");
+        const source = await readFile(path.join(hookDir, fileName), "utf8");
+        assert.equal(
+          normalizedPathText(source).includes(normalizedPathText(REPO_ROOT)),
+          false,
+          `${fileName} must not embed the source checkout root`,
+        );
       }
       for (const fileName of [
         "enforce-agent-dispatch.mjs",
@@ -109,6 +688,11 @@ describe("sync-global-meta-theory hook policy", () => {
         "stop-spine-cleanup.mjs",
       ]) {
         const source = await readFile(path.join(hookDir, fileName), "utf8");
+        assert.equal(
+          normalizedPathText(source).includes(normalizedPathText(REPO_ROOT)),
+          false,
+          `${fileName} must not embed the source checkout root`,
+        );
         assert.doesNotMatch(
           source,
           /\.\.\/\.\.\/shared\/hooks\//,
@@ -133,6 +717,11 @@ describe("sync-global-meta-theory hook policy", () => {
 
       const settings = JSON.parse(
         await readFile(path.join(root, "claude", "settings.json"), "utf8"),
+      );
+      assertHookConfigUsesStablePackageRoot(
+        settings,
+        stablePackageRoot,
+        "global Claude settings hooks",
       );
       const promptHooks = settings.hooks?.UserPromptSubmit?.flatMap(
         (block) => block.hooks ?? [],
@@ -232,11 +821,18 @@ describe("sync-global-meta-theory hook policy", () => {
     await withTempRuntimeHomes(async ({ env, root }) => {
       const rootHookDir = path.join(root, "claude", "hooks");
       await mkdir(rootHookDir, { recursive: true });
-      await writeFile(
-        path.join(rootHookDir, "post-format.mjs"),
-        "// locally modified legacy Meta_Kim hook\n",
+      const canonical = await readFile(
+        path.join(
+          REPO_ROOT,
+          "canonical",
+          "runtime-assets",
+          "claude",
+          "hooks",
+          "post-format.mjs",
+        ),
         "utf8",
       );
+      await writeFile(path.join(rootHookDir, "post-format.mjs"), canonical, "utf8");
 
       await runScript(["--targets", "claude", "--with-global-hooks"], env);
 
@@ -267,6 +863,7 @@ describe("sync-global-meta-theory hook policy", () => {
       await writeFile(sentinelPath, sentinel, "utf8");
 
       await runScript(["--targets", "codex", "--with-global-hooks"], env);
+      const stablePackageRoot = await stablePackageRootFromManifest(root);
 
       assert.equal(await readFile(sentinelPath, "utf8"), sentinel);
       assert.equal(await readFile(legacySkillPath, "utf8"), "user legacy claude skill\n");
@@ -280,10 +877,20 @@ describe("sync-global-meta-theory hook policy", () => {
         "bash-readonly-whitelist.mjs",
         "enforce-agent-dispatch.mjs",
       ]) {
-        await readFile(path.join(codexHookDir, fileName), "utf8");
+        const source = await readFile(path.join(codexHookDir, fileName), "utf8");
+        assert.equal(
+          normalizedPathText(source).includes(normalizedPathText(REPO_ROOT)),
+          false,
+          `${fileName} must not embed the source checkout root`,
+        );
       }
       const hooksJson = JSON.parse(
         await readFile(path.join(root, "codex", "hooks.json"), "utf8"),
+      );
+      assertHookConfigUsesStablePackageRoot(
+        hooksJson,
+        stablePackageRoot,
+        "global Codex hooks",
       );
       const promptHooks = hooksJson.hooks?.UserPromptSubmit?.flatMap(
         (block) => block.hooks ?? [],
@@ -293,7 +900,8 @@ describe("sync-global-meta-theory hook policy", () => {
           (hook) =>
             hook.command.includes("activate-meta-theory-spine.mjs") &&
             hook.command.includes("--package-root") &&
-            hook.command.includes(REPO_ROOT),
+            normalizedPathText(hook.command).includes(normalizedPathText(stablePackageRoot)) &&
+            !normalizedPathText(hook.command).includes(normalizedPathText(REPO_ROOT)),
         ),
         "global Codex hooks.json must register prompt-entry project bootstrap hook with package-root evidence",
       );
@@ -303,6 +911,7 @@ describe("sync-global-meta-theory hook policy", () => {
   test("Codex global skill sync/check uses the Codex skill projection", async () => {
     await withTempRuntimeHomes(async ({ env, root }) => {
       await runScript(["--targets", "codex"], env);
+      const stablePackageRoot = await stablePackageRootFromManifest(root);
 
       const skillPath = path.join(
         root,
@@ -326,10 +935,7 @@ describe("sync-global-meta-theory hook policy", () => {
         path.join(root, "codex", "commands", "meta-theory.md"),
         "utf8",
       );
-      assert.ok(
-        command.includes(REPO_ROOT.replace(/\\/g, "/")),
-        "global Codex command must render the installed Meta_Kim package root",
-      );
+      assertUsesStablePackageRoot(command, stablePackageRoot, "global Codex meta-theory command");
       assert.doesNotMatch(command, /__META_KIM_PACKAGE_ROOT__/);
       assert.match(command, /run-meta-theory-governed-execution\.mjs/);
       assert.match(command, /--emit-conversation-notice/);
@@ -338,10 +944,7 @@ describe("sync-global-meta-theory hook policy", () => {
           path.join(root, "codex", "commands", commandName),
           "utf8",
         );
-        assert.ok(
-          extraCommand.includes(REPO_ROOT.replace(/\\/g, "/")),
-          `global Codex ${commandName} must render the installed Meta_Kim package root`,
-        );
+        assertUsesStablePackageRoot(extraCommand, stablePackageRoot, `global Codex ${commandName}`);
         assert.doesNotMatch(extraCommand, /__META_KIM_PACKAGE_ROOT__/);
       }
 
@@ -374,7 +977,244 @@ describe("sync-global-meta-theory hook policy", () => {
     });
   });
 
-  test("Codex global hooks merge preserves user hooks and repairs stale Meta_Kim entries", async () => {
+  test("Codex global sync removes stale shared Meta_Kim skill aliases", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const sharedSkills = path.join(root, ".agents", "skills");
+      await mkdir(path.join(sharedSkills, "meta_kim", "meta-theory"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(sharedSkills, "meta_kim", "meta-theory", "SKILL.md"),
+        `---
+name: meta-theory
+description: Meta Arsenal dispatcher
+---
+
+# Meta Arsenal - Smallest Governable Unit Methodology
+`,
+        "utf8",
+      );
+      await mkdir(path.join(sharedSkills, "meta-theory-agent-calling-gap"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(sharedSkills, "meta-theory-agent-calling-gap", "SKILL.md"),
+        `---
+name: meta-theory-agent-calling-gap
+description: old gap
+---
+
+# Meta-Theory Agent Calling Gap
+
+## Status: FIXED
+`,
+        "utf8",
+      );
+      await mkdir(path.join(sharedSkills, "source-command-meta-theory-report"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(sharedSkills, "source-command-meta-theory-report", "SKILL.md"),
+        `---
+name: source-command-meta-theory-report
+description: Reopen a Meta_Kim governed run report
+---
+
+node "__META_KIM_PACKAGE_ROOT__/scripts/run-meta-theory-governed-execution.mjs" --read latest
+`,
+        "utf8",
+      );
+      await mkdir(path.join(sharedSkills, "source-command-meta-theory-verify"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(sharedSkills, "source-command-meta-theory-verify", "SKILL.md"),
+        `---
+name: source-command-meta-theory-verify
+description: Run the appropriate Meta_Kim verification path
+---
+
+npm run meta:release:smoke
+`,
+        "utf8",
+      );
+      await mkdir(path.join(sharedSkills, "meta-theory"), { recursive: true });
+      await writeFile(
+        path.join(sharedSkills, "meta-theory", "SKILL.md"),
+        `---
+name: meta-theory
+description: Meta_Kim executable governance dispatcher
+---
+`,
+        "utf8",
+      );
+      await mkdir(path.join(sharedSkills, "critical-fetch-thinking-review"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(sharedSkills, "critical-fetch-thinking-review", "SKILL.md"),
+        `---
+name: critical-fetch-thinking-review
+description: User-owned workflow notes
+---
+`,
+        "utf8",
+      );
+      await mkdir(
+        path.join(root, "codex", "skills", "critical-fetch-thinking-review"),
+        {
+          recursive: true,
+        },
+      );
+      await writeFile(
+        path.join(
+          root,
+          "codex",
+          "skills",
+          "critical-fetch-thinking-review",
+          "SKILL.md",
+        ),
+        `---
+name: critical-fetch-thinking-review
+description: Meta_Kim legacy governed route alias
+---
+
+# Meta Theory
+
+Critical -> Fetch -> Thinking -> Review
+`,
+        "utf8",
+      );
+
+      await assert.rejects(
+        () => runScript(["--check", "--targets", "codex"], env),
+        (error) => {
+          assert.match(error.stdout, /legacy Meta Arsenal skill package/);
+          assert.match(error.stdout, /legacy shared Codex global meta-theory duplicate/);
+          assert.match(
+            error.stdout,
+            /legacy Critical\/Fetch\/Thinking\/Review Meta_Kim alias/,
+          );
+          return true;
+        },
+      );
+
+      await runScript(["--targets", "codex"], env);
+
+      for (const staleName of [
+        "meta_kim",
+        "meta-theory-agent-calling-gap",
+        "source-command-meta-theory-report",
+        "source-command-meta-theory-verify",
+        "meta-theory",
+      ]) {
+        await assert.rejects(() =>
+          readdir(path.join(sharedSkills, staleName)),
+        );
+      }
+      await assert.rejects(() =>
+        readdir(
+          path.join(root, "codex", "skills", "critical-fetch-thinking-review"),
+        ),
+      );
+
+      await readFile(
+        path.join(sharedSkills, "critical-fetch-thinking-review", "SKILL.md"),
+        "utf8",
+      );
+      await readFile(
+        path.join(root, "codex", "skills", "meta-theory", "SKILL.md"),
+        "utf8",
+      );
+      const backupRoot = path.join(
+        root,
+        "codex",
+        ".meta-kim",
+        "backups",
+        "stale-skill-aliases",
+      );
+      assert.ok((await readdir(backupRoot)).length > 0);
+
+      const check = await runScript(["--check", "--targets", "codex"], env);
+      assert.doesNotMatch(check.stdout, /legacy Meta Arsenal skill package.*⊘/);
+    });
+  });
+
+  test("Codex global sync preserves a shared meta-theory junction and still projects hooks", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const claudeSkill = path.join(root, "claude", "skills", "meta-theory");
+      const sharedAlias = path.join(root, ".agents", "skills", "meta-theory");
+      await mkdir(claudeSkill, { recursive: true });
+      await mkdir(path.dirname(sharedAlias), { recursive: true });
+      await writeFile(
+        path.join(claudeSkill, "SKILL.md"),
+        `---
+name: meta-theory
+description: user-managed shared Meta_Kim skill
+---
+`,
+        "utf8",
+      );
+      await symlink(claudeSkill, sharedAlias, "junction");
+
+      const sync = await runScript(
+        ["--targets", "codex", "--with-global-hooks"],
+        env,
+      );
+
+      assert.match(
+        await readFile(path.join(sharedAlias, "SKILL.md"), "utf8"),
+        /user-managed shared Meta_Kim skill/,
+      );
+      assert.doesNotMatch(sync.stdout, /Skipped stale skill alias cleanup/);
+      const hooks = JSON.parse(
+        await readFile(path.join(root, "codex", "hooks.json"), "utf8"),
+      );
+      assert.match(JSON.stringify(hooks), /activate-meta-theory-spine\.mjs/);
+    });
+  });
+
+  test("Codex global sync keeps unexpected stale-alias backup failures fatal", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const staleAlias = path.join(root, ".agents", "skills", "meta-theory");
+      const backupBlocker = path.join(
+        root,
+        "codex",
+        ".meta-kim",
+        "backups",
+        "stale-skill-aliases",
+      );
+      await mkdir(staleAlias, { recursive: true });
+      await writeFile(
+        path.join(staleAlias, "SKILL.md"),
+        `---
+name: meta-theory
+description: Meta_Kim executable governance dispatcher
+---
+`,
+        "utf8",
+      );
+      await mkdir(path.dirname(backupBlocker), { recursive: true });
+      await writeFile(backupBlocker, "blocks backup directory creation\n", "utf8");
+
+      await assert.rejects(
+        () => runScript(["--targets", "codex", "--with-global-hooks"], env),
+        (error) => {
+          assert.match(
+            `${error.stdout ?? ""}\n${error.stderr ?? ""}`,
+            /EEXIST|ENOTDIR|already exists|file exists|not a directory/iu,
+          );
+          return true;
+        },
+      );
+      assert.match(
+        await readFile(path.join(staleAlias, "SKILL.md"), "utf8"),
+        /Meta_Kim executable governance dispatcher/,
+      );
+    });
+  });
+
+  test("Codex global hooks merge preserves user hooks and detects stale Meta_Kim entries", async () => {
     await withTempRuntimeHomes(async ({ env, root }) => {
       const codexHome = path.join(root, "codex");
       await mkdir(codexHome, { recursive: true });
@@ -388,11 +1228,13 @@ describe("sync-global-meta-theory hook policy", () => {
                 {
                   hooks: [
                     { type: "command", command: "node user-only.js" },
-                    {
-                      type: "command",
-                      command: `node "${path.join(codexHome, "hooks", "meta-kim", "old-spine.mjs")}"`,
-                    },
                   ],
+                },
+              ],
+              Stop: [
+                {
+                  matcher: "*",
+                  hooks: [{ type: "command", command: "node user-stop-only.js" }],
                 },
               ],
             },
@@ -408,8 +1250,24 @@ describe("sync-global-meta-theory hook policy", () => {
       const merged = JSON.parse(await readFile(hooksPath, "utf8"));
       const rendered = JSON.stringify(merged);
       assert.match(rendered, /node user-only\.js/);
-      assert.doesNotMatch(rendered, /old-spine\.mjs/);
+      assert.match(rendered, /node user-stop-only\.js/);
       assert.match(rendered, /activate-meta-theory-spine\.mjs/);
+      assert.match(rendered, /stop-spine-cleanup\.mjs/);
+      const stopCommands = (merged.hooks.Stop ?? [])
+        .flatMap((entry) => entry.hooks ?? [])
+        .map((hook) => hook.command);
+      assert.equal(
+        stopCommands.filter((command) => command.includes("meta-kim-memory-save.mjs")).length,
+        1,
+      );
+      assert.equal(
+        stopCommands.filter((command) => command.includes("stop-spine-cleanup.mjs")).length,
+        1,
+      );
+      assert.ok(
+        stopCommands.findIndex((command) => command.includes("meta-kim-memory-save.mjs")) <
+        stopCommands.findIndex((command) => command.includes("stop-spine-cleanup.mjs")),
+      );
       assert.match(rendered, /--package-root/);
 
       await assert.rejects(
@@ -431,6 +1289,66 @@ describe("sync-global-meta-theory hook policy", () => {
           return true;
         },
       );
+    });
+  });
+
+  test("global settings writes are atomic and preserve user JSON on injected failure", async () => {
+    await withTempRuntimeHomes(async ({ env, root }) => {
+      const fixtures = [
+        {
+          id: "claude-settings",
+          target: path.join(root, "claude", "settings.json"),
+          args: ["--targets", "claude", "--with-global-hooks"],
+        },
+        {
+          id: "codex-hooks",
+          target: path.join(root, "codex", "hooks.json"),
+          args: ["--targets", "codex", "--with-global-hooks"],
+        },
+      ];
+
+      for (const fixture of fixtures) {
+        await mkdir(path.dirname(fixture.target), { recursive: true });
+        const original = `${JSON.stringify(
+          {
+            unknownUserField: { preserve: true, runtime: fixture.id },
+            hooks: {
+              UserPromptSubmit: [
+                { hooks: [{ type: "command", command: "node user-only.js" }] },
+              ],
+            },
+          },
+          null,
+          2,
+        )}\n`;
+        await writeFile(fixture.target, original, "utf8");
+
+        await assert.rejects(
+          () =>
+            runScript(fixture.args, {
+              ...env,
+              META_KIM_TEST_FAIL_ATOMIC_SETTINGS_WRITE: fixture.id,
+            }),
+          (error) => {
+            assert.match(error.stderr, new RegExp(`Injected atomic settings write failure: ${fixture.id}`));
+            return true;
+          },
+        );
+
+        const preserved = await readFile(fixture.target, "utf8");
+        assert.equal(preserved, original);
+        assert.deepEqual(JSON.parse(preserved).unknownUserField, {
+          preserve: true,
+          runtime: fixture.id,
+        });
+        assert.equal(
+          (await readdir(path.dirname(fixture.target))).some((entry) =>
+            entry.includes(".meta-kim-staged-"),
+          ),
+          false,
+          "failed atomic writes must clean their staged file",
+        );
+      }
     });
   });
 

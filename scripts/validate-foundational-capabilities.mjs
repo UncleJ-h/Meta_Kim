@@ -10,6 +10,9 @@ import {
   readJson,
   repoPath,
 } from "./governance-lib.mjs";
+import {
+  resolveRuntimeCapabilityClaim,
+} from "./runtime-capability-claims.mjs";
 
 const REQUIRED_SKILLS = [
   "agent-teams-playbook",
@@ -17,10 +20,9 @@ const REQUIRED_SKILLS = [
   "hookprompt",
   "superpowers",
   "ecc",
-  "planning-with-files",
   "cli-anything",
   "gstack",
-  "skill-creator",
+  "meta-skill-creator",
 ];
 
 const FOUNDATIONAL_CAPABILITIES = [
@@ -69,34 +71,13 @@ for (const id of REQUIRED_SKILLS) {
   assert(skillIds.has(id), `config/skills.json missing preserved skill ${id}`);
 }
 
-const planningWithFiles = (skills.skills ?? []).find(
-  (skill) => skill.id === "planning-with-files",
-);
-assert(planningWithFiles, "planning-with-files core skill missing from config/skills.json");
 assert(
-  planningWithFiles.installMethod === "subdirExtraction" &&
-    planningWithFiles.subdir === "skills/planning-with-files",
-  "planning-with-files must install from the upstream skills/planning-with-files subdirectory",
-);
-for (const runtime of ["claude", "codex", "openclaw", "cursor"]) {
-  assert(
-    planningWithFiles.targets?.includes(runtime),
-    `planning-with-files must target ${runtime}`,
-  );
-}
-assert(
-  planningWithFiles.pluginHookCompat === true,
-  "planning-with-files must preserve pluginHookCompat hook deployment",
+  !skillIds.has("planning-with-files"),
+  "retired planning-with-files dependency must not remain in config/skills.json",
 );
 assert(
-  planningWithFiles.globalHookSubdirs?.codex?.includes("~/.codex/hooks/meta-kim") &&
-    planningWithFiles.globalHookSubdirs?.cursor?.includes("~/.cursor/hooks/meta-kim"),
-  "planning-with-files must declare Codex and Cursor global hook subdirectories",
-);
-assert(
-  planningWithFiles.globalHookConfigFiles?.codex === "~/.codex/hooks.json" &&
-    planningWithFiles.globalHookConfigFiles?.cursor === "~/.cursor/hooks.json",
-  "planning-with-files must declare Codex and Cursor global hook config files",
+  pkg.scripts?.["meta:planning:validate"],
+  "Meta_Kim first-party planning continuity validator is required",
 );
 
 for (const scriptName of REQUIRED_SCRIPTS) {
@@ -119,8 +100,23 @@ for (const runtime of RUNTIMES) {
     assert(record, `${runtime} missing foundational capability ${capability}`);
     assert(record.support !== "unsupported", `${runtime}.${capability} must not be removed or hard-unsupported`);
     assert(!(record.support === "native" && record.confidence === "unverified"), `${runtime}.${capability} native requires evidence`);
+    const interactiveClaim = resolveRuntimeCapabilityClaim(runtimeMatrix, {
+      runtime,
+      capability,
+      mode: "interactive_host",
+    });
+    assert(interactiveClaim.claim, `${runtime}.${capability} missing interactive_host claim`);
+    assert(interactiveClaim.hostSupport !== "unsupported", `${runtime}.${capability} host capability must be preserved`);
   }
 }
+
+const cursorChoice = resolveRuntimeCapabilityClaim(runtimeMatrix, {
+  runtime: "cursor",
+  capability: "native choice surface",
+  mode: "interactive_host",
+});
+assert(cursorChoice.hostSupport === "native", "Cursor host choice surface must remain documented as native");
+assert(cursorChoice.executable === false, "Cursor docs-only choice surface must not become executable before acceptance");
 
 const osIds = new Set((osMatrix.operatingSystems ?? []).map((entry) => entry.id));
 for (const osName of OS_TARGETS) {

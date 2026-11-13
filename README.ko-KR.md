@@ -1,48 +1,250 @@
 <div align="center">
 
-<h1 style="font-size: 6em; font-weight: 900; margin-bottom: 0.2em; letter-spacing: 0.1em;">元</h1>
-<p style="font-size: 1.2em; color: #7c3aed; font-weight: 600; margin-top: 0;">META_KIM</p>
+# 元 · Meta_Kim
 
-<p>
-  언어:
-  <a href="README.md">English</a> |
-  <a href="README.zh-CN.md">简体中文</a> |
-  <a href="README.ja-JP.md">日本語</a> |
-  <a href="README.ko-KR.md">한국어</a>
-</p>
+**원하는 결과를 말하세요. 조사와 설계, 협업, 검수, 다음 개선까지 이어 갑니다.**
 
-<p>
-  <img alt="Projection tiers" src="https://img.shields.io/badge/default-Claude%20Code%20%7C%20Codex%20%2B%20compat-OpenClaw%20%7C%20Cursor-111827"/>
-  <img alt="Candidate compatibility probes" src="https://img.shields.io/badge/candidate-Qoder%20%7C%20Trae%20%7C%20Kiro%20%7C%20Cascade%20%7C%20Cline%20%7C%20Roo%20%7C%20Continue-475569"/>
-  <img alt="Stars" src="https://img.shields.io/github/stars/KimYx0207/Meta_Kim?style=flat&logo=github"/>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green"/>
-</p>
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
 
 </div>
 
-## 개요
+<p align="center">
+  <img src="docs/images/system-panorama.ko-KR.svg" alt="Meta_Kim 시스템 흐름: 8단계, 의존성에 따른 실행, 사람의 판단, 수정 경로와 기록 위치" width="1200">
+</p>
 
-**Meta_Kim**은 또 다른 AI 코딩 도구가 아닙니다. AI 코딩 보조에 "두뇌"를 달아주는 거버넌스 시스템입니다.
+01–08을 위에서 아래로 읽습니다. 짙은 초록 영역에서 목표와 근거를 정리하고 하나의 PRD에서 시스템과 모듈을 설계합니다. 실행 영역은 현재 호스트가 제공하는 역량을 사용하며, 품질 확인 단계에서 실제 결과를 검증합니다. 주황색은 필요할 때 사람의 판단을 요청하는 경로이며 유효한 기존 결정은 재사용합니다. 보라색은 실행 문제를 해당 작업으로 되돌립니다. 목표·사실·설계 문제는 각각의 담당 단계로 돌아갑니다. 점선은 기록 저장을 뜻하며 Work의 채택과 효과는 호스트가 전달합니다. 경험은 검토 후 방법에 반영하거나 후보로 보관하고, 반영할 필요가 없으면 이유를 남긴 뒤 전달을 마칩니다.
 
-비유하자면: Claude Code, Codex, OpenClaw, Cursor는 모두 "손"입니다 — 코드를 작성하고 파일을 수정할 수 있습니다. 하지만 어떤 파일을 먼저 바꿀지 누가 결정하나요? 결과는 누가 검토하나요? 문제가 생기면 누가 고치나요? 같은 실수를 다음에 반복하지 않으려면 어떻게 하나요?
+[확대 가능한 원본 그림 열기](docs/images/system-panorama.ko-KR.svg)
 
-Meta_Kim이 바로 그 역할을 합니다. **AI 위의 AI** — 복잡한 작업이 한데 엉키지 않도록 하는 통합 거버넌스 레이어입니다.
+## 한 문장으로 요청한 뒤에는 어떤 일이 일어날까요?
 
-### 한 줄 요약
+> “작은 예약 앱을 만들고 싶어요. 손님은 휴대폰으로 시간을 고르고, 직원은 예약을 관리하게 해 주세요. 두 번 눌러도 예약은 한 건만 생겨야 해요.”
 
-> **무엇을 할지 먼저 정리하고 → 누가 할지 정하고 → 끝나면 검토하고 → 검증하고 → 배운 것을 다음에 반영한다.**
+**Meta_Kim은 AI가 이 요청을 실행하고 확인하며 계속 개선할 수 있는 작업으로 바꾸도록 돕습니다.** 평소 쓰는 AI 클라이언트 안에서 문제 이해, 기존 프로젝트와 참고 자료 조사, 경험을 바꾸는 선택지 비교, 시스템 개요, 모듈 상세 설계, 작업 협업과 결과 확인을 연결합니다.
 
-새로운 개념이 아닙니다. 성숙한 엔지니어링 팀이라면 이미 하고 있는 일입니다. Meta_Kim은 이를 사람의 자율에 맡기지 않고 실행 가능한 시스템으로 만듭니다.
+받아야 할 결과는 구체적입니다. 이 예라면 작동하는 예약 화면, 관리 화면, 관련 소스, 실행 방법, 정상 예약과 중복 제출, 마감된 시간대의 검사 결과입니다. 아래에서는 예약 앱을 하나의 사례로 삼아 각 단계가 어떻게 이어지는지 설명합니다.
 
-## 빠른 시작
+실제로 사용할 때는 AI 클라이언트에서 프로젝트를 열고 요청, 기존 자료, 제약을 전달합니다. 선택과 피드백도 같은 대화에서 진행합니다. **Live는 작업, 진행 상황과 근거를 확인하는 패널입니다.** 아래 화면에서 무엇을 볼 수 있는지 확인하고, 설치와 실행 방법은 뒷부분에서 따라 할 수 있습니다.
 
-빠르게 사용해 보려면:
+![작업 관계와 진행 상태를 보여 주는 Meta_Kim Live 실제 화면](docs/images/meta-kim-live-task.ko-KR.png)
 
-```bash
-npx --yes github:KimYx0207/Meta_Kim meta-kim
-```
+*실제로 실행한 Live 화면이며 제품의 내장 워크플로 데모 데이터를 사용합니다. Live에서 작업을 열어 상세 내용을 확인할 수 있습니다. 아래 동적 그림은 예약 앱을 예로 작동 원리를 설명합니다.*
 
-또는 전통적인 방식:
+## 마인드맵으로 전체 구조부터 보기
+
+![Meta_Kim 마인드맵: 목표, 설계, 작업, 품질과 지속적인 개선](docs/images/animated-system-map.ko-KR.svg)
+
+**사용자 목표에서 네 갈래를 따라갑니다.** 목표 이해, 설계, 작업과 전달이 목표와 어떻게 연결되는지, 역할은 어떻게 나뉘는지 봅니다. Meta_Kim이 전체를 구성하고 전문 역량이 실제 작업을 맡습니다.
+
+- **목표**: 누가 어떤 상황에서 사용하며 무엇을 얻으려는지, 어떤 조건을 지켜야 하는지 정합니다.
+- **설계**: 근거를 조사하고 가능한 방법을 비교하며 중요한 결정을 하나의 요구사항 설계에 기록합니다.
+- **작업**: 입력, 담당자, 결과물을 정하고 의존 관계에 따라 순차 작업과 병렬 작업을 구성합니다.
+- **품질**: 결과를 검토하고 실제로 검사한 뒤, 문제를 해당 작업으로 돌려보냅니다.
+- **연속성과 개선**: 결정, 진행 상황, 결과를 저장해 유효한 성과에서 재개하고 검증된 방법을 다음에 활용합니다.
+
+이 연결에서 가치가 나옵니다. 모듈의 인터페이스가 바뀌면 관련 작업도 함께 검토합니다. 한 갈래가 사용자의 판단을 기다려도 독립적인 작업은 진행할 수 있습니다. 효과가 없었던 방법을 다시 시도하려면 새로운 근거가 필요합니다.
+
+## 첫 번째 PRD: 아이디어를 시스템 구조와 모듈 개요로 만들기
+
+**PRD는 제품 요구사항 문서입니다. 무엇을 만들고, 왜 만들며, 어떤 결과를 잘된 것으로 볼지 설명합니다.** Meta_Kim의 시스템 개요와 모듈 상세는 같은 PRD를 두 차례 구체화한 것입니다. 앞서 내린 결정이 다음 설계로 이어집니다.
+
+![첫 번째 PRD: 목표, 현황, 조사에서 구조와 모듈 개요, 미결정을 도출](docs/images/animated-prd-architecture.ko-KR.svg)
+
+**한 번의 생성 과정을 따라가 보세요.** 한 문장의 요청이 현황 확인과 조사, 방안 비교를 거쳐 같은 PRD의 사용자 흐름, 기술과 범위, 모듈 개요, 공통 약속으로 정리됩니다.
+
+### 사용자 흐름을 먼저 살펴보고 시스템을 구성합니다
+
+1. **요청을 관찰 가능한 결과로 바꿉니다.** 누가 예약하고 누가 관리하나요? 시간을 고르면 무엇이 보여야 하나요? 중복 제출은 어떻게 처리하나요? 사용자, 주요 흐름, 제약과 검수 기준을 정합니다.
+2. **이미 있는 것을 확인합니다.** 프로젝트 구조, 실제 코드, 기술과 버전, 기존 데이터, 작업 중인 변경을 읽습니다. 잘 작동하는 선택은 이어 갑니다.
+3. **결정에 영향을 주는 미지의 부분을 조사합니다.** 기능 구현 가능성은 공식 문서로 확인하고, 예약 경험은 전체 사용자 흐름과 관련 소스로 살펴봅니다. GitHub 프로젝트의 상태 처리, 인터페이스, 복구 방법도 설계 근거가 됩니다.
+4. **실질적으로 다른 방법을 비교합니다.** 외부 예약 서비스 이용, 기존 앱 확장, 별도 서비스 개발은 경험, 작업량, 유지 관리와 데이터 소유 방식이 다릅니다. 사용자가 정할 제품 방향에는 이유와 추천을 함께 제시합니다.
+5. **선택한 방향을 시스템 개요로 정리합니다.** 기술과 버전, 구조, 모듈별 책임, 인터페이스와 공유 상태, 주요 검수 기준, 추가 근거나 사용자 선택이 필요한 질문을 기록합니다.
+
+예약 앱의 개요에는 이런 내용이 들어갈 수 있습니다.
+
+- **사용자 경로**: 예약 가능한 시간을 확인하고 정보를 입력해 예약을 확정합니다. 직원은 예약을 확인하고 변경합니다.
+- **시스템 구조**: 화면 계층은 페이지와 상태를 표시하고, 애플리케이션 계층은 예약 규칙을 처리하며, 데이터 계층은 시간대와 예약을 저장합니다.
+- **모듈 목록**: 시간대 조회, 예약 생성, 직원 관리 화면의 목적과 담당 범위를 먼저 정합니다.
+- **공통 약속**: 잔여 정원을 누가 관리하는지, 예약 상태에는 무엇이 있는지, 제출과 취소 인터페이스가 어떻게 이어지는지 정합니다.
+- **이번 검수와 미결정**: 휴대폰에서 예약을 완료하고 중복 제출 결과가 일치해야 합니다. 문자 알림을 첫 배포에 포함할지는 명확한 제품 선택으로 남깁니다.
+
+예를 들어 ‘두 번 눌러도 예약은 한 건’이라는 요청은 검수 기준이 되어 ‘예약 생성’ 모듈에 연결됩니다. 같은 제출을 누가 식별하고 잔여 정원을 누가 관리하는지는 인터페이스와 공유 데이터의 약속으로 정합니다. 사용자 흐름과 이 책임 구분에서 모듈 경계가 나옵니다.
+
+**전체 구성이 성립하는지 확인한 뒤 구현 상세로 들어갑니다.** 탐색 중에는 미결정을 남길 수 있습니다. 모듈을 실행하기 전에는 필요한 결정과 인터페이스를 확정합니다. 작은 수정은 합의한 설계를 재사용하고 영향받는 부분만 구체화합니다.
+
+<p align="center">
+  <img src="docs/images/prd-to-tasks.ko-KR.svg" alt="하나의 PRD에서 시스템 개요와 모듈 상세를 만든 뒤 맥락, 범위, 의존성과 인수 조건을 갖춘 실행 작업 지시서로 연결하는 그림" width="1200">
+</p>
+
+두 차례 설계를 왼쪽에서 오른쪽으로 읽은 뒤 화살표를 따라 아래의 작업 지시서와 실행으로 이동합니다. 1차는 범위, 구조, 모듈 경계와 공유 인터페이스를 정합니다. 2차는 같은 시스템 기준 안에서 흐름, 상태, 예외, 데이터와 인수 조건을 구체화합니다. 작업 지시서는 해당 PRD를 참조하며 맥락, 범위, 의존성과 산출물 요구 사항을 전달합니다. 판단 분기는 한 모듈의 사례입니다. 기존 결정을 먼저 재사용하고 필요한 사람의 판단과 이유를 기록한 뒤 해당 설계로 돌아갑니다. 영향을 받는 의존성만 기다리고, 다른 준비된 독립 작업은 호스트 역량에 따라 병렬 실행할 수 있습니다. 요구 변경은 영향을 받는 모듈과 설계 기준을 찾아 연결된 작업을 갱신하며, 검증 실패는 해당 작업으로 돌아갑니다.
+
+[확대 가능한 원본 그림 열기](docs/images/prd-to-tasks.ko-KR.svg)
+
+## 두 번째 PRD: 각 모듈을 구현 가능한 수준으로 펼치기
+
+방향이 정해지면 AI는 각 모듈의 상세 설계를 보완하고 같은 PRD에 통합합니다. 모듈은 앞서 정한 개념, 상태와 인터페이스를 계속 공유합니다.
+
+![두 번째 PRD: 모듈을 사용자 흐름, 상태, 규칙, 인터페이스, 검수와 구현 작업으로 확장](docs/images/animated-prd-modules.ko-KR.svg)
+
+**한 모듈이 구체화되는 과정을 봅니다.** 앞선 시스템 기준을 유지하고 ‘예약 생성’의 행동, 상태, 규칙, 연동과 검수 내용을 채운 뒤 아래 화면·API·검증 작업에 전달합니다.
+
+‘예약 생성’ 모듈이라면 다음과 같은 실제 질문에 답합니다.
+
+- **사용자가 어떻게 완료하나요?** 시간을 고르고 정보를 입력해 확정한 다음 결과를 봅니다. 수정이나 취소 후 어디에서 이어 가는지도 정합니다.
+- **각 상태에는 무엇을 보여 주나요?** 로딩 안내, 예약 가능한 시간 없음, 제출 오류와 재시도, 성공 상태를 설계합니다. 휴대폰 화면, 키보드 조작과 접근성도 포함합니다.
+- **업무 규칙은 무엇인가요?** 시간대별 정원, 반복 클릭, 제출하는 사이 정원이 찬 경우, 취소 후 잔여 정원 회복을 다룹니다.
+- **다른 모듈과 어떻게 연결되나요?** 입력 필드, 반환 결과, 상태 관리 담당자와 권한을 정합니다. 트랜잭션, 재시도, 데이터 이전은 실제 프로젝트에 맞게 구체화합니다.
+- **어떻게 올바른지 확인하나요?** 각 검수 기준에 작업과 검사 방법을 대응시켜 정상 경로와 필요한 실패·복구 상황을 확인합니다.
+
+상세 설계는 각 요구사항을 구현과 검사에도 연결합니다. 예약 앱의 작업 예시는 다음과 같습니다.
+
+| 요구사항 | 설계와 구현 작업 | 검사 방법 |
+| --- | --- | --- |
+| 반복해서 눌러도 예약은 한 건 | 화면은 제출 중 상태를 처리하고 API는 같은 제출을 식별해 같은 예약 결과를 반환 | 연속 클릭과 같은 요청 재전송 후 예약 기록이 한 건만 늘었는지 확인 |
+| 마지막 자리를 초과해 예약하지 않음 | 데이터와 API가 정원 갱신의 일관성을 유지하고 화면은 마감 결과를 표시 | 두 요청을 동시에 보내 성공 건수가 잔여 정원을 넘지 않는지 확인 |
+| 취소하면 잔여 정원 복구 | 취소 API가 예약 상태와 정원을 갱신하고 화면은 결과를 표시 | 취소 후 시간대를 다시 조회해 예약 상태와 잔여 정원이 일치하는지 확인 |
+
+각 실행자에게는 **현재 시스템 기준, 자신이 맡은 모듈의 완전한 설계, 관련 결정과 인터페이스, 결과물과 검수 기준**을 전달합니다. 프런트엔드와 백엔드는 공통 필드와 상태를 맞춘 뒤 각자 범위에서 작업합니다.
+
+나중에 취소 시 정원을 돌려주는 규칙이 바뀌면 관련 결정, 모듈과 의존 관계를 따라 영향받는 작업을 찾습니다. 유효한 결과는 보존하고 실제로 영향을 받는 부분을 변경합니다.
+
+## 여덟 단계: 무엇을 남기고 다음 단계에 무엇을 넘기나요?
+
+![여덟 단계 흐름: Critical, Fetch, Thinking, Execution, Review, Meta-Review, Verification, Evolution과 문제 발견 시 돌아갈 단계](docs/images/animated-eight-stages.ko-KR.svg)
+
+**01에서 08까지 강조 표시를 따라갑니다.** 각 카드 아래에는 해당 단계가 남길 결과가 있습니다. 다음 단계는 그 결과를 받아 사용하고, 문제가 생기면 해결할 수 있는 단계로 돌아갑니다.
+
+| 단계 | 받는 내용과 하는 일 | 다음에 전달할 내용 |
+| --- | --- | --- |
+| **01 Critical · 핵심 확인** | 요청과 프로젝트 현황에서 사용자, 목표, 범위, 중요한 제약을 확인 | 명확한 목표, 성공 기준, 판단에 필요한 미해결 질문 |
+| **02 Fetch · 조사와 역량 탐색** | 질문에 맞춰 코드, 참고 자료와 사용 가능한 전문 역량을 조사 | 출처가 있는 발견, 후보 방법, 부족한 사실 |
+| **03 Thinking · 판단과 계획** | 목표와 근거로 경로를 비교하고 두 PRD 관점과 작업 의존 관계를 구성 | 설계 기준, 담당자, 방법, 입력·결과물·검수 계획 |
+| **04 Execution · 실행** | 현재 설계에 따라 범위가 정해진 작업을 수행 | 확인 가능한 실제 결과물, 실행 기록, 해당 단계의 통합 결과 |
+| **05 Review · 검토** | 결과를 목표와 비교하고 앞선 이해, 조사와 설계도 점검 | 구체적인 문제, 수정 요구, 검토 결론 |
+| **06 Meta-Review · 검토 재점검** | 검토 기준, 누락, 결론을 뒷받침하는 근거를 확인 | 검토 판단의 재점검 결과와 추가 확인할 문제 |
+| **07 Verification · 실제 검증** | 현재 결과를 테스트·조작·대조. 예약 사례는 성공, 중복 제출, 실패 복구를 확인 | 현재 버전의 근거, 결과와 남은 문제 |
+| **08 Evolution · 경험 개선** | 실제 결과에서 재사용할 발견을 고르고 개선 후보를 평가 | 검토를 거친 방법의 업데이트 또는 반영이 필요 없는 이유 |
+
+이것이 실행의 기본 뼈대입니다. **단계는 정해진 순서로 이어지고, 같은 단계의 독립적인 작업은 병렬로 진행한 뒤 통합해 다음 단계로 넘어갑니다.** 목표를 잘못 이해했으면 핵심 확인으로, 사실이 부족하면 조사로, 설계가 맞지 않으면 계획으로, 검증이 실패하면 관련 작업으로 돌아갑니다. 준비는 실제 작업에 필요한 깊이로 하고 검토와 재점검은 위험에 맞춥니다. 재사용할 발견이 없으면 이번에는 방법을 갱신할 필요가 없다고 기록합니다.
+
+## 동적 작업 편성: 의존 관계와 현재 상태로 지금 시작할 일을 고르기
+
+**동적 편성은 어떤 작업이 지금 진행 가능한지 실행 중에도 계속 판단하는 것입니다.** 선행 결과, 파일 범위, 자원, 권한과 현재 클라이언트가 제공하는 병렬 실행 능력을 함께 봅니다.
+
+![같은 단계 안에서 예약 작업을 의존 관계에 따라 병렬 실행하고 일부 대기와 통합을 거쳐 검토로 이동](docs/images/animated-orchestration.ko-KR.svg)
+
+**위쪽 공통 규약에서 시작해 양쪽 갈래를 함께 봅니다.** 왼쪽 화면 작업이 선택을 기다리는 동안 오른쪽 API 작업은 계속됩니다. 화면 작업이 재개되면 두 결과를 아래에서 통합합니다. 동적 편성은 이런 준비 상태의 변화를 처리합니다.
+
+예약 앱은 다음과 같이 진행할 수 있습니다.
+
+1. **공통 인터페이스를 먼저 정합니다.** 제출 필드, 성공·실패 응답을 프런트엔드와 백엔드의 공통 입력으로 삼습니다.
+2. **독립적인 작업을 함께 시작합니다.** 화면과 예약 인터페이스의 작업 범위가 분리되고 클라이언트에 실행 능력이 있으면 동시에 진행할 수 있습니다. 같은 파일을 바꾸는 작업은 순서를 조정합니다.
+3. **선행 결과가 끝나면 다음 작업을 시작합니다.** 화면을 실제 인터페이스와 연결하려면 양쪽 결과가 준비되어야 합니다. 새로 준비된 작업을 계속 채우고 같은 단계의 결과를 통합 담당자에게 넘깁니다.
+4. **한 갈래가 기다려도 독립적인 작업은 이어 갑니다.** 화면 방안에 사용자의 선택이 필요하면 해당 화면 작업은 기다립니다. 공통 필드와 인터페이스가 확정된 백엔드 작업은 계속할 수 있습니다.
+5. **문제를 관련 작업으로 돌려보냅니다.** 한 갈래가 실패해도 독립적으로 성공한 결과는 유지합니다. 원인을 살피고 근거가 있는 수정을 정한 뒤 해당 작업을 재개합니다.
+
+같은 근거로 효과 없는 시도가 반복되면 해당 작업을 잠시 멈추고 방법이나 사실을 보완합니다. 무엇이 기다리는지, 이유가 무엇인지, 어떤 조건이 갖춰져야 재개할 수 있는지 알 수 있습니다.
+
+## 여백과 리듬: 지금 필요한 판단에 집중할 시간을 만들기
+
+**의도적인 여백은 현재 결정과 사용자의 주의를 위한 공간입니다.** 정보를 언제 보여 주고, 짧게 말하고, 기다릴지 조절합니다. PRD의 미결정은 정보나 결정이 아직 부족하다는 뜻으로, 별도로 기록합니다.
+
+![상황 변화에 따라 즉시 진행, 나중으로 미루기, 잠시 멈추기, 중요한 대응을 먼저 삽입하는 리듬 제어](docs/images/animated-rhythm.ko-KR.svg)
+
+**위쪽의 새 정보부터 봅니다.** 이미 결정됐는지, 사실이 부족한지, 사용자가 선택할 준비가 됐는지, 긴급한지를 판단해 다음 카드를 고릅니다. Pause는 이해할 시간을 남기고 재개 조건을 기록합니다.
+
+시스템 계획을 읽고 서비스 제공자를 비교한 다음 중요한 변경까지 판단했다면, 다음 메시지는 ‘무엇을 정했고 어떤 결정이 남았는지’를 먼저 알려 줘야 합니다. 새로 주의를 많이 쓰는 질문은 미루고 긴 자료는 파일에 남길 수 있습니다. 기본 리듬 규칙은 주의 부담이 큰 카드가 세 번 연속되면 Pause를 배치합니다. 재개할 때는 현재 상태와 다음 행동을 다시 확인합니다.
+
+일시 정지에는 이유, 미완료 작업과 재개 조건을 남깁니다. 해당 화면 선택에만 관련된 경우라면 그 판단에 의존하지 않는 승인된 작업은 이어 갈 수 있습니다. 사용자가 프로젝트 전체를 멈추라고 요청하면 그 지시에 따릅니다.
+
+### 열 가지 행동 카드로 상황 변화에 대응하기
+
+‘카드를 낸다’는 말은 현재 상황에 맞는 행동을 고른다는 뜻입니다. 여덟 단계의 기본 흐름 안에서 **발동 조건에 맞는 카드를 고르고 이미 충족한 카드는 건너뜁니다.**
+
+| 행동 카드 | 나타나는 조건 | 예약 사례 |
+| --- | --- | --- |
+| **Clarify · 확인** | 모르는 답이 방향을 바꾸는 경우 | 직원이 고객 대신 취소할 수 있는지 확인 |
+| **Shrink scope · 범위 축소** | 넓은 범위가 이번 전달을 어렵게 하는 경우 | 기본 예약 흐름을 완성하고 확장은 다음 반복에 배치 |
+| **Options · 선택지** | 경험, 비용, 유지 관리가 다른 실행 가능한 방안이 있는 경우 | 외부 서비스 이용과 기존 앱 내 구현을 비교 |
+| **Execute · 실행** | 설계, 입력, 실행 조건이 준비된 경우 | 예약 화면과 API 구현 |
+| **Verify · 검증** | 확인할 결과물이 있는 경우 | 예약, 중복 제출, 취소를 실제로 검사 |
+| **Fix · 수정** | 검사에서 구체적인 문제가 발견된 경우 | 취소 후 잔여 정원이 돌아오지 않는 문제 수정 |
+| **Rollback · 복구** | 영향이 확산돼 안정된 상태로 돌아가야 하는 경우 | 복구 계획에 따라 해당 변경을 되돌림 |
+| **Risk · 위험 대응** | 권한, 공유 데이터 등에 중요한 위험이 생긴 경우 | 직원이 다른 매장 예약에 접근하는 문제를 우선 처리 |
+| **Nudge · 가벼운 제안** | 위험이 낮은 다음 단계에서 잠깐 멈춘 경우 | 성공하는 예약 사례 하나부터 확인하자고 제안 |
+| **Pause · 여백** | 부담이 큰 판단이나 정보가 연속되는 경우 | 짧은 상태와 재개 지점을 남기고 이해할 시간을 마련 |
+
+같은 카드라도 처리가 달라집니다. 지금 필요하면 실행하고, 이미 충족했으면 건너뛰며, 개입할 가치가 작으면 알림을 줄이고, 선행 조건이 부족하면 미룹니다. 긴급한 문제는 먼저 삽입하고 더 높은 판단이 필요하면 담당자에게 올립니다. **이미 답한 내용은 기록합니다. 내부 Agent 배분은 시스템이 처리하고, 사용자는 제품 결과를 바꾸는 선택에 집중합니다.**
+
+## 전체를 관리하는 아홉 역할과 실제 작업의 전문 역량
+
+협업의 진입점은 **meta-warden**입니다. 아홉 역할에는 각각 분명한 책임이 있습니다.
+
+- **meta-warden**: 방향을 조율하고 충돌을 해결하며 최종 결론을 모읍니다.
+- **meta-conductor**: 단계, 작업 의존 관계, 순차·병렬 실행과 대화 리듬을 구성합니다.
+- **meta-genesis**: 필요한 Agent의 정체성, 책임과 프롬프트 구조를 설계합니다.
+- **meta-artisan**: 작업에 맞는 Skill, MCP와 도구를 조합합니다.
+- **meta-sentinel**: 권한, 위험, Hook과 복구 범위를 다룹니다.
+- **meta-librarian**: 기억, 문맥과 중단 후 연속성을 관리합니다.
+- **meta-prism**: 품질을 검토하고 방향 이탈을 찾아 구체적인 수정을 요청합니다.
+- **meta-scout**: 외부 역량과 참고 자료를 찾고 평가합니다.
+- **meta-chrysalis**: 개선 신호를 모으고 승인된 경험 반영을 조율합니다.
+
+각 역할은 작업에 맞게 참여합니다. **해야 할 일을 정하고 적절한 역량을 찾은 뒤 담당자, 방법, 도구와 검수 기준을 하나의 작업 지시로 묶습니다.** 예약 앱에서는 다음과 같이 연결됩니다.
+
+| 구성 요소 | 정하는 내용 | 예약 사례 |
+| --- | --- | --- |
+| **Agent · 실행자** | 누가 어떤 범위에서 결과를 만드는지 | 화면과 API 담당자에게 수정 범위와 결과물을 지정 |
+| **Skill · 작업 방법** | 절차와 품질 기준 | 화면 설계에서 휴대폰 배치, 상태 피드백, 사용성을 다룸 |
+| **전문 자료와 예시** | 이번 작업에 필요한 지식 | 해당하는 상태 설계나 API 예시를 각 작업에 전달 |
+| **도구와 MCP** | 프로젝트나 서비스를 조작하는 방법 | 코드를 읽고 파일을 수정하며 화면과 실제 결과를 확인 |
+| **Command · 재사용할 실행 입구** | 반복 작업을 호출하는 방법 | 기존 검사 절차를 작업에서 호출할 명령으로 제공 |
+| **Hook · 정해진 시점의 검사** | 언제 어떤 핵심 조건을 확인하는지 | 조작 요청 시 관련 역량, 작업 범위와 권한 경계를 확인 |
+
+먼저 프로젝트와 클라이언트의 기존 역량을 찾고 연결된 Kim Service 같은 출처를 검토합니다. 적합한 역량은 재사용하고 필요한 부분은 프로젝트에 맞게 조정하며, 반복해서 쓸 부족분이 남으면 새로 만듭니다. 현재 설계, 선택한 자료, 검수 기준을 작업 지시와 함께 전달하고 통합 담당자가 결과를 모읍니다.
+
+## 중단한 작업을 이어서 하고 다음 작업도 개선하기
+
+![계획, 발견, 진행 상태와 결과를 재개 근거로 삼고 평가한 경험을 다음 작업에 연결](docs/images/animated-continuity.ko-KR.svg)
+
+**이번 작업 → 기록 저장 → 다음 대화의 재개를 따라갑니다.** 아래 두 갈래는 실제 결과를 근거로 남은 일을 계속하고, 어떤 경험을 남길 가치가 있는지 평가합니다.
+
+Meta_Kim은 계획, 발견, 진행 상황, 결정, 결과물과 검사 기록을 프로젝트에 저장합니다. 다음 대화에서는 현재 파일과 기록을 비교해 완료된 일, 기다리는 선택, 결과 확인이 필요한 조작을 정리하고 유효한 지점에서 다시 시작합니다.
+
+이렇게 말할 수 있습니다.
+
+> “예약 앱을 계속해 줘. 완성된 예약 흐름은 유지하고 지난번 남은 작업을 읽어서, 취소 안내와 잔여 정원 복구를 마무리한 뒤 함께 검수해 줘.”
+
+이전 조작의 성공 여부가 불분명하면 현재 결과를 확인한 뒤 다시 실행할지 결정합니다. 프로젝트 관계도는 관련 모듈을 찾는 데 도움을 주고 기억과 실행 기록은 이전 결정을 설명합니다. 실제 소스와 현재 결과물도 함께 확인합니다.
+
+경험을 재사용할 때는 관찰한 문제와 개선안을 기록하고 결과가 나아지는지, 다른 상황에 영향을 주는지 평가한 뒤 필요한 검토를 거쳐 방법이나 구성 요소를 업데이트합니다. **구체적인 사례와 비교, 복구 경로가 있어야 다음 작업에서 검증한 경험을 활용할 수 있습니다.**
+
+## 회사의 한 업무를 여러 실행에 연결하기
+
+![같은 회사 업무에 여러 실행을 연결하고 산출, 검증, 채택, 효과를 구분하여 학습 후보를 남깁니다](docs/images/animated-work-context.ko-KR.svg)
+
+**장기간 이어지는 업무(Work)는 회사의 업무 시스템이 보관하고, Meta_Kim은 각 실행을 그 업무에 연결합니다.** 지금은 1인 회사여도, 나중에 구성원이 늘어나도 같은 선택적 인터페이스를 사용합니다. 호스트가 회사, 업무, 맥락 버전, 접근 범위, 출처 참조를 제공하면 현재 작업 지시와 결과에 연결됩니다. 맥락이 바뀌면 새 실행을 시작하며 이전 기록도 추적할 수 있습니다.
+
+결과 기록은 네 가지 상태를 구분합니다.
+
+| 기록 | 담는 내용 |
+| --- | --- |
+| **산출 produced** | 실제 실행이 반환한 결과. 계획이나 수신 확인은 산출로 계산하지 않습니다 |
+| **검증 verified** | 기존의 독립적인 결과 검토와 증거. 검증하지 않았으면 미확인 상태입니다 |
+| **채택 adopted** | 호스트가 기록한 정확한 채택 버전, 원래 결정의 참조, 이유. 이유가 없으면 미확인으로 남깁니다 |
+| **효과 effect** | 이후 업무 효과에 대한 관찰과 출처. 검증 통과만으로 효과를 단정하지 않습니다 |
+
+이번 실행에서 v2를 만들더라도 회사는 이전에 승인한 v1을 계속 사용할 수 있습니다. 두 버전을 구분하여 기록하고 v1의 재승인을 요구하지 않습니다. 실행 후 호스트가 채택, 효과, 지식 재사용 관찰을 추가해도 원래 실행 파일은 유지되고 worker를 다시 실행하지 않습니다. 지식은 그대로 재사용, 수정 후 재사용, 적용 불가로 기록합니다. 검증 실패, 미채택, 채택 피드백은 기존의 검토 절차를 갖춘 지식 수명 주기에 전달할 후보로 남습니다.
+
+일반 API의 선택 항목 `workContext` 또는 CLI `--work-context-input`으로 연결합니다. 이후 관찰은 `workOutcome` / `--work-outcome-input`을 사용하며 원래 `runId`와 현재 업무 맥락에 연결합니다. 필드와 사용법은 [기존 거버넌스 참고](canonical/skills/meta-theory/references/dev-governance.md#optional-company-work-context)에 있습니다. 입력하지 않으면 기존 흐름을 유지합니다. 업무 기록과 권한은 호스트가 관리하며, 참조 자체가 접근 권한을 부여하거나 회사 지식을 자동 공개하지 않습니다.
+
+<a id="installation"></a>
+
+## 내 프로젝트에서 시작하기
+
+**Node.js 22.13.0+**, Git, 모델 연결을 설정한 AI 클라이언트가 필요합니다. 현재 공개 버전은 **[v3.11.0](https://github.com/KimYx0207/Meta_Kim/releases/tag/v3.11.0)** 입니다.
+
+### 1. Meta_Kim 설치하기
 
 ```bash
 git clone https://github.com/KimYx0207/Meta_Kim.git
@@ -51,44 +253,169 @@ npm install
 node setup.mjs
 ```
 
-> 💡 **설치 후**: `setup.mjs`가 산출물 위치를 출력합니다. 언제든 다시 확인(또는 이전 설치와 비교)하려면 설치한 디렉터리에서 `npm run meta:status`를 실행하세요.
+사용할 클라이언트와 설치 범위를 선택하세요. **전역 설치**는 계정에서 재사용할 기능을 설치하고, **프로젝트 설치**는 선택한 프로젝트 디렉터리에 맞춰 설치합니다. 업데이트에 사용할 수 있도록 Meta_Kim 체크아웃을 보관하세요. 실제 작업 프로젝트는 다른 디렉터리에 있어도 됩니다.
 
-새로 clone한 직후에는 Meta_Kim이 source files, generated projections, local state를 의도적으로 분리한다고 보면 됩니다.
-
-| 계층 | 예시 | 언제 보여야 하나 |
-| --- | --- | --- |
-| GitHub source | `README.md`, `AGENTS.md`, `CLAUDE.md`, `canonical/`, `config/`, `scripts/` | `git clone` 직후 저장소에 있어야 합니다. 해당되는 경우 `package.json`의 `files` whitelist에도 포함됩니다 |
-| Generated runtime projections | `.claude/`, `.codex/`, `.agents/`, `.cursor/`, `openclaw/`, `.mcp.json`, `codex/` | `node setup.mjs` 또는 `npm run meta:sync`가 로컬에서 생성합니다. gitignored이며 GitHub source가 아닙니다 |
-| Local run state and graph output | `.meta-kim/`, `graphify-out/`, `tests/output/`, `task_plan.md`, `findings.md`, `progress.md` | setup, graphify, tests, governed run이 필요할 때만 생깁니다. local-only이며 다시 생성할 수 있습니다 |
-
-저장소를 유지보수할 계획이라면, 먼저 `canonical/`과 `config/contracts/workflow-contract.json`을 수정한 뒤 다음을 실행하세요 (Node.js >= 22.13.0 필요):
+예를 들어 한 프로젝트에 Codex 지원을 바로 설치하려면 다음을 실행합니다.
 
 ```bash
-npm run meta:sync
-npm run meta:validate
+node setup.mjs --targets codex --scope project --project-dir "/path/to/your-project"
 ```
 
-권장 읽기 순서:
+따옴표 안을 프로젝트의 절대 경로로 바꾸세요. 계정 전체에 설치할 때는 `--project-dir` 없이 `--scope global`을 사용합니다. `--targets codex,claude`처럼 쉼표로 여러 클라이언트를 선택할 수도 있습니다.
 
-1. 이 파일, `README.ko-KR.md`
-2. `AGENTS.md`
-3. `docs/runtime-capability-matrix.md`
+체크아웃을 보관하지 않고 설치하려면 `npx --yes github:KimYx0207/Meta_Kim`을 사용하세요. 나중에 업데이트할 때는 `npx --yes github:KimYx0207/Meta_Kim update`를 실행합니다. 이 방법에도 같은 setup 옵션을 지정할 수 있습니다. 아래 CLI 명령에서는 `node bin/meta-kim.mjs`를 이 `npx` 명령 접두어로 바꾸면 됩니다.
 
-### 플랫폼 지원 계층
+### 2. 프로젝트를 열고 원하는 결과 말하기
 
-Meta_Kim은 호환 가능한 표면을 모두 "완전 지원"이라고 부르지 않습니다. 지원 상태를 계층으로 관리합니다.
+설정한 클라이언트에서 작업 프로젝트를 열고 평소처럼 메시지를 보내세요.
 
-| 계층 | 제품 | 의미 |
-|---|---|---|
-| default formal projection | Claude Code, Codex | canonical 거버넌스를 기본 runtime 파일로 투영하고 `npm run meta:sync` / `npm run meta:check`로 검증합니다. |
-| non-default compatibility projection | OpenClaw, Cursor | 명시적으로 선택한 경우에만 project projection을 생성합니다. runtime 변경은 maintainer handshake와 해당 tool-side self-test evidence가 필요합니다. |
-| candidate compatibility probe | Qoder CLI, Trae, Kiro, Windsurf / Devin Desktop Cascade, Cline, Roo Code, Continue | 공식 문서에서 rules / instructions, skills, agents / modes, hooks, MCP, commands, memory, permission controls 같은 호환 primitive를 확인했습니다. Meta_Kim은 후보로 추적하며 공식 지원으로 보지 않습니다. |
+> “이 프로젝트의 회원가입 흐름을 검토해 줘. 기존 데이터 항목은 유지하면서 휴대폰에서 더 편하게 사용할 수 있도록 바꾸고, 변경된 흐름과 검사 결과를 보여 줘.”
 
-사실 소스: `config/runtime-compatibility-catalog.json`.
+기존 프로젝트와 중요한 제약을 전달하세요. 어시스턴트가 제시하는 주요 선택을 검토한 뒤 계획에 따라 진행하게 합니다. 무엇을 왜 바꾸는지, 어떻게 확인할지 도중에 물어봐도 됩니다. 별도의 활성화 명령을 외울 필요는 없습니다.
 
-Surface compatibility는 formal runtime support보다 약한 주장입니다. adapter, profile/layout, sync tests, live validation이 준비되기 전에는 공식 projection으로 승격하지 않습니다. 의존 프로젝트의 install target matrix는 Meta_Kim의 support claim으로 여기서 반복하지 않습니다.
+### 3. Live에서 작업 살펴보기
 
----
+Meta_Kim 체크아웃에서 실행하세요.
+
+```bash
+node bin/meta-kim.mjs live --project-root "/path/to/your-project"
+```
+
+명령이 출력한 로컬 URL을 여세요. Live는 해당 프로젝트에 저장된 작업과 실행 기록을 읽습니다. 프로젝트 기록이 생기기 전에 화면을 먼저 둘러보려면 URL에 `?demo=states`를 추가해 이 페이지에 나온 내장 데모를 여세요.
+
+**먼저 페이지 위쪽의 작업 지도를 살펴보세요.** 연결선을 따라 무엇이 무엇에 의존하는지, 어떤 일이 진행 중인지 확인합니다. **작업을 클릭한 뒤 상세 패널에서 ‘근거’를 선택**하면 기록된 결과와 검사를 볼 수 있습니다.
+
+![Meta_Kim Live에서 선택한 작업의 상세 내용과 기록된 근거](docs/images/meta-kim-live-detail.ko-KR.png)
+
+*내장 데모에서 작업을 선택하고 근거를 연 화면입니다. 기록을 통해 해당 작업의 상태를 이해할 수 있습니다.*
+
+언어 선택기에서 중국어, 영어, 일본어와 한국어를 선택할 수 있습니다. Live는 화면 언어를 기억하고 사용자가 작성한 작업의 원문은 그대로 표시합니다. 새 지시와 피드백은 AI 클라이언트에 전하고, Live에서는 기록된 작업을 따라가며 확인하세요.
+
+<a id="clients"></a>
+
+## 평소 사용하는 클라이언트에서 쓰기
+
+대화형 설치 프로그램은 다음 여섯 대상 이름을 지원합니다. 설정 과정에서 선택하거나 `--targets`에 이름을 지정하세요.
+
+| 클라이언트 | 대상 이름 | 설치로 제공하는 것 |
+| --- | --- | --- |
+| Claude Code | `claude` | Agent, Skill, 명령과 Hook |
+| Codex | `codex` | Agent, 공유 Skill, 설정과 Hook |
+| Cursor | `cursor` | Agent, Skill, 프로젝트 규칙과 Hook |
+| OpenClaw | `openclaw` | Agent 워크스페이스, Skill과 설정 템플릿 |
+| Gemini CLI | `gemini` | Agent, 공유 Skill, 설정과 Hook |
+| ZCode | `zcode` | Agent, Skill, MCP 설정과 선택형 사용자 단위 Hook |
+
+설치 후 작업 프로젝트에서 클라이언트를 다시 열어 설정을 불러오세요. 도구 접근과 모델 권한은 계속 해당 클라이언트가 관리합니다. Meta_Kim의 전역 Hook을 활성화하려면 setup 명령에 `--with-global-hooks`를 추가하세요. ZCode는 사용자 단위 Hook을 읽습니다.
+
+**OpenClaw는 템플릿 연결도 필요합니다.** 설치 과정에서 Agent 워크스페이스와 `openclaw.template.json`을 생성합니다. 기본 위치는 전역 설치의 경우 `~/.openclaw/`, 프로젝트 설치의 경우 해당 프로젝트의 `openclaw/`입니다. 템플릿의 `agents.list`와 `skills.load.extraDirs`를 기존 OpenClaw 설정에 병합하고, 다른 Agent와 디렉터리 및 설정은 보존하세요. gateway를 다시 시작한 뒤 진입 Agent로 `meta-warden`을 선택합니다.
+
+**Qoder와 Trae**에는 실험적 연동을 위한 Beta 어댑터 리소스가 포함되어 있습니다. 명시적으로 설정하기 전에는 비활성 상태이며, 추가 `--targets` 선택지가 아닙니다. DeepSeek Harness는 아래의 별도 절차를 사용합니다. 의존 프로젝트의 지원 클라이언트는 해당 상위 프로젝트가 관리합니다.
+
+### 클라이언트와 모델을 따로 설정하기
+
+![작업과 호스트 정보로 클라이언트와 모델을 선택하고 실제 기능을 확인하며 요청·전달·관측을 따로 기록](docs/images/animated-runtime-selection.ko-KR.svg)
+
+**전문 방법, 실행 클라이언트, 모델은 각각 선택합니다.** 같은 PRD, 여덟 단계, 인계와 검증 방법을 여러 클라이언트에서 사용할 수 있습니다. Claude Code, Codex, Gemini CLI, ZCode 등은 사용 환경이며 모델은 연결 설정과 이번 요청으로 결정합니다. Claude Code에서 MiniMax 모델을 사용해도 클라이언트는 Claude Code로, 모델은 별도 항목으로 기록합니다.
+
+| 바꿀 항목 | 기존 설정 입구 | 동작 |
+| --- | --- | --- |
+| 이번 실행의 클라이언트 | API `runtime` / CLI `--runtime` | 명시적 선택 우선. 자동 모드는 연결된 어댑터, 설정, 호스트 신호를 사용하고 출처를 기록 |
+| 호스트 정보가 없을 때의 호환 기본값 | `config/contracts/runtime-priority-and-compatibility-contract.json`의 `selectionPolicy.defaultPlanningRuntime` | 출처가 있는 계획 기본값이며 실행 성공이나 권한의 증거가 아님 |
+| 이번 worker 모델 | API `stageRunner.model` / CLI `--stage-runner-model` | 구현된 명령 어댑터가 실제 규약으로 전달. 주입형 어댑터는 모델 선택 지원을 명시해야 함 |
+| 계정, 연결, 모델 이용 가능 여부 | 현재 클라이언트 또는 호스트 설정 | 실제 환경에서 제공하며 방법 패키지가 모델 접근이나 도구 권한을 추가하지 않음 |
+
+모델을 생략하면 실행 프로세스의 기본 동작으로 기록하고 부모 세션의 모델을 상속했다고 추측하지 않습니다. 결과에는 **requested(요청), applied(어댑터에 전달), observed(실제 관측)** 를 구분하며 관측 증거가 없으면 미확인으로 둡니다. 명시한 요청을 지원하지 않으면 부족한 기능을 알리고 다른 모델로 몰래 바꾸지 않습니다. 실행 설정을 바꿀 때는 새 실행 근거가 필요하며 이미 완료한 업무 기록은 계속 참조할 수 있습니다.
+
+설치용 생성물, 호스트에서 이어가기, 네이티브 명령 어댑터의 지원 범위는 각각 다릅니다. 위의 여섯 설치 대상은 `config/sync.json`을 기준으로 합니다. 내장 읽기 전용 단계 worker는 현재 Codex와 Claude Code의 명령 규약을 구현합니다. Gemini와 ZCode 등의 호스트에서 이어가려면 실제 어댑터와 기능 증거가 필요합니다. MiniMax Code 같은 새 클라이언트도 공통 방법을 읽을 수 있지만 네이티브 실행은 해당 어댑터 구현과 검증이 필요합니다.
+
+새 클라이언트·운영체제·모델 연결 정보가 없는 이전 실행은 과거 근거로 보관합니다. 추가 실행에는 새 `runId`와 현재 기능·맥락 확인을 사용하며 이전 모델을 추측하지 않습니다. 새 형식의 실행을 재개하면 원래 모델 인수 기록을 유지하고, 채택이나 업무 효과 관측만 추가할 때 worker를 다시 실행하지 않습니다.
+
+## 전문적인 방법이 필요할 때 Kim Service 연결하기
+
+Meta_Kim은 작업을 조직합니다. **Kim Service는 설계, 분석, 콘텐츠 제작 같은 일에 재사용할 전문적인 방법과 자료를 제공합니다.** 연결하면 작업 방법을 고를 때 이 자료들도 검토할 수 있습니다. 실제 작업은 현재 클라이언트에서 사용할 수 있는 도구로 진행합니다.
+
+설치 프로그램이 관리 대상 Service 소스를 이미 등록했고 설치 기록의 검증도 통과한다면, Meta_Kim은 그 등록을 사용할 수 있습니다. 직접 내려받은 사본은 아래와 같이 디렉터리를 명시적으로 연결하세요.
+
+Kim Service를 로컬 디렉터리에 복제합니다.
+
+```bash
+git clone https://github.com/KimYx0207/Kim_Service.git
+```
+
+**실제 작업 프로젝트의 루트**에 `.meta-kim/local.overrides.json`을 만들고, 체크아웃의 절대 경로를 지정합니다.
+
+```json
+{
+  "dependencyRoots": {
+    "kim-service": "/absolute/path/to/Kim_Service"
+  }
+}
+```
+
+파일이 이미 있으면 기존 `dependencyRoots` 객체에 `kim-service` 항목을 병합하고 다른 설정을 보존하세요. Meta_Kim 설치 디렉터리가 아니라 AI 클라이언트에서 연 프로젝트의 루트를 사용합니다. Windows에서도 `C:/Projects/Kim_Service`처럼 JSON 경로에 슬래시를 쓸 수 있습니다.
+
+환경 변수로 관리한다면 `META_KIM_KIM_SERVICE_ROOT`로 같은 연결을 지정할 수 있으며, 로컬 파일보다 우선합니다. AI 클라이언트를 시작하는 환경에 설정하세요. 두 저장소를 나란히 놓기만 해서는 연결되지 않습니다. 설정한 뒤에는 사용할 수 있는 Kim Service 기능을 확인하고, 이번 작업에 맞는 방법을 사용하도록 어시스턴트에게 요청하세요.
+
+<a id="dsh"></a>
+
+## DeepSeek Harness 설치
+
+DSH는 네이티브 profile, Skill과 MCP 설정을 사용하는 별도의 Beta 연동을 제공합니다. **DSH 0.2.2-rc.1**과 **Node.js 24.9.0+** 가 설치되어 있다면 Meta_Kim 체크아웃에서 다음을 실행하세요.
+
+```bash
+node bin/meta-kim.mjs dsh install
+node bin/meta-kim.mjs dsh check
+dsh --profile meta-kim
+```
+
+한 프로젝트에 설치할 때는 install 명령에 `--scope project --project-root "/path/to/your-project"`를 추가하고, 설치 프로그램이 출력한 시작 명령을 사용합니다. 같은 프로젝트의 설정을 확인하려면 다음을 실행하세요.
+
+```bash
+node bin/meta-kim.mjs dsh check --scope project --project-root "/path/to/your-project"
+```
+
+Kim Service의 네이티브 DSH Skill도 포함하려면 [Kim Service 릴리스](https://github.com/KimYx0207/Kim_Service/releases/latest)에서 DSH 패키지를 내려받아 압축을 풀고, 설치 또는 업데이트할 때 `--service-package "/path/to/unpacked-service-package"`를 추가하세요.
+
+이 연동을 갱신하려면 `node bin/meta-kim.mjs dsh update`를 사용합니다. 업데이트는 기존 Service 구성을 유지합니다. 해당 Skill도 갱신하려면 새로 압축을 푼 Service 패키지를 전달하세요. 연동을 제거하려면 `node bin/meta-kim.mjs dsh uninstall`을 실행합니다. 프로젝트 업데이트나 제거에는 설치할 때 사용한 것과 같은 `--scope project --project-root` 값을 지정하세요.
+
+<a id="continue-work"></a>
+
+## 작업을 이어서 개선하고 설치 환경을 최신으로 유지하기
+
+대화가 중단되면 **같은 작업 프로젝트**를 다시 여세요. 계속하기 전에 저장된 계획, 조사 결과, 진행 상황과 실행 기록을 읽도록 어시스턴트에게 요청합니다.
+
+> “회원가입 개선을 이어서 해 줘. 저장된 결정과 완료한 작업을 현재 프로젝트와 대조하고, 중단된 작업의 결과를 확인한 다음 아직 끝내지 않은 다음 작업부터 진행해 줘.”
+
+다음 개선에서는 유지할 것과 바꿀 것을 함께 말하세요. 예를 들어 “모바일 배치와 기존 항목은 유지하고, 완료 메시지를 더 명확하게 해 줘”라고 요청하면 받아들인 결과를 바탕으로 새 작업을 진행할 수 있습니다. 선택형 Memory 서비스를 추가하면 일부 정보를 세션 간에 유지하는 데 도움이 됩니다. 현재 작업을 이어 가는 기반은 프로젝트의 작업 기록에도 담겨 있습니다.
+
+소스에서 설치한 환경을 업데이트하려면 Meta_Kim 체크아웃에서 실행하세요.
+
+```bash
+git pull --ff-only
+node setup.mjs --update
+node setup.mjs --check
+```
+
+설치나 클라이언트 로딩을 살펴봐야 한다면 `node bin/meta-kim.mjs doctor`로 환경을 확인하고 다음 조치를 안내받을 수 있습니다. 업데이트할 때도 작업 프로젝트의 기록을 보존해, 다음 세션에서 이어 갈 수 있도록 하세요.
+
+## 소스와 생성 파일
+
+![설정과 공통 방법이 앱 편성으로 연결되고 호스트 어댑터가 결과를 반환하며 데이터가 기록을 저장하고 화면이 상태를 표시](docs/images/animated-layers.ko-KR.svg)
+
+**각 정보에 하나의 기준 원본을 두고 앱, 데이터, 화면을 연결합니다.** 다음은 현재 구현의 실제 위치입니다.
+
+| 책임 | 원본 또는 구현 | 변경 경계 |
+| --- | --- | --- |
+| 공통 방법과 단계 계약 | `canonical/`, `config/contracts/` | 방법, 여덟 단계, 관리 규칙이 각각 자기 원본을 유지 |
+| 클라이언트와 어댑터 정보 | `config/sync.json`, `config/runtime-compatibility-catalog.json`, `scripts/runtime-tool-profiles.mjs` | 생성 대상, 형식, 기능 증거를 구분. 설치 발견은 실행 증거가 아님 |
+| 앱과 도메인 규칙 | `src/application/`, `src/domain/`, `scripts/governed-execution/` | 작업, 의존 관계, 재개, 결과 판단. 주 진입점은 `scripts/run-meta-theory-governed-execution.mjs` 유지 |
+| 데이터와 호스트 어댑터 | `src/data/repositories/`, `src/infrastructure/` | 실행·지식 기록을 저장하고 기존 계약으로 실제 호스트에 연결 |
+| 표현 | `src/presentation/live/`, `src/presentation/run-surfaces/` | 상태, 증거, 다음 작업을 표시하며 모델 선택 정책을 중복하지 않음 |
+
+확장은 책임에 맞춰 수행합니다. 새 방법은 canonical, 새 호스트는 설정과 검증된 어댑터, 새 화면은 기존 상태를 사용합니다. 업무의 주 기록, 조직 권한, 외부 알림, 정기 지식 정리는 연결된 업무 호스트가 담당합니다. README의 동적 SVG는 `scripts/build-readme-animations.mjs`와 언어별 문안에서 생성하며 `--check`로 일치를 확인합니다. 제목, 시작 카드와 끝을 가운데 배치하고 동작을 줄여도 전체 관계가 보이게 합니다.
+
+공통 Agent, Skill과 실행 리소스는 `canonical/`에서, 기계가 읽는 설정은 `config/`에서 관리합니다. `.claude/`, `.codex/`, `.cursor/` 같은 클라이언트별 디렉터리는 `npm run meta:sync`로 로컬에 생성합니다. 생성물은 `.gitignore`로 GitHub 소스에서 제외하고 로컬에 유지하며, 배포 패키지에는 공통 원본 소스를 포함합니다.
 
 ## 연락처
 
@@ -123,800 +450,8 @@ Meta_Kim의 방법론은 본 프로젝트 메인테이너(KimYx0207)가 작성�
 
 ---
 
-## 아키텍처: 보이지 않는 골격 + 동적 카드 발행
+## License
 
-이것이 Meta_Kim의 핵심 설계 사상입니다. 한 섹션만 읽는다면 이것을 읽으세요.
+[Apache License 2.0](LICENSE). Commercial use is permitted. Retain [LICENSE](LICENSE) and [NOTICE](NOTICE) when redistributing the project or substantial portions. Third-party components retain their own licenses; attribution does not imply endorsement.
 
-### 핵심 용어 정리
-
-| 개념 | 무엇인가 | 무엇이 아닌가 |
-| --- | --- | --- |
-| **보이지 않는 골격** | 표면 아래 항상 존재하는 백엔드 프레임워크 노드 | 미리 정해진 책임 목록 |
-| **8단계 흐름** | 골격이 실행 단계에서 드러나는 읽기 쉬운 주 체인 | 거버넌스 논리 전체 |
-| **11단계 비즈니스 워크플로** | 8단계 위에 덧붙는 더 복잡한 run 포장 진행 방식 | 8단계의 대체물 |
-| **카드 발행** | 8단계와 agent 단위를 중심으로 한 동적 제어 | 단순 작업 배분 |
-| **문(Gate)** | 통과/실패 조건 | 단계 자체 |
-| **계약(Contract)** | 각 노드가 반드시 생성해야 하는 구조화된 산출물 | 구호나 추상적 가치 |
-| **Agent 단위 거버넌스** | 경계, 능력, 업그레이드, 롤백을 관리하는 실천적 방법 | 역할 메뉴 |
-| **3층 기억 체계** | memory / graphify / SQL로 분업된 장기 기억 | 하나의 뒤섞인 노트 |
-
-한 문장으로 기억하세요:
-
-> **8단계는 진행을 맡고, 문은 통과를 맡고, 계약은 산출물을 맡고, 카드는 동적 개입을 맡습니다.**
-
-### 8단계 = 보이지 않는 골격
-
-Meta_Kim에는 8개의 고정된 실행 단계가 있습니다. 이것이 **보이지 않는 골격**입니다:
-
-```mermaid
-flowchart LR
-    C[Critical<br/>요구 명확화] --> F[Fetch<br/>역량 탐색]
-    F --> T[Thinking<br/>계획 수립]
-    T --> E[Execution<br/>실행 분배]
-    E --> R[Review<br/>품질 검토]
-    R --> MR[Meta-Review<br/>메타 검토]
-    MR --> V[Verification<br/>실제 검증]
-    V --> EV[Evolution<br/>학습 회수]
-
-    style C fill:#fbbf24,color:#000
-    style F fill:#34d399,color:#000
-    style T fill:#60a5fa,color:#000
-    style E fill:#f87171,color:#fff
-    style R fill:#a78bfa,color:#fff
-    style MR fill:#a78bfa,color:#fff
-    style V fill:#34d399,color:#000
-    style EV fill:#fbbf24,color:#000
-```
-
-**Critical — 먼저 실제 문제를 고정하세요**
-
-요구가 모호하면 추측 대신 질문하세요. 이 단계에서 `intentPacket`을 생성하여 실제 사용자 의도, 성공 기준, 제외 항목을 고정합니다. 요구가 이미 명확하면 시스템은 조용히 건너뛰지 않고 명시적인 건너뛰기 사유를 기록합니다.
-
-**Fetch — 새로 발명하기 전에 기존 역량을 먼저 탐색하세요**
-
-기존 agent, skill, 도구, MCP가 요구를 이미 충족하는지 검색합니다. 핵심은 **역량 우선**입니다: 먼저 필요한 역량을 정의하고, 그 역량을 선언한 소유자를 검색한 다음, 최적의 매치에 분배합니다. 특정 agent 이름을 미리 고정하지 마세요.
-
-**Thinking — 경계, 소유자, 순서, 산출물, 위험, 정지 조건을 정의하세요**
-
-작업을 하위 작업으로 나누고 소유자를 지정하며 의존성과 병렬 그룹을 명시합니다. 이 단계에서 `dispatchBoard`를 생성합니다: 누가 무엇을 하는지, 무엇을 병렬로 실행할 수 있는지, 결과 병합 책임자는 누구인지. 최소 2개의 해결 경로를 탐색해야 하며, 너무 일찍 한 경로에 고정되지 마세요.
-
-**Execution — 거버넌스 하에 실제 산출물을 생성하세요**
-
-하위 작업을 전문 agent에 분배합니다. 각 하위 작업은 파일 문맥, 제약 조건, 검토 소유자, 검증 소유자를 포함하는 `workerTaskPacket`으로 감싸집니다. 독립적인 하위 작업은 가능하면 병렬로 실행합니다. **실행 ≠ 완료** — 산출물은 여전히 검토와 검증을 통과해야 합니다.
-
-**Review — 품질과 경계 준수를 확인하세요**
-
-코드 품질, 보안, 아키텍처 준수, 경계 위반을 검사합니다. 구조화된 발견이 담긴 `reviewPacket`을 생성합니다. 각 발견은 CRITICAL부터 LOW까지 심각도가 있습니다. 이것은 형식적인 절차가 아닙니다 — 해결되지 않은 발견은 앞으로 나아갈 수 없습니다.
-
-**Meta-Review — 검토 기준 자체가 편향되거나 너무 느슨한지 확인하세요**
-
-검토를 검토합니다. 검토 기준이 너무 약하면 실제로 검토하는 것이 아닙니다. 편향되면 잘못된 것을 검토하는 것입니다. 이 단계는 검토 시스템 자체의 품질을 보호합니다.
-
-**Verification — 현실이 주장과 일치하는지 확인하세요**
-
-수정이 실제로 검토 발견을 닫았는지 검증합니다. `verificationResult`와 `closeFindings`를 생성합니다. 수정이 실제로 발견을 닫지 않았다면 돌아가서 다시 수정한 후 검증하세요. 이것이 시스템에서 가장 정직한 관문입니다.
-
-**Evolution — 역량 공백과 재사용 가능한 패턴을 시스템에 다시 기록하세요**
-
-경험을 구조적 업그레이드로 전환합니다: 재사용 가능한 패턴은 memory에, 실패는 학습 산출물로, 역량 공백은 Scout에 전달하고, agent 경계는 canonical에 다시 기록합니다. 모든 run은 `writebackDecision`으로 끝나야 합니다: 구체적인 것을 기록하거나, 지속할 내용이 없는 이유를 명시적으로 설명하세요. **학습을 보존하지 않는 run은 낭비된 작업입니다.**
-
----
-
-이 8단계가 합쳐져 실행 척추를 형성합니다.
-
-왜 "상대적으로" 고정되어 있을까요? 간단한 경우에는 일부 단계를 건너뛸 수 있지만, 시스템은 건너뛴 이유를 명시적으로 기록해야 합니다. 아무것도 조용히 건너뛰지 않습니다.
-
-### 11단계 비즈니스 워크플로 = 골격 위에 구축된 진행 워크플로
-
-8단계가 골격이라면, 11단계 비즈니스 워크플로는 그 위에 자라난 **더 복잡한 run 포장 진행 방식**입니다:
-
-```text
-direction → planning → execution → review → meta_review → revision → verify → summary → feedback → evolve → mirror
-```
-
-별도의 시스템이 아닙니다. 8단계 골격에서 파생되었습니다. 차이점은:
-
-- **8단계**는 실행 논리에 집중 — "작업을 어떤 순서로 할 것인가"
-- **11단계**는 비즈니스 거버넌스에 집중 — "각 단계가 무엇을 전달해야 하고, 완료는 어떻게 정의되며, 언제 runtime mirror를 갱신해야 하는가"
-
-```mermaid
-flowchart TB
-    subgraph spine["8단계 흐름 (보이지 않는 골격)"]
-        direction LR
-        C1[Critical] --> F1[Fetch] --> T1[Thinking] --> E1[Execution] --> R1[Review] --> MR1[Meta-Review] --> V1[Verification] --> EV1[Evolution]
-    end
-
-    subgraph workflow["11단계 비즈니스 워크플로"]
-        direction LR
-        D2[direction] --> P2[planning] --> EX2[execution] --> RE2[review] --> MET2[meta_review] --> REV2[revision] --> VER2[verify] --> SUM2[summary] --> FB2[feedback] --> EVO2[evolve] --> MIR2[mirror]
-    end
-
-    C1 -.-> D2
-    F1 -.-> P2
-    T1 -.-> P2
-    E1 -.-> EX2
-    R1 -.-> RE2
-    MR1 -.-> MET2
-    V1 -.-> VER2
-    EV1 -.-> EVO2
-
-    style spine fill:#1e1b4b,stroke:#7c3aed,color:#e0e7ff
-    style workflow fill:#14532d,stroke:#22c55e,color:#dcfce7
-```
-
-11단계 비즈니스 워크플로는 `revision`, `summary`, `feedback`, `mirror`를 추가하여, 단순히 "끝내는 것"을 넘어 제대로 끝내고 루프를 닫으며 runtime projection을 최신 상태로 맞추도록 합니다.
-
-### 계약 = 각 노드가 전달해야 하는 것
-
-워크플로만으로는 충분하지 않습니다. 각 단계는 **무엇을 출력해야 하는지** 정의해야 합니다. 그것이 계약의 역할입니다.
-
-Meta_Kim의 계약은 구두 약속이 아닙니다. **구조화된 패킷**입니다:
-
-| 계약 산출물 | 단계 | 목적 |
-| --- | --- | --- |
-| `intentPacket` | Critical | 실제 의도를 잠그고 이탈 방지 |
-| `dispatchBoard` | Thinking | 소유자, 의존성, 병렬 그룹 정의 |
-| `workerTaskPacket` | Execution | 각 하위 작업의 전체 문맥 전달 |
-| `reviewPacket` | Review | 구조화된 발견 기록 |
-| `revisionResponse` | Revision | 각 검토 발견에 대한 응답 |
-| `verificationResult` | Verification | 이슈가 실제로 닫혔는지 확인 |
-| `summaryPacket` | Summary | 공개 전 최종 요약 |
-| `evolutionWriteback` | Evolution | 무엇을 다시 기록할지 정의 |
-
-```mermaid
-flowchart LR
-    subgraph packets["계약 산출물 흐름"]
-        direction LR
-        IP[intentPacket<br/>의도 고정] --> DP[dispatchBoard<br/>분배 보드]
-        DP --> WTP[workerTaskPacket<br/>작업 패킷]
-        WTP --> RP[reviewPacket<br/>검토 기록]
-        RP --> RR[revisionResponse<br/>수정 응답]
-        RR --> VR[verificationResult<br/>검증 결과]
-        VR --> SP[summaryPacket<br/>최종 요약]
-        SP --> EW[evolutionWriteback<br/>학습 회수]
-    end
-
-    IP ~~~ C2["Critical"]
-    DP ~~~ T2["Thinking"]
-    WTP ~~~ E2["Execution"]
-    RP ~~~ R2["Review"]
-    RR ~~~ REV2["Revision"]
-    VR ~~~ V2["Verification"]
-    SP ~~~ S2["Summary"]
-    EW ~~~ EV2["Evolution"]
-
-    style packets fill:#1a1a2e,stroke:#e94560,color:#fff
-```
-
-이 산출물들은 선택적 문서가 아닙니다. 시스템의 진실 공급원입니다. 계약 없이는 다음 노드가 "인계"하는 것이 아니라 이전 노드가 무엇을 의미했는지 "추측"하는 것입니다. 그것이 복잡한 작업에서 AI 협업이 무너지는 이유입니다.
-
-현재 구현에서 이 산출물들은 명시적으로 전달됩니다: 실행 전 `taskClassification`, 발행 전 `cardPlanPacket`, 분배 전 `dispatchEnvelopePacket`, 검토 후 `reviewPacket.findings`, 수정과 검증 사이의 `revisionResponses` + `verificationResults` + `closeFindings`, 외부 공개 전 `summaryPacket`, 진화 전 `writebackDecision`.
-
-`npm run meta:validate:run`은 이 산출물 체인이 완전히 닫히는지 확인합니다.
-
-### 문(Gate) = 단계에 도달했다고 통과한 것은 아닙니다
-
-계약은 각 노드가 무엇을 전달해야 하는지 정의합니다. 문은 그 전달이 앞으로 나아갈 만큼 충분한지 판단합니다.
-
-한 문장으로:
-
-> **단계는 어디에 있는지 알려주고, 문은 앞으로 나아갈 자격이 있는지 알려줍니다.**
-
-```mermaid
-flowchart LR
-    A["단계 도달"] --> B{"문 판단"}
-    B -->|통과| C["다음 단계로 진행"]
-    B -->|실패| D["수정: 증거 보완 / 산출물 수정"]
-    B -->|보류| E["일시 정지: 조건 성숙 대기"]
-    B -->|승격| F["상위 레벨 개입"]
-
-    style A fill:#dbeafe,stroke:#2563eb,color:#000
-    style B fill:#7c3aed,stroke:#4c1d95,color:#fff
-    style C fill:#dcfce7,stroke:#16a34a,color:#000
-    style D fill:#fee2e2,stroke:#dc2626,color:#000
-    style E fill:#e0f2fe,stroke:#0284c7,color:#000
-    style F fill:#fef3c7,stroke:#f59e0b,color:#000
-```
-
-시스템의 주요 문:
-
-| 문 | 차단하는 것 | 통과 조건 |
-| --- | --- | --- |
-| **planning gate** | 계획에서 실행으로 이동하기 전 | 경계, 소유자, 산출물, 위험이 모두 정의됨 |
-| **metaReview gate** | 메타 검토가 충분히 강력한지 | 검토 기준 자체가 편향되거나 누락되거나 너무 느슨하지 않음 |
-| **verify gate** | 수정이 실제로 이슈를 닫았는지 | `finding → revision → verification`이 깔끔하게 닫힘 |
-| **summary gate** | 결과를 공개할 수 있는지 | 검증 통과 + 요약 완료 |
-| **publicDisplay gate** | 시스템이 "완료"라고 주장할 수 있는지 | `verifyPassed + summaryClosed + singleDeliverableMaintained + deliverableChainClosed` |
-
-가장 중요한 것은 **publicDisplay gate**입니다. 검증이 통과하지 않았거나 요약이 닫히지 않았거나 산출물 체인이 끊어진 경우, 시스템은 작업이 완료되었다고 주장할 수 없습니다.
-
-문과 계약의 관계:
-
-- **계약**은 "이 노드가 무엇을 전달해야 하는가" — 전달 의무
-- **문**은 "앞으로 나아가기에 충분한가" — 해제 결정
-- 계약 없이는 문이 판단할 근거가 없고, 문 없이는 계약은 그저 형식입니다
-
-### 동적 카드 발행 = 골격 위에 유연성 추가
-
-8단계 골격은 상대적으로 고정되어 있지만, 실제 작업은 하나의 경직된 경로로 처리하기에는 너무 다양합니다. 그래서 Meta_Kim은 **동적 카드 발행**을 도입했습니다.
-
-카드는 8단계에 대응하지만, 단순한 1:1 매핑은 아닙니다. 10장의 카드는:
-
-| 카드 | 발동 조건 | 주의력 비용 |
-| --- | --- | --- |
-| **Clarify** | 요구가 모호함 | 낮음 |
-| **Shrink scope** | 저장소가 너무 크거나 파일이 너무 많음 | 낮음 |
-| **Options** | 요구는 명확하지만 경로가 많음 | 중간 |
-| **Execute** | 계획이 결정됨 | 높음 |
-| **Verify** | 실행 완료 | 중간 |
-| **Fix** | 검증 실패 | 중간 |
-| **Rollback** | 위험이 확산됨 | 높음 |
-| **Risk** | 보안, 전역 또는 다자 영향 | 높음 |
-| **Nudge** | 사용자가 막혀서 가벼운 밀어줌이 필요함 | 낮음 |
-| **Pause** | 고비용 카드 3장이 연속으로 나옴 | 없음 |
-
-중요한 점은 일부 카드가 동적이라는 것입니다:
-
-- 고주의력 카드 3장이 연속으로 발행되면 시스템이 강제로 **Pause**를 삽입합니다 — 사용자가 알아채기를 기다리지 않습니다
-- 보안 위험이 나타나면 **Risk**가 현재 흐름을 선점합니다
-- 사용자가 이미 알고 있는 정보는 해당 카드를 건너뜁니다
-- 작업 반복이 상한을 초과하면 **Warden 판정**으로 승격됩니다
-
-동적 카드 발행은 고정된 골격에 숨통을 틔워줍니다: 엄격해야 할 곳에서는 엄격하고, 유연함이 도움이 되는 곳에서는 유연합니다.
-
-```mermaid
-flowchart TD
-    START[현재 카드 완료] --> SKIP{다음 카드<br/>skip_condition 확인}
-    SKIP -->|충족, 건너뜀| NEXT[다음 카드로 이동]
-    SKIP -->|불충족| INTR{중단 큐 확인}
-    INTR -->|보안 위험 선점| RISK[Risk 카드<br/>최우선]
-    INTR -->|선점 없음| PAUSE{고비용 카드<br/>3장 이상?}
-    PAUSE -->|예, 강제 휴식| P[Pause 카드<br/>주의력 없음]
-    PAUSE -->|아니오| DEAL[우선순위대로 발행]
-    RISK --> DEAL
-    P --> DEAL
-    DEAL --> COUNT{반복이<br/>max_iterations 초과?}
-    COUNT -->|예| WARDEN[Warden 판정으로 승격]
-    COUNT -->|아니오| START
-
-    style RISK fill:#dc2626,color:#fff
-    style P fill:#1e3a5f,color:#93c5fd
-    style WARDEN fill:#7c3aed,color:#fff
-    style DEAL fill:#16a34a,color:#fff
-```
-
-### 닫힌 루프 = 반복, 생성, 개선
-
-골격, 진행 워크플로, 계약, 동적 카드 발행이 갖춰지면 시스템은 **닫힌 루프**를 형성합니다:
-
-```text
-요청 유입 → 골격 시작 → 카드 결정 → 실행 분배 → 검토·검증 → 학습 보존 → agent 업그레이드 → 다음 run이 더 강해짐
-```
-
-루프는 한 번으로 끝나지 않습니다. 각 라운드마다:
-
-1. **누락된 agent 생성** — 역량 공백이 나타나면 Type B 파이프라인을 통해 새 agent를 생성할 수 있습니다
-2. **agent 능력 향상** — Evolution이 SOUL.md, 스킬 로드아웃, 도구 체인에 변경 사항을 기록합니다
-3. **모든 agent의 경계 명확화** — 각 agent는 한 가지 종류의 작업을 담당하고, 경계 위반은 Sentinel이 차단합니다
-
-```mermaid
-flowchart TD
-    INPUT[요청 유입] --> SPINE[보이지 않는 골격 시작]
-    SPINE --> CARD[동적 카드 결정]
-    CARD --> DISPATCH[전문 agent에 분배]
-    DISPATCH --> REVIEW[검토 + 검증]
-    REVIEW --> |통과| EVOLVE[학습 보존]
-    REVIEW --> |실패| FIX[수정 + 재검토]
-    FIX --> REVIEW
-    EVOLVE --> UPGRADE[agent 능력 업그레이드]
-    UPGRADE --> |역량 공백 발견| CREATE[Type B 파이프라인<br/>새 agent 자동 생성]
-    UPGRADE --> |경계 조정 필요| BOUNDARY[agent 경계 조정]
-    CREATE --> INPUT2[다음 run이 더 강해짐]
-    BOUNDARY --> INPUT2
-
-    style INPUT fill:#fbbf24,color:#000
-    style EVOLVE fill:#34d399,color:#000
-    style CREATE fill:#f87171,color:#fff
-    style INPUT2 fill:#fbbf24,color:#000
-```
-
-### Agent 경계 + 스킬 통합
-
-9개 메타 역할은 각각 다른 도메인을 담당합니다:
-
-| 역할 | 책임 | 담당하지 않는 것 |
-| --- | --- | --- |
-| **meta-warden** | 조정, 중재, 최종 종합 | 직접 코드를 작성하지 않음 |
-| **meta-conductor** | 워크플로 및 리듬 제어 | 보안 검토를 하지 않음 |
-| **meta-genesis** | agent 설계 및 SOUL.md | 도구를 선택하지 않음 |
-| **meta-artisan** | 스킬, MCP 및 도구 매칭 | 페르소나를 정의하지 않음 |
-| **meta-sentinel** | 보안, 권한, 롤백 | 리듬을 안무하지 않음 |
-| **meta-librarian** | 기억 및 연속성 | 코드를 실행하지 않음 |
-| **meta-prism** | 품질 검토 및 안티슬롭 | 역량을 검색하지 않음 |
-| **meta-scout** | 외부 역량 발견 | 내부 조정을 하지 않음 |
-| **meta-chrysalis** | 진화 쓰기, scar 기록, 재귀 안전 게이트 | 자기 자신을 진화시키거나 Warden gate를 우회하지 않음 |
-
-각 agent는 필요에 따라 강력한 **스킬**과 **명령**을 로드할 수 있습니다. Meta_Kim은 9개의 커뮤니티 스킬을 기본 제공하며 사용자 정의 확장을 지원합니다.
-
-```mermaid
-flowchart TD
-    WARDEN[meta-warden<br/>조정 / 중재 / 종합] --> CONDUCTOR[meta-conductor<br/>워크플로 / 리듬]
-    WARDEN --> GENESIS[meta-genesis<br/>Agent 설계]
-    WARDEN --> ARTISAN[meta-artisan<br/>스킬 / 도구 매칭]
-    WARDEN --> SENTINEL[meta-sentinel<br/>보안 / 권한 / 롤백]
-    WARDEN --> LIBRARIAN[meta-librarian<br/>기억 / 연속성]
-    WARDEN --> PRISM[meta-prism<br/>품질 검토]
-    WARDEN --> SCOUT[meta-scout<br/>외부 역량 발견]
-    WARDEN --> CHRYSALIS[meta-chrysalis<br/>진화 쓰기]
-
-    GENESIS -.-> |SOUL.md| ARTISAN
-    ARTISAN -.-> |스킬 로드아웃| GENESIS
-    CONDUCTOR -.-> |작업 보드| WARDEN
-    SENTINEL -.-> |보안 차단| WARDEN
-    PRISM -.-> |검토 보고서| WARDEN
-    SCOUT -.-> |역량 후보| ARTISAN
-    LIBRARIAN -.-> |문맥 기억| WARDEN
-
-    SKILLS[9개 커뮤니티 스킬<br/>+ 사용자 정의 확장] --> ARTISAN
-    HOOKS[Hook 자동화<br/>차단 / 포맷 / 검사] --> SENTINEL
-
-    style WARDEN fill:#7c3aed,color:#fff
-    style CONDUCTOR fill:#60a5fa,color:#000
-    style GENESIS fill:#fbbf24,color:#000
-    style ARTISAN fill:#34d399,color:#000
-    style SENTINEL fill:#f87171,color:#fff
-    style LIBRARIAN fill:#a78bfa,color:#fff
-    style PRISM fill:#fb923c,color:#000
-    style SCOUT fill:#2dd4bf,color:#000
-```
-
-### Hook 자동화
-
-Claude Code에서 Meta_Kim은 **Hook**을 사용하여 자동화합니다:
-
-- **위험 명령 차단**: `rm -rf`, `DROP TABLE` 등의 작업이 자동으로 차단됩니다
-- **Git push 리마인더**: 푸시 전에 확인하도록 알립니다
-- **포맷팅**: 편집 후 JS/TS 파일을 자동으로 포맷합니다
-- **타입 검사**: 편집 후 TypeScript 검사를 실행합니다
-- **console.log 경고**: `console.log`를 제거하라고 알립니다
-- **세션 종료 감사**: 세션이 끝나기 전에 남은 이슈를 확인합니다
-- **세션 종료 메모리 저장**: 세션 종료 시 요약을 MCP Memory Service에 기록합니다
-- **하위 agent 문맥 주입**: 하위 agent에 프로젝트 문맥을 자동으로 주입합니다
-
-이 Hook들은 선택적 장식이 아닙니다. 거버넌스 시스템의 실행 레이어 보호 장치입니다.
-
-### 플랫폼 매핑
-
-**새 platform은 Meta_Kim이 매핑할 수 있는 primitives를 노출할 때 후보로 평가할 수 있습니다. 하지만 profile, layout, sync, tests, evidence가 갖춰지기 전에는 공식 projection이 아닙니다.**
-
-Meta_Kim은 현재 4개의 공식 projection target을 가집니다:
-
-| 플랫폼 | 상태 | 매핑 방식 |
-| --- | --- | --- |
-| **Claude Code** | default formal projection | `.claude/agents/*.md` + `SKILL.md` + hooks + MCP |
-| **Codex** | default formal projection | generated local `.codex/agents/*.toml` + `.agents/skills/` + commands + hooks |
-| **OpenClaw** | non-default compatibility projection; maintainer handshake required | `openclaw/` workspaces + skills + internal hooks |
-| **Cursor** | non-default compatibility projection; maintainer handshake required | `.cursor/agents/*.md` + `.cursor/rules/*.mdc` + skills + hooks + MCP |
-
-Meta_Kim은 Qoder CLI, Trae, Kiro, Windsurf / Devin Desktop Cascade, Cline, Roo Code, Continue도 candidate compatibility probe로 추적합니다. 이들은 공식 문서에서 호환 primitives를 확인했지만 setup은 project projection을 생성하지 않습니다. promotion에는 runtime profile, projection layout, generated paths, sync tests, install policy, live 또는 official probe evidence가 필요합니다.
-
-핵심 논리는 동일(`canonical/`)하며, `npm run meta:sync`를 통해 공식 projection target별 파일 구조로 투영합니다.
-
-Open-source boundary: 생성된 runtime projection directory는 local output이며 `.gitignore`로 보호되고 GitHub source에 들어가지 않습니다. 대상은 `.claude/`, `.codex/`, `.agents/`, `.cursor/`, `openclaw/`, `.mcp.json`, `codex/` 입니다. 9개의 governance agent의 유일한 source는 `canonical/agents/`이며, Codex adapter / business-role `.toml` 파일은 host를 위해 로컬 생성될 수 있지만 force-add하거나 package source에 포함하면 안 됩니다.
-
-```mermaid
-flowchart TB
-    CANONICAL["canonical/<br/>(단일 소스 레이어)"]
-
-    CANONICAL --> |npm run meta:sync| CLAUDE[".claude/<br/>Claude Code<br/>agents + skills + hooks"]
-    CANONICAL --> |npm run meta:sync| CODEX[".codex/<br/>Codex<br/>agents.toml + skills + hooks"]
-    CANONICAL --> |npm run meta:sync| OPENCLAW["openclaw/<br/>OpenClaw<br/>workspaces + skills + hooks"]
-    CANONICAL --> |npm run meta:sync| CURSOR[".cursor/<br/>Cursor<br/>agents + skills + hooks + MCP"]
-
-    CANDIDATE["candidate probes<br/>Qoder / Trae / Kiro / Cascade / Cline / Roo / Continue"] -.-> |promotion requires profile + layout + tests + evidence| CANONICAL
-
-    style CANONICAL fill:#7c3aed,color:#fff
-    style CLAUDE fill:#fbbf24,color:#000
-    style CODEX fill:#34d399,color:#000
-    style OPENCLAW fill:#60a5fa,color:#000
-    style CURSOR fill:#f87171,color:#fff
-    style CANDIDATE fill:#555,color:#aaa
-```
-
-새 platform은 계속 추가할 수 있지만, 후보에서 공식 projection으로 승격하려면 adapter 형태와 검증 가능성이 먼저 갖춰져야 합니다.
-
-4개의 projection family는 같은 canonical source에서 생성되지만 native surface는 다릅니다. Claude Code와 Codex는 default formal projection이고, OpenClaw와 Cursor는 maintainer handshake와 native self-test evidence가 필요한 non-default compatibility projection입니다.
-
-| 역량 표면 | Claude Code | Codex | OpenClaw | Cursor |
-| --- | --- | --- | --- | --- |
-| **Agent** | 네이티브 agents/subagents, 프로젝트 및 사용자 범위 모두 성숙 | 강력한 custom agents/subagents | 워크스페이스형 agent, agent-to-agent 지원 | 경량 agent 투영 |
-| **스킬 / 참조** | 네이티브 스킬, 참조, 성숙한 글로벌 생태계 | `.agents/skills/`가 프로젝트 skill 루트 | 워크스페이스 스킬 + 설치 가능 스킬 | `.cursor/skills/` 기반의 가벼운 스킬/참조 지원 |
-| **Hook / 자동화** | 프로젝트 hook + settings.json + 플러그인 생태계 | trusted `.codex/hooks.json` project/user hooks | internal lifecycle hooks. blocking/canceling policy에는 typed plugin hooks 필요 | `.cursor/hooks.json` lowerCamel lifecycle hooks와 `preToolUse` / `failClosed` |
-| **MCP / 설정** | 완전한 네이티브 MCP 및 설정 표면 | 런타임 어댑터와 MCP로 연결 가능 | 명확한 워크스페이스 설정 | MCP 사용 가능하지만 표면이 가벼움 |
-| **거버넌스 루프 수용력** | Claude-native surface로 완전 지원 | Codex-native surface로 완전 지원 | OpenClaw-native surface로 호환 지원. tool-denial 변경은 strict self-test evidence 필요 | Cursor-native surface로 호환 지원. official hook gate와 project rule 유지 |
-
-핵심은 순위가 아니라 호환 discipline입니다. 각 formal target은 자기 agent, skill, hook, MCP, choice, config surface를 유지하며, 다른 host 형식을 universal format처럼 취급하지 않습니다.
-
-### 4층 저장소 구조
-
-| 레이어 | 위치 | 목적 |
-| --- | --- | --- |
-| **Canonical 소스** | `canonical/`, `config/contracts/workflow-contract.json` | 장기 편집 우선 위치 |
-| **런타임 투영** | `.claude/`, `.codex/`, `openclaw/`, `.cursor/` | 같은 역량을 다른 런타임에 투영 |
-| **로컬 상태** | `.meta-kim/state/{profile}/`, `.meta-kim/local.overrides.json` | 프로필 수준 상태, run 인덱스, 연속성 |
-| **스크립트 및 검사** | `scripts/`, `npm run *` | 동기화, 검증, 발견, 수락 |
-
-### 3층 상태 (프로젝트 / 글로벌 / 로컬)
-
-이 3층은 혼동하기 쉬우므로 명확히 분리해야 합니다:
-
-| 레이어 | 저장 위치 | 결정하는 것 |
-| --- | --- | --- |
-| **프로젝트 수준** | 현재 저장소의 `canonical/`, 계약, 런타임 투영, 문서, 스크립트 | 이 프로젝트 자체가 정의하는 것 |
-| **글로벌 수준** | `~/.claude/`, `~/.codex/`, `~/.openclaw/`, `~/.cursor/`, `~/.meta-kim/global/` | 이 기기에서 발견할 수 있는 것 |
-| **로컬 수준** | `.meta-kim/state/{profile}/run-index.sqlite`, `compaction/`, `profile.json` | 이 프로필에서 run이 남긴 것 |
-
-#### `.meta-kim/` 안에는 무엇이 있나요?
-
-`.meta-kim/`은 Meta_Kim의 로컬 저장 디렉토리입니다. 세 가지 역할을 합니다:
-
-**1. 선택 기억** — `local.overrides.json`
-
-처음 `node setup.mjs`를 실행해서 "Claude Code와 Codex를 쓰겠다"고 선택하면, 그 선택이 여기에 저장됩니다. 다음 setup 실행 시 다시 선택할 필요가 없습니다.
-
-*예: Claude Code, Codex, OpenClaw 세 개가 설치되어 있는데 처음 두 개만 쓰고 싶다면. 이 파일에 그 설정이 저장되고, 모든 스크립트가 어느 런타임에 스킬을 설치할지 판단합니다.*
-
-**2. 작업 이력 기록** — `state/{profile}/run-index.sqlite`
-
-거버넌스 워크플로(예: "8-stage spine으로 코드 리뷰")를 실행한 결과를 SQLite 데이터베이스에 인덱싱할 수 있습니다. 나중에 "지난번에 뭘 리뷰했는지, 누가 실행했는지, 결과가 어땠는지"를 조회할 수 있습니다.
-
-*예: 지난주에 meta-prism에게 인증 모듈 리뷰를 맡겼습니다. 이번 주에 인증 모듈을 또 변경했습니다. 시스템이 `.meta-kim/state/`를 확인하면 "지난 리뷰에서 3개의 문제를 발견했고, 2개는 수정되었으며, 1개가 아직 미해결"임을 알 수 있어, 다시 설명할 필요가 없습니다.*
-
-**3. 세션 간 복원** — `state/{profile}/compaction/`
-
-대화 중간에 토큰이 다 떨어져서 세션이 끊기면, compaction 패킷이 현재 진행 상황(어느 단계까지 완료했는지, 무엇이 미처리인지)을 저장해서, 새 세션에서 이어서 작업할 수 있습니다.
-
-*예: Meta_Kim에게 복잡한 다중 파일 리팩토링을 맡기고, 6단계까지 완료한 후 세션이 끝났습니다. 다음 세션에서 시스템이 compaction 패킷을 읽어 "6단계 완료, 7단계 미시작"을 확인 — 7단계부터 바로 시작하고 처음부터 다시 할 필요가 없습니다.*
-
-**기타 파일:** `doctor-cache/`는 `npm run meta:doctor:governance` 실행 결과를 저장(각 실행 후 기록), `migrations/`는 버전 간 데이터 구조 업그레이드 추적, `profile.json`은 프로필 메타데이터입니다. 모두 스크립트가 자동 관리하므로 수동 편집할 필요가 없습니다.
-
-**빠른 참고:**
-
-| 경로 | 용도 | 언제 기록되나 |
-| --- | --- | --- |
-| `local.overrides.json` | `setup.mjs`에서 선택한 런타임 기억 | 자동 — 최초 `setup.mjs` 실행 시 |
-| `state/{profile}/profile.json` | 프로필 메타데이터 (생성 시간, 이름) | 자동 — `setup.mjs`가 `default` 프로필 생성 |
-| `state/{profile}/run-index.sqlite` | 거버넌스 run 인덱스 — 누가 무엇을 실행했는지, 무엇을 발견했는지, 미해결 사항 | 온디맨드 — `npm run meta:index:runs -- <artifact>` |
-| `state/{profile}/compaction/` | 세션 간 인계 패킷: 미완료 단계, 미처리 발견, 미폐쇄 검증 게이트 | 온디맨드 — 세션을 넘어 이어질 때 기록 |
-| `state/{profile}/doctor-cache/` | `npm run meta:doctor:governance` 캐시 결과 | 온디맨드 — `doctor:governance` 실행 후 기록 |
-| `state/{profile}/migrations/` | 상태 마이그레이션 추적 (버전 간 스키마 업그레이드) | 자동 — 버전 간 상태 스키마 변경 시 |
-
-### 전역 설치 후 사용 가능한 기능
-
-Meta_Kim의 문과 프로토콜은 4계층 실행 보장이 있습니다. 전역 설치(`node setup.mjs`) 후 임의의 프로젝트에서 사용할 때:
-
-| 실행 계층 | 전역 설치로 사용 가능 | Meta_Kim 저장소 필요 |
-| --- | --- | --- |
-| **Prompt 계층** (agents + skills에 정의된 Gate/Protocol 규칙) | 가능 — `~/.claude/skills/`, `~/.claude/agents/`에 설치됨, AI가 prompt를 따름 | — |
-| **Hook 계층** (세션 종료 시 Gate 확인, MCP Memory Service 메모리 저장, 위험 명령 차단) | 가능 — `.claude/settings.json`에 설정됨 | — |
-| **설정 계층** (workflow-contract.json의 프로토콜 필드 정의) | 가능 — 프로토콜 규칙이 skill prompt에 내장됨 | — |
-| **코드 검증** (`npm run meta:validate:run`으로 packet chain 하드 체크) | — | 필요 — 스크립트는 `scripts/validate-run-artifact.mjs`에 위치 |
-
-앞의 3계층은 주요 방어선으로, 전역 설치 후 어떤 프로젝트에서도 작동합니다. 코드 검증은 마지막 안전망으로, Meta_Kim 저장소 디렉토리에서 실행해야 합니다(또는 스크립트 경로를 지정).
-
----
-
-## 3층 기억 체계
-
-Meta_Kim은 단일 기억 레이어를 사용하지 않습니다. 세 가지 다른 역할을 가진 3개 레이어를 사용하여 agent가 지속적으로 개선되면서 프로젝트에 익숙해집니다.
-
-3층 기억은 각각 다른 활성화 방식을 가지고 있습니다:
-- **1층**은 Claude Code에 내장——Claude Code 런타임 필요（`~/.claude/projects/*/memory/` 에서 자동 읽기/쓰기）
-- **2층**은 `node setup.mjs` 가 자동 설치
-- **3층**은 `node setup.mjs` 가 설치하지만 서버를 수동으로 시작해야 함（3층 활성화 참고）
-
-### 1층: Memory (agent 업그레이드 기억)
-
-- **책임**: agent 업그레이드 및 지속 학습
-- **저장 위치**: `.claude/projects/*/memory/`
-- **메커니즘**: 각 run이 끝나기 전에 시스템이 memory를 읽고 agent를 업그레이드할지 경계를 변경할지 결정합니다
-- **핵심 가치**: agent가 매번 처음부터 다시 시작하는 대신 시간이 지날수록 똑똑해집니다
-- **활성화**: 자동——AI가 각 세션에서 memory를 자동으로 읽고 씁니다
-- **쿼리**: AI에 직접 물어보기——"이 프로젝트에 대해 이전 세션에서 무엇을 배웠나요?"
-
-### 2층: Graphify (프로젝트 수준 LLM 위키)
-
-- **책임**: 프로젝트 수준 코드 지식 그래프
-- **저장 위치**: `graphify-out/graph.json` (NetworkX node-link 형식). 심층 탐색 시 동일 디렉터리 `GRAPH_REPORT.md` 우선
-- **메커니즘 (데이터)**: `node setup.mjs` 선택 Python 단계는 graphify 설치 후 **멱등적으로** `python -m graphify claude install` 및 `python -m graphify hook install` 실행(pip로 이미 설치된 경우에도 hook 보완). git hook은 **현재 리포지토리**에서 commit/checkout 시 재구축. `npm run meta:graphify:install`도 동일(hook 포함).
-- **메커니즘 (사용)**: 동기화된 meta-theory `dev-governance.md` Fetch **Step 0.5**가 모델 측 검출/사용 규칙. 백그라운드 데몬 아님. Claude Code 하위 에이전트는 `subagent-context.mjs`로 **짧은 힌트**만. Codex/OpenClaw/Cursor는 SubagentStart hook 없음, `sync:runtimes` 후 동일 참조 공유. 다른 런타임은 **대상 리포지토리**에서 `python -m graphify codex install` 또는 `claw install` 선택(`python -m graphify --help`).
-- **핵심 가치**:
-  - 기억이 프로젝트에 점점 익숙해집니다 — 코드 원문이 아닌 구조와 관계를 이해
-  - **환각 대폭 감소** — agent가 기억에 의존해 지어내는 대신 그래프 사실에 기반하여 응답
-  - **토큰 소비 대폭 감소** — 원시 파일 읽기 대신 부분 그래프 추출, 최대 71배 압축
-- **품질 게이트**:
-  - 모호한 노드 > 30% → 저품질 그래프로 표시, 직접 파일 읽기로 대체
-  - 총 노드 < 10 → 그래프가 너무 희소, Glob/Grep으로 대체
-  - "갓 노드"(높은 진입도) → 직렬 병목으로 플래그
-- **활성화**: 선택 Python 단계 `node setup.mjs` 또는 `npm run meta:graphify:install`——설치/검사, networkx, Claude 측 등록, **해당 리포지토리** git hook. 최초 그래프 생성은 hook 실행 또는 수동 빌드에 따름
-- **쿼리**: `python -m graphify query "당신의 질문"`——자연어로 코드 그래프에 쿼리
-
-### 플랫폼 자동화 비교
-
-| 기능 | Claude Code | Codex | OpenClaw | Cursor |
-| --- | --- | --- | --- | --- |
-| PreToolUse hook (Glob/Grep 전 자동 프롬프트) | ✅ settings.json | ✅ trusted `.codex/hooks.json` | ❌ | ✅ `.cursor/hooks.json` `preToolUse` |
-| 슬래시 명령 `/graphify` | ✅ | ✅ | ✅ | ✅ |
-| git hook 자동 재구축（post-commit/checkout） | ✅ | ✅ | ✅ | ✅ |
-| AGENTS.md 상주 규칙 | N/A | ✅ | ✅ | ✅ |
-| setup.mjs 멀티플랫폼 설치 | ✅ claude | ✅ codex | ✅ claw | ✅ cursor |
-
-**핵심 인사이트**: Claude Code, Codex, Cursor는 모두 native hook 설정을 갖지만 schema가 서로 다릅니다. OpenClaw는 자체 internal/plugin hook model을 사용합니다. graph awareness는 `AGENTS.md`와 synced `meta-theory` reference로도 유지되므로, native hook이 없는 경우에는 명시적으로 degraded mode로 다룹니다.
-
-멀티플랫폼 설치는 `node setup.mjs`를 실행하세요 — 선택한 모든 플랫폼을 순회하며 각 플랫폼에 대해 `graphify <platform> install`을 멱등 실행합니다.
-
-### 3층: SQL (벡터 수준 세션 검색)
-
-- **책임**: 프로젝트 세션의 벡터 수준 저장 및 검색
-- **저장 방식**: SQLite + 벡터 확장(sqlite-vec)
-- **메커니즘**: 각 세션의 핵심 정보를 벡터로 저장, 다음에 의미 유사도로 검색
-- **핵심 가치**:
-  - 세션 간 연속성 — 지난번 어디까지 했는지 이번에 이어서 가능
-  - 벡터 수준 검색 — 키워드 매칭이 아닌 의미 이해
-  - 정밀 리콜 — 과거 세션에서 가장 관련성 높은 문맥 검색
-- **활성화**: `node setup.mjs`가 MCP Memory Service（3층）를 설치 및 설정하고, 각 runtime의 memory hooks를 등록한 뒤 HTTP 서비스를 백그라운드에서 시작하려고 시도합니다.
-  - **Claude Code**: SessionStart Hook과 Stop 메모리 저장 Hook이 `node setup.mjs` 시 자동 등록；세션 시작 시 `mcp_memory_global.py --mode session`으로 프로젝트 상태를 기록합니다
-  - **Codex / Cursor / OpenClaw**: Codex와 Cursor는 native hooks JSON, OpenClaw는 managed hook을 자동 등록합니다.
-- **서버 시작**: `memory server --http`（macOS/Linux에서는 `MCP_ALLOW_ANONYMOUS_ACCESS=true`, Windows PowerShell에서는 `$env:MCP_ALLOW_ANONYMOUS_ACCESS="true"` 설정），그 다음 `http://localhost:8000` 접속.
-- **포트**: 서버와 Meta_Kim hooks는 `http://localhost:8000`을 사용합니다.
-- **Hook**: Claude Code 자동 등록（SessionStart로 프로젝트 상태 기록, Stop으로 세션 요약을 MCP Memory에 저장）；기타 도구는 mcp-memory-service 문서 참조
-- **MCP 등록과 쓰기 구분**: `.mcp.json`은 클라이언트 접근을 위해 MCP Memory server(`memory server`)를 등록합니다. 자동 세션 쓰기는 별도 lifecycle hooks가 수행합니다. Claude Code는 `stop-memory-save.mjs`, Codex/Cursor는 `meta-kim-memory-save.mjs`, OpenClaw는 managed `mcp-memory-service` hook을 사용합니다.
-- **쿼리**: `npm run meta:query:runs -- --owner <agent>`——agent별로 과거 run 검색，또는 `npm run meta:index:runs -- <artifact>`로 수동 인덱싱
-
-### 3층 협업
-
-```mermaid
-flowchart TB
-    subgraph memory["1층: Memory"]
-        M_IN[run 종료 전<br/>memory 읽기] --> M_JUDGE[agent 업그레이드<br/>여부 판단]
-        M_JUDGE --> M_OUT[경계 업데이트<br/>능력 조정]
-    end
-
-    subgraph graphify["2층: Graphify"]
-        G_IN[소스 > 20개일 때<br/>자동 그래프 생성] --> G_COMPRESS[부분 그래프 추출<br/>최대 71x 압축]
-        G_COMPRESS --> G_QUERY[agent가 그래프 사실에<br/>기반하여 응답]
-    end
-
-    subgraph sql["3층: SQL"]
-        S_IN[세션 핵심 정보<br/>벡터 저장] --> S_INDEX[SQLite + sqlite-vec<br/>벡터 인덱스]
-        S_INDEX --> S_RECALL[의미 유사도<br/>정밀 리콜]
-    end
-
-    memory <--> graphify
-    graphify <--> sql
-    sql <--> memory
-
-    GOAL1[환각 감소<br/>사실 기반 응답]
-    GOAL2[토큰 절감<br/>압축으로 전문 읽기 대체]
-
-    memory --> GOAL1
-    graphify --> GOAL1
-    graphify --> GOAL2
-    sql --> GOAL2
-
-    style memory fill:#fbbf24,color:#000
-    style graphify fill:#34d399,color:#000
-    style sql fill:#60a5fa,color:#000
-    style GOAL1 fill:#dc2626,color:#fff
-    style GOAL2 fill:#dc2626,color:#fff
-```
-
-3층 기억이 함께 작용하여 두 가지 핵심 목표를 달성합니다:
-
-1. **환각 대폭 감소** — agent가 빈공간에서 지어내지 않고 사실과 문맥에 기반하여 응답
-2. **토큰 소비 대폭 감소** — 전문 읽기 대신 그래프 압축, 역검색 대신 벡터 검색 활용
-
----
-
-## 운용 명령
-
-### 일상 사용
-
-| 명령 | 목적 |
-| --- | --- |
-| `node setup.mjs` | 대화형 설치/업데이트/점검 마법사 |
-| `git pull --ff-only` | clone 설치 사용자가 GitHub에서 최신 Meta_Kim 소스 코드를 가져옴 |
-| `node setup.mjs --update` | 현재 설치된 투영, 스킬, 의존성을 새로 고침. Meta_Kim 소스 코드는 가져오지 않음 |
-| `node setup.mjs --check` | 환경 점검 (디스크에 쓰지 않음) |
-| `node setup.mjs --lang ko-KR` | 한국어 인터페이스 지정 |
-
-### 동기화 및 검증
-
-| 명령 | 목적 |
-| --- | --- |
-| `npm run meta:sync` | canonical에서 4개 런타임으로 동기화 |
-| `npm run meta:check:runtimes` | 런타임 미러 일치 여부 확인 |
-| `npm run meta:validate` | 프로젝트 정합성 검증 |
-| `npm run meta:verify:all` | 전체 검증 (runtime smoke 포함) |
-| `npm run meta:doctor:governance` | 거버넌스 건강 점검 |
-
-### 스킬 및 의존성
-
-| 명령 | 목적 |
-| --- | --- |
-| `npm run meta:deps:install` | 기본 Claude Code + Codex 경로에 9개 커뮤니티 스킬 설치 |
-| `npm run meta:deps:install:all-runtimes` | Claude Code, Codex, OpenClaw, Cursor에 명시적으로 설치 |
-| `npm run meta:deps:install:claude-plugins` | Claude Code marketplace plugin만 설치 |
-| `npm run discover:global` | 글로벌 역량 스캔 |
-| `npm run meta:sync:global` | meta-theory를 사용자 수준에 동기화 |
-
-#### Plugin marketplace 스킬（Superpowers、Everything Claude Code、cli-anything）
-
-네이티브 plugin marketplace를 제공하는 것은 Claude Code뿐. **Codex / OpenClaw / Cursor**의 경우, 설치 스크립트는 upstream bundle에서 런타임별 서브트리를 sparse-checkout으로 추출함:
-
-| Runtime | 우선순위 체인 |
-| --- | --- |
-| Claude Code | 네이티브 `claude plugin install <spec>@<marketplace>` (`claudePlugin` 미설정 스킬은 `skills/`로 폴백) |
-| Codex | `.codex/` → `.codex-plugin/` → `skills/` |
-| Cursor | `.cursor/` → `.cursor-plugin/` → `skills/` |
-| OpenClaw | `skills/` |
-| opencode | `.opencode/` → `skills/` |
-| Qwen | ECC는 `npx --yes --package ecc-universal@latest ecc install --profile core --target qwen`을 사용합니다 |
-| Zed, Gemini, CodeBuddy, Antigravity, JoyCode | ECC는 project-local입니다. 각 프로젝트 루트에서 `npx --yes --package ecc-universal@latest ecc install --profile core --target <target>`를 실행합니다 |
-| Qoder CLI | candidate probe 전용입니다. `.qoder/` → `skills/` 탐색은 가능하지만 upstream ECC가 `qoder`를 나열하지 않으므로 ECC install은 실행하지 않습니다 |
-| Trae, Kiro, Windsurf / Devin Desktop Cascade, Cline, Roo Code, Continue | candidate probe 전용입니다. 호환 primitive는 `config/runtime-compatibility-catalog.json`에서 추적하지만 adapter, sync path, validation suite가 생기기 전에는 install / projection하지 않습니다 |
-
-추출 결과는 `~/.<runtime>/skills/<id>/`에 배치됨. 설치/업데이트에서 Enter를 누르면 기본값은 Claude Code + Codex임. Claude marketplace plugin만 설치하려면 `npm run meta:deps:install:claude-plugins`, Claude Code, Codex, OpenClaw, Cursor를 명시적으로 커버하려면 `npm run meta:deps:install:all-runtimes`. **업그레이드 시 수동 정리 불필요**: 이전 버전의 full-repo clone 잔존물은 대상 디렉터리 루트의 `.claude-plugin/` 마커로 자동 감지되어 다음 실행 시 재추출됨.
-
-### 고급 운용
-
-| 명령 | 목적 |
-| --- | --- |
-| `npm run meta:validate:run -- <file.json>` | governed run 산출물 검증 |
-| `npm run meta:eval:agents` | 경량 runtime smoke 테스트 |
-| `npm run meta:eval:agents:live` | 실시간 prompt 포함 런타임 수락 |
-| `npm run meta:probe:clis` | 로컬 CLI 도구 탐지 |
-| `npm run meta:test:mcp` | MCP 자체 테스트 |
-| `npm run meta:index:runs -- <dir>` | 검증된 run 산출물 인덱스 |
-| `npm run meta:query:runs -- --owner <agent>` | run 인덱스 조회 |
-| `npm run migrate:meta-kim -- <dir> --apply` | 이전 프롬프트 팩 가져오기 |
-
----
-
-## FAQ
-
-### `npx`로 설치했는데, 파일이 어디에 있나요?
-
-Meta_Kim은 3 곳에 기록합니다:
-
-1. **현재 디렉터리** — `.claude/`, `.codex/`, `.cursor/`, `openclaw/` 이 프로젝트의 런타임 투영
-2. **홈 디렉터리** — `~/.claude/skills/meta-theory/` (및 `.codex / .cursor / .openclaw`) 프로젝트 간 공유되는 전역 스킬
-3. **매니페스트** — `~/.meta-kim/install-manifest.json`이 모든 변경사항을 추적하여 안전한 롤백을 지원
-
-`npx`를 실행한 디렉터리에서 `npm run meta:status` (또는 `node setup.mjs --check`)를 실행하여 전체 풋프린트를 확인하세요. 롤백하려면 `npm run meta:uninstall`을 실행하세요.
-
-### Meta_Kim은 일반 AI 코딩 보조와 뭐가 다르나요?
-
-일반 AI 코딩 보조는 물으면 바로 합니다. 그 사이에 거버넌스가 없습니다. Meta_Kim은 "묻는 것"과 "하는 것" 사이에 여러 층을 추가합니다: 먼저 무엇을 원하는지 확인하고, 누가 할지 계획하고, 끝나면 검토하고, 검토 후 검증하고, 검증 후 경험을 보존합니다. **또 다른 AI가 아니라 AI에 엔지니어링 규율을 장착하는 것입니다.**
-
-### 단일 파일 수정에도 필요한가요?
-
-**아닙니다.** Meta_Kim은 다중 파일, 다중 모듈, 다양한 역량 협업이 필요한 복잡한 작업을 해결합니다. 하나의 파일에서 하나의 함수만 수정한다면 Claude Code만으로 충분합니다.
-
-### 8단계와 11단계 비즈니스 워크플로의 관계는 무엇인가요?
-
-8단계는 **실행 골격**(Critical → Fetch → Thinking → Execution → Review → Meta-Review → Verification → Evolution)으로 상대적으로 고정되어 있습니다. 11단계는 골격에서 **파생된 비즈니스 워크플로**(direction → planning → execution → review → meta_review → revision → verify → summary → feedback → evolve → mirror)로, 산출물 전달, 루프 닫기, runtime mirror 갱신에 더 중점을 둡니다. 11단계는 8단계를 대체하는 것이 아니라 그 위에 진행 거버넌스의 복잡성을 추가합니다.
-
-### 동적 카드 발행은 무슨 뜻인가요?
-
-8단계는 고정되어 있지만 현실의 작업은 천차만별입니다. 카드 발행 메커니즘은 고정된 흐름에 유연성을 부여합니다 — 예를 들어 고강도 작업을 3번 연속으로 하면 시스템이 자동으로 일시 정지(Pause 카드)하고, 보안 위험이 나타나면 즉시 현재 흐름을 중단합니다(Risk 선점 카드). **고정 골격이 기준을 보장하고, 동적 카드가 적응성을 보장합니다.**
-
-### 3층 기억이 무겁지 않나요?
-
-아닙니다. 각 층이 다른 역할을 담당합니다:
-- Memory는 가벼운 몇 개의 markdown 파일입니다
-- Graphify는 소스 파일이 20개 이상인 프로젝트에서만 활성화되며, 한 번 생성하면 재사용 가능합니다
-- SQL은 로컬 SQLite를 사용하며, 추가 데이터베이스 서비스가 필요 없습니다
-
-3층을 합친 리소스 소비는 매번 AI가 전체 프로젝트를 처음부터 읽는 토큰 소비보다 훨씬 적습니다.
-
-### 어떤 플랫폼을 지원하나요?
-
-Claude Code와 Codex는 default formal runtime projection입니다. OpenClaw와 Cursor는 maintainer handshake와 native self-test evidence가 필요한 non-default compatibility projection입니다. Qoder CLI, Trae, Kiro, Windsurf / Devin Desktop Cascade, Cline, Roo Code, Continue는 candidate probe입니다. 공식 문서에서 호환 primitive를 확인했지만 아직 Meta_Kim의 공식 runtime projection은 아닙니다. 의존 프로젝트의 install target은 upstream project에서 관리되며 Meta_Kim의 support claim으로 반복하지 않습니다. 정확한 경계는 `config/runtime-compatibility-catalog.json`에 있습니다.
-
-### 설치가 복잡한가요?
-
-한 줄 명령으로 가능합니다:
-
-```bash
-npx --yes github:KimYx0207/Meta_Kim meta-kim
-```
-
-또는 clone 후 실행:
-
-```bash
-git clone https://github.com/KimYx0207/Meta_Kim.git
-cd Meta_Kim
-npm install
-node setup.mjs
-```
-
-마법사가 언어, 플랫폼, 설치 범위를 안내합니다.
-
-### 왜 "元"이라고 부르나요?
-
-Meta_Kim에서 **元 = 최소 거버넌스 가능 단위**입니다. 유효한 元 단위는:
-- 명확한 책임 범주를 가져야 함
-- 거부 경계를 정의해야 함
-- 독립적으로 검토 가능해야 함
-- 교체 가능해야 함
-- 안전하게 롤백 가능해야 함
-
-모든 것이 "元"이라고 불릴 수 있는 것은 아닙니다. 이 기준을 충족해야 합니다.
-
-### MCP와는 어떤 관계인가요?
-
-Meta_Kim은 MCP(Model Context Protocol)를 사용하여 agent의 역량 경계를 확장합니다. `.mcp.json` 설정 파일을 통해 agent가 외부 도구와 서비스를 호출할 수 있습니다. 하지만 Meta_Kim 자체는 MCP 서버가 아닙니다 — 거버넌스 프레임워크이며, MCP는 통합하는 도구 중 하나입니다.
-
----
-
-## 더 읽기
-
-- [README.md](README.md)
-- [AGENTS.md](AGENTS.md)
-- [config/contracts/workflow-contract.json](config/contracts/workflow-contract.json)
-- [docs/runtime-capability-matrix.md](docs/runtime-capability-matrix.md)
-- [canonical/skills/meta-theory/SKILL.md](canonical/skills/meta-theory/SKILL.md)
-
----
-
-## 서드파티 의존성
-
-Meta_Kim 자체는 Apache License 2.0으로 라이선스됩니다. 다음 선택적 스킬 저장소는 `node setup.mjs`를 통해 별도로 설치되며, 각 저장소의 라이선스가 독립적으로 적용됩니다.
-
-### npm 의존성
-
-| 패키지 | License |
-|--------|---------|
-| [`@inquirer/prompts`](https://github.com/SBoudrias/Inquirer.js) | MIT |
-| [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) | MIT |
-| [`zod`](https://github.com/colinhacks/zod) | MIT |
-
-### 선택적 스킬 저장소
-
-| 저장소 | License |
-|--------|---------|
-| [KimYx0207/agent-teams-playbook](https://github.com/KimYx0207/agent-teams-playbook) | MIT |
-| [KimYx0207/findskill](https://github.com/KimYx0207/findskill) | MIT |
-| [KimYx0207/HookPrompt](https://github.com/KimYx0207/HookPrompt) | MIT |
-| [obra/superpowers](https://github.com/obra/superpowers) | MIT |
-| [affaan-m/everything-claude-code](https://github.com/affaan-m/everything-claude-code) | MIT |
-| [OthmanAdi/planning-with-files](https://github.com/OthmanAdi/planning-with-files) | MIT |
-| [HKUDS/CLI-Anything](https://github.com/HKUDS/CLI-Anything) | Apache 2.0 |
-| [garrytan/gstack](https://github.com/garrytan/gstack) | MIT |
-| [anthropics/skills](https://github.com/anthropics/skills) | 라이선스 미선언（© Anthropic, PBC） |
-
-### 선택적 pip 패키지
-
-| 패키지 | License |
-|--------|---------|
-| [`graphifyy`](https://github.com/safishamsi/graphify) | MIT |
-| [`mcp-memory-service`](https://pypi.org/project/mcp-memory-service/) | Apache 2.0 |
-
----
-
-## 라이선스
-
-본 프로젝트는 [Apache License 2.0](LICENSE)에 따라 라이선스됩니다.
-
-### 상업적 사용 및 표시
-
-상업적 사용은 허용됩니다. Meta_Kim 또는 그 실질적인 부분을 재배포하는 경우 배포물에 [LICENSE](LICENSE)와 [NOTICE](NOTICE)를 포함해야 합니다.
-
-권장 표시:
-
-```text
-Meta_Kim by KimYx0207 — https://github.com/KimYx0207/Meta_Kim
-```
-
-이 표시는 KimYx0207 또는 Meta_Kim 프로젝트가 귀하의 제품, 서비스 또는 배포물을 보증한다는 의미가 아닙니다. 서드파티 의존성과 선택적 스킬 저장소에는 각자의 라이선스가 적용됩니다.
+**Meta_Kim by KimYx0207 — https://github.com/KimYx0207/Meta_Kim**

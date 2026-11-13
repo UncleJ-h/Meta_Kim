@@ -4,8 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OS_TARGETS, RUNTIMES, exists, listFiles, readJson, repoPath, stateDir, toPosix, writeJson } from "./governance-lib.mjs";
+import { getProfilePaths, toRepoRelative } from "./meta-kim-local-state.mjs";
+import { discoverDependencyAgentContracts, readDependencyProjectOverrides } from "./dependency-agent-discovery.mjs";
+import { discoverOptionalEngines } from "../src/infrastructure/capabilities/optional-engine-discovery.mjs";
+import {
+  claimIsExecutable,
+  runtimeCapabilityNameForTool,
+  runtimeRouteEligibility,
+  runtimeSupportForCapability,
+} from "./runtime-capability-claims.mjs";
 
 const outputPath = path.join(stateDir, "capability-inventory.json");
+const profileStatePath = toRepoRelative(getProfilePaths().profileDir);
 
 function defaultSupport(runtime = "partial", os = "partial") {
   return {
@@ -24,6 +34,35 @@ function supportForOs(osName, support = "native", fallback = "unknown") {
   return Object.fromEntries(
     OS_TARGETS.map((name) => [name, name === osName ? support : fallback])
   );
+}
+
+function matrixCapabilityForRecord(record) {
+  if (record.type === "agent") return "agent";
+  if (record.type === "skill") return "skill";
+  if (record.type === "hook") return "hook";
+  if (record.type === "command") return "command";
+  if (["mcp_config", "mcp_server"].includes(record.type)) return "MCP";
+  if (record.type === "runtime_tool") return runtimeCapabilityNameForTool(record.id);
+  return null;
+}
+
+function applyRuntimeClaimBoundary(record, runtimeMatrix) {
+  const matrixCapability = matrixCapabilityForRecord(record);
+  if (!record.runtime || !matrixCapability) return record;
+  const resolvedRoute = runtimeRouteEligibility(
+    runtimeMatrix,
+    matrixCapability,
+    record.runtime,
+  );
+  return {
+    ...record,
+    runtimeSupport: runtimeSupportForCapability(runtimeMatrix, matrixCapability),
+    routeEligibility:
+      record.routeEligibility === "callable" && resolvedRoute === "callable"
+        ? "callable"
+        : "reference",
+    runtimeClaimMode: "interactive_host",
+  };
 }
 
 const PROVIDER_TYPE_BY_TYPE = {
@@ -97,6 +136,17 @@ function homeRelativePath(filePath) {
     return `~/${toPosix(relativeToHome)}`;
   }
   return toPosix(filePath);
+}
+
+function cachedGlobalSourcePath(entry, fallback) {
+  const sourceRef = toPosix(String(entry?.sourceRef ?? "").trim());
+  if (
+    /^~\/(?:[A-Za-z0-9._-]+)(?:\/[A-Za-z0-9._-]+)*$/u.test(sourceRef) &&
+    sourceRef.split("/").every((segment) => ![".", ".."].includes(segment))
+  ) {
+    return sourceRef;
+  }
+  return homeRelativePath(entry?.path) ?? fallback;
 }
 
 async function readJsonIfExists(relativePath) {
@@ -285,7 +335,7 @@ async function globalRuntimeCapabilities(projectProjectionMode) {
   if (projectProjectionMode !== "global_only") return [];
 
   const inventory = await readJsonIfExists(
-    ".meta-kim/state/default/capability-index/global-capabilities.json",
+    `${profileStatePath}/capability-index/global-capabilities.json`,
   );
   const byPlatform = inventory?.byPlatform;
   if (!byPlatform || typeof byPlatform !== "object") return [];
@@ -299,15 +349,13 @@ async function globalRuntimeCapabilities(projectProjectionMode) {
       const recordType =
         GLOBAL_INVENTORY_TYPE_TO_RECORD_TYPE[capabilityType] ?? "external";
       for (const entry of entries) {
-        if (
-          capabilityType !== "agents" ||
-          !String(entry?.id ?? "").startsWith("meta-")
-        ) {
+        if (capabilityType !== "agents") {
           continue;
         }
-        const sourcePath =
-          homeRelativePath(entry?.path) ??
-          `global:${platformId}:${capabilityType}:${entry?.id ?? "unknown"}`;
+        const sourcePath = cachedGlobalSourcePath(
+          entry,
+          `global:${platformId}:${capabilityType}:${entry?.id ?? "unknown"}`,
+        );
         const id = `global:${platformId}:${capabilityType}:${entry?.id ?? path.basename(sourcePath)}`;
         records.push({
           id,
@@ -320,9 +368,7 @@ async function globalRuntimeCapabilities(projectProjectionMode) {
             capabilityType,
             platformId,
           ].filter(Boolean),
-          ownerCandidates: String(entry?.id ?? "").startsWith("meta-")
-            ? [entry.id]
-            : ["meta-artisan"],
+          ownerCandidates: [entry?.id].filter(Boolean),
           weaponCandidates: [],
           dependencyCandidates: [],
           verificationMethod: "npm run discover:global",
@@ -374,22 +420,25 @@ async function configAndStateCapabilities() {
     ...(await fileCapabilities("config/contracts", "config", ["meta-prism"], { match: (file) => file.endsWith(".json") || file.endsWith(".md"), mustPreserve: true, routeEligibility: "reference", verificationMethod: "npm run meta:validate" })),
     ...(await fileRecordIfExists("canonical/runtime-assets/shared/hooks/meta-kim-memory-save.mjs", { id: "canonical-memory-save-hook", type: "memory", providerType: "memory", ownerCandidates: ["meta-librarian", "meta-sentinel"], routeEligibility: "reference", verificationMethod: "npm run meta:check:global:release" })),
     ...(await fileRecordIfExists("canonical/runtime-assets/claude/hooks/stop-memory-save.mjs", { id: "canonical-stop-memory-save-hook", type: "memory", providerType: "memory", ownerCandidates: ["meta-librarian", "meta-sentinel"], routeEligibility: "reference", verificationMethod: "npm run meta:check:global:release" })),
-    ...(await fileRecordIfExists(".meta-kim/state/default/capability-index/global-capabilities.json", { id: "cached-global-capability-inventory", type: "external", providerType: "external", ownerCandidates: ["meta-librarian", "meta-artisan"], routeEligibility: "reference", verificationMethod: "npm run discover:global" })),
-    ...(await fileRecordIfExists(".meta-kim/state/default/capability-inventory.json", { id: "local-capability-inventory-state", type: "memory", providerType: "memory", ownerCandidates: ["meta-librarian"], routeEligibility: "reference", verificationMethod: "npm run meta:capabilities:index" })),
-    ...(await fileRecordIfExists(".meta-kim/state/default/run-index.sqlite", { id: "run-index-state", type: "memory", providerType: "memory", ownerCandidates: ["meta-librarian"], routeEligibility: "reference", verificationMethod: "npm run meta:rebuild:run-index" })),
+    ...(await fileRecordIfExists(`${profileStatePath}/capability-index/global-capabilities.json`, { id: "cached-global-capability-inventory", type: "external", providerType: "external", ownerCandidates: ["meta-librarian", "meta-artisan"], routeEligibility: "reference", verificationMethod: "npm run discover:global" })),
+    ...(await fileRecordIfExists(`${profileStatePath}/capability-inventory.json`, { id: "local-capability-inventory-state", type: "memory", providerType: "memory", ownerCandidates: ["meta-librarian"], routeEligibility: "reference", verificationMethod: "npm run meta:capabilities:index" })),
+    ...(await fileRecordIfExists(`${profileStatePath}/run-index.sqlite`, { id: "run-index-state", type: "memory", providerType: "memory", ownerCandidates: ["meta-librarian"], routeEligibility: "reference", verificationMethod: "npm run meta:rebuild:run-index" })),
     ...(await fileRecordIfExists("graphify-out/GRAPH_REPORT.md", { id: "graphify-report", type: "graph", providerType: "graph", ownerCandidates: ["meta-librarian", "meta-conductor"], routeEligibility: "reference", verificationMethod: "npm run meta:graphify:check" })),
     ...(await fileRecordIfExists("graphify-out/graph.json", { id: "graphify-graph", type: "graph", providerType: "graph", ownerCandidates: ["meta-librarian", "meta-conductor"], routeEligibility: "reference", verificationMethod: "npm run meta:graphify:check" })),
   ];
 }
 
-export async function buildCapabilityInventory() {
+export async function buildCapabilityInventory({ environment = process.env, projectRoot = environment.META_KIM_CALLER_CWD || repoPath(".") } = {}) {
   const dependencies = await readJson("config/capability-index/dependency-project-registry.json");
   const weapons = await readJson("config/capability-index/weapon-registry.json");
   const skills = await readJson("config/skills.json");
   const runtimeMatrix = await readJson("config/runtime-capability-matrix.json");
   const osMatrix = await readJson("config/os-compatibility-matrix.json");
-  const localOverrides = await readJsonIfExists(".meta-kim/local.overrides.json");
+  const localOverrides = await readDependencyProjectOverrides(projectRoot);
   const projectProjectionMode = localOverrides?.projectProjectionMode ?? "project";
+  const dependencyAgents = await discoverDependencyAgentContracts({
+    projects: dependencies.projects, projectRoot, localOverrides: localOverrides ?? {}, environment,
+  });
   const records = [
     ...(await fileCapabilities("canonical/agents", "agent", ["meta-warden"], { match: (file) => file.endsWith(".md"), mustPreserve: true, routeEligibility: "governance_owner" })),
     ...(await fileCapabilities("canonical/skills", "skill", ["meta-artisan"], { match: (file) => path.basename(file) === "SKILL.md", mustPreserve: true, routeEligibility: "callable", invocationPath: "skill trigger" })),
@@ -401,8 +450,11 @@ export async function buildCapabilityInventory() {
     ...(await mcpCapabilities()),
     ...(await configAndStateCapabilities()),
     ...(await packageScripts()),
+    ...dependencyAgents.capabilities,
   ];
   for (const platform of runtimeMatrix.platforms ?? []) {
+    const hasExecutableCapability = (platform.capabilities ?? []).some((capability) =>
+      Object.values(capability.claimsByMode ?? {}).some(claimIsExecutable));
     records.push({
       id: `runtime:${platform.platform}`,
       type: "runtime_tool",
@@ -412,12 +464,12 @@ export async function buildCapabilityInventory() {
       ownerCandidates: ["meta-sentinel", "meta-artisan"],
       weaponCandidates: [],
       dependencyCandidates: [],
-      runtimeSupport: supportForRuntime(platform.platform, "native", "unknown"),
+      runtimeSupport: supportForRuntime(platform.platform, hasExecutableCapability ? "native" : "partial", "unknown"),
       osSupport: defaultSupport("partial", "partial").osSupport,
       verificationMethod: "npm run meta:runtime:validate",
       risk: { runtimeBoundary: true },
       mustPreserve: true,
-      routeEligibility: "callable",
+      routeEligibility: hasExecutableCapability ? "callable" : "reference",
       missingFields: [],
       evidence: { source: "local_file", sourceRef: "config/runtime-capability-matrix.json", confidence: "repo_claim" },
       confidence: "repo_claim",
@@ -449,6 +501,10 @@ export async function buildCapabilityInventory() {
     });
   }
   for (const tool of ["shell", "filesystem", "apply_patch", "browser", "web_search", "online_research", "MCP", "memory", "graph", "graphify", "hook", "command", "subagent", "approval", "sandbox"]) {
+    const matrixCapability = runtimeCapabilityNameForTool(tool);
+    const runtimeSupport = runtimeSupportForCapability(runtimeMatrix, matrixCapability);
+    const callableSomewhere = RUNTIMES.some((runtime) =>
+      runtimeRouteEligibility(runtimeMatrix, matrixCapability, runtime) === "callable");
     records.push({
       id: tool,
       type: "runtime_tool",
@@ -457,12 +513,12 @@ export async function buildCapabilityInventory() {
       ownerCandidates: ["meta-artisan", "meta-sentinel", "meta-scout"],
       weaponCandidates: [tool],
       dependencyCandidates: [],
-      runtimeSupport: defaultSupport("partial", "partial").runtimeSupport,
+      runtimeSupport,
       osSupport: defaultSupport("partial", "partial").osSupport,
       verificationMethod: "npm run meta:runtime:validate",
       risk: { requiresApproval: ["shell", "filesystem", "apply_patch"].includes(tool) },
       mustPreserve: true,
-      routeEligibility: "callable",
+      routeEligibility: callableSomewhere ? "callable" : "reference",
       missingFields: [],
       evidence: { source: "local_file", sourceRef: "config/runtime-capability-matrix.json", confidence: "repo_claim" },
       confidence: "repo_claim",
@@ -567,7 +623,30 @@ export async function buildCapabilityInventory() {
       reason: "External or dependency project capability candidate from the dependency registry.",
     });
   }
-  const normalizedRecords = records.map(withUnifiedCapabilityFields);
+  for (const engine of await discoverOptionalEngines({ projects: dependencies.projects, environment })) {
+    records.push({
+      id: `${engine.id}-cli`, type: "command", providerType: "tool",
+      sourcePath: "config/capability-index/dependency-project-registry.json",
+      triggerWords: [engine.id, engine.capabilityType, engine.description],
+      ownerCandidates: ["meta-artisan", "meta-sentinel"], weaponCandidates: [],
+      dependencyCandidates: [engine.id], ...defaultSupport("unknown", "unknown"),
+      capabilityType: engine.capabilityType, interfaces: engine.interfaces,
+      availability: engine.availability, permissionStatus: engine.permissionStatus,
+      invocationState: "not_invoked", liveVerified: false,
+      verificationMethod: "Inspect installed version, current host/OS permissions and task scope before native invocation; then verify the actual outcome.",
+      risk: { externalActions: true, privateObservationContent: true },
+      mustPreserve: true, routeEligibility: "requires_provider_validation", routeEligible: false,
+      missingFields: engine.available ? ["host_permission_and_session_evidence"] : ["installed_executable"],
+      evidence: { source: "local_path_observation", sourceRef: engine.sourceRef,
+        observationKind: engine.observationKind, observationDigest: engine.observationDigest,
+        confidence: "verified_local" },
+      confidence: "verified_local", invocationPath: engine.command,
+      writebackKey: `dependency:${engine.id}`,
+    });
+  }
+  const normalizedRecords = records
+    .map((record) => applyRuntimeClaimBoundary(record, runtimeMatrix))
+    .map(withUnifiedCapabilityFields);
   const byProviderType = normalizedRecords.reduce((counts, record) => {
     counts[record.providerType] = (counts[record.providerType] ?? 0) + 1;
     return counts;
@@ -575,6 +654,7 @@ export async function buildCapabilityInventory() {
   return {
     generatedAt: new Date().toISOString(),
     projectProjectionMode,
+    dependencyAgentDiscovery: { sources: dependencyAgents.sources, agentCount: dependencyAgents.agents.length },
     capabilities: normalizedRecords,
     runtimeMatrixCapabilities: runtimeMatrix.capabilityNames ?? [],
     osTargets: (osMatrix.operatingSystems ?? []).map((entry) => entry.id),
@@ -591,13 +671,13 @@ export async function buildCapabilityInventory() {
   };
 }
 
-export async function writeCapabilityInventory(targetPath = outputPath) {
-  const result = await buildCapabilityInventory();
+export async function writeCapabilityInventory(targetPath = outputPath, options = {}) {
+  const result = await buildCapabilityInventory(options);
   await writeJson(targetPath, result);
   return result;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await writeCapabilityInventory();
-  console.log(JSON.stringify(result, null, 2));
+  console.log(`capability inventory written: ${result.capabilities?.length ?? 0} records (projectProjectionMode=${result.projectProjectionMode ?? "unknown"})`);
 }

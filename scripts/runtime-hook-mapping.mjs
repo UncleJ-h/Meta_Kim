@@ -7,6 +7,16 @@
  */
 
 export const RUNTIME_HOOK_CAPABILITIES = {
+  gemini: {
+    configPath: ".gemini/settings.json", hookDir: ".gemini/hooks/meta-kim",
+    projectHooks: true, globalHooks: true,
+    events: { promptSubmit: "BeforeAgent", sessionStart: "SessionStart", preToolUse: "BeforeTool", postToolUse: "AfterTool", stop: "AfterAgent" },
+  },
+  zcode: {
+    configPath: "~/.zcode/cli/config.json", hookDir: ".zcode/hooks/meta-kim",
+    projectHooks: false, globalHooks: true,
+    events: { promptSubmit: "UserPromptSubmit", sessionStart: "SessionStart", preToolUse: "PreToolUse", postToolUse: "PostToolUse", stop: "Stop" },
+  },
   claude: {
     configPath: ".claude/settings.json",
     hookDir: ".claude/hooks",
@@ -17,7 +27,9 @@ export const RUNTIME_HOOK_CAPABILITIES = {
       sessionStart: "SessionStart",
       preToolUse: "PreToolUse",
       postToolUse: "PostToolUse",
+      preCompact: "PreCompact",
       subagentStart: "SubagentStart",
+      subagentStop: "SubagentStop",
       stop: "Stop",
     },
   },
@@ -31,7 +43,9 @@ export const RUNTIME_HOOK_CAPABILITIES = {
       sessionStart: "SessionStart",
       preToolUse: "PreToolUse",
       postToolUse: "PostToolUse",
+      preCompact: "PreCompact",
       subagentStart: "SubagentStart",
+      subagentStop: "SubagentStop",
       skill: "Skill",
       stop: "Stop",
     },
@@ -87,6 +101,95 @@ export const HOOKPROMPT_PLATFORM_SUPPORT = {
   },
 };
 
+// Cross-runtime hook core. These files have exactly one canonical owner under
+// shared/hooks; runtime sync must never prefer a same-named runtime copy.
+// One dependency declaration is reused by project/global install, ownership and cleanup.
+export const ENTRY_CLASSIFIER_HOOK_FILES = Object.freeze([
+  "entry-classification-lexicon.json",
+  "entry-classifier-core.mjs",
+  "entry-classifier.mjs",
+]);
+
+export const SHARED_RUNTIME_HOOK_FILES = Object.freeze([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
+  "activate-meta-theory-spine.mjs",
+  "planning-continuity.mjs",
+]);
+
+const CLAUDE_COMPATIBLE_HOOK_FILES = Object.freeze([
+  "bash-readonly-whitelist.mjs",
+  "block-dangerous-bash.mjs",
+  "ecc-permission-cache-wrapper.mjs",
+  "enforce-agent-dispatch.mjs",
+  "graphify-context.mjs",
+  "hook-i18n.mjs",
+  "post-console-log-warn.mjs",
+  "post-format.mjs",
+  "post-typecheck.mjs",
+  "stop-compaction.mjs",
+  "stop-completion-guard.mjs",
+  "stop-console-log-audit.mjs",
+  "stop-memory-save.mjs",
+  "stop-save-progress.mjs",
+  "subagent-context.mjs",
+]);
+
+/**
+ * Canonical source ownership for runtime-facing Hook entrypoints.
+ *
+ * A `claude` value for Codex/Cursor is an explicit compatibility declaration:
+ * it never means "fall back to Claude when no owner is known". Runtime-neutral
+ * state helpers remain in SHARED_RUNTIME_HOOK_FILES, while entrypoints that may
+ * diverge keep an explicit per-runtime owner here.
+ */
+export const RUNTIME_HOOK_SOURCE_OWNERS = Object.freeze({
+  ...Object.fromEntries(
+    CLAUDE_COMPATIBLE_HOOK_FILES.map((fileName) => [
+      fileName,
+      Object.freeze({ claude: "claude", codex: "claude", cursor: "claude" }),
+    ]),
+  ),
+  "meta-kim-memory-save.mjs": Object.freeze({
+    claude: "claude",
+    codex: "shared",
+    cursor: "shared",
+  }),
+  "stop-spine-cleanup.mjs": Object.freeze({
+    claude: "claude",
+    codex: "shared",
+    cursor: "shared",
+  }),
+  // OpenClaw currently consumes only this explicitly compatible entrypoint.
+  "stop-save-progress.mjs": Object.freeze({
+    claude: "claude",
+    codex: "claude",
+    cursor: "claude",
+    openclaw: "claude",
+  }),
+});
+
+export function runtimeHookSourceOwner(runtimeId, fileName) {
+  if (SHARED_RUNTIME_HOOK_FILES.includes(fileName)) {
+    if (!["claude", "codex", "cursor"].includes(runtimeId)) {
+      return null;
+    }
+    return "shared";
+  }
+  const owner = RUNTIME_HOOK_SOURCE_OWNERS[fileName]?.[runtimeId];
+  if (owner) return owner;
+  return null;
+}
+
 export function commandToken(value) {
   return /[\s"]/u.test(String(value)) ? JSON.stringify(String(value)) : String(value);
 }
@@ -104,7 +207,18 @@ export function hookCommand(command, timeout, extra = {}) {
   };
 }
 
-const PROJECT_META_KIM_HOOK_FILES = new Set([
+export const PROJECT_META_KIM_HOOK_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
   "bash-readonly-whitelist.mjs",
   "block-dangerous-bash.mjs",
@@ -116,6 +230,7 @@ const PROJECT_META_KIM_HOOK_FILES = new Set([
   "hookprompt-adapter.mjs",
   "meta-kim-memory-save.mjs",
   "permission_request.py",
+  "planning-continuity.mjs",
   "planning-with-files-adapter.mjs",
   "post-console-log-warn.mjs",
   "post-format.mjs",
@@ -131,8 +246,6 @@ const PROJECT_META_KIM_HOOK_FILES = new Set([
   "resolve-plan-dir.sh",
   "session-start.sh",
   "session_start.py",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
   "stop-compaction.mjs",
   "stop-completion-guard.mjs",
   "stop-console-log-audit.mjs",
@@ -144,7 +257,6 @@ const PROJECT_META_KIM_HOOK_FILES = new Set([
   "subagent-context.mjs",
   "user-prompt-submit.sh",
   "user_prompt_submit.py",
-  "utils.mjs",
 ]);
 
 export function isProjectMetaKimHookCommand(command) {
@@ -202,7 +314,7 @@ export function stripProjectMetaKimHooksFromHookConfig(config = {}) {
 export function buildHookPromptAdapterSource(runtimeId) {
   return [
     'import { spawnSync } from "node:child_process";',
-    'import { existsSync, readFileSync } from "node:fs";',
+    'import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";',
     'import path from "node:path";',
     'import process from "node:process";',
     'import { fileURLToPath } from "node:url";',
@@ -237,6 +349,11 @@ export function buildHookPromptAdapterSource(runtimeId) {
     '  return "";',
     "}",
     "",
+    "function userPromptText(raw) {",
+    "  const ambient = /^\\s*<in-app-browser-context\\s+source=[\"']ambient-ui-state[\"']\\s*>[\\s\\S]*?<\\/in-app-browser-context>\\s*## My request:\\s*/u.exec(raw);",
+    "  return ambient ? raw.slice(ambient[0].length) : raw;",
+    "}",
+    "",
     "function findHookPromptScript() {",
     "  const candidates = [];",
     "  const hookDir = path.dirname(fileURLToPath(import.meta.url));",
@@ -257,6 +374,37 @@ export function buildHookPromptAdapterSource(runtimeId) {
     "  }",
     "}",
     "",
+    "// A starved inner hook is indistinguishable from one that produced no",
+    "// context: both leave the adapter silent. 10s protects an interactive",
+    "// prompt, but a loaded CI host can starve a healthy hook past it, so the",
+    "// ceiling is overridable. An unparseable or non-positive override falls",
+    "// back to the default rather than being clamped into a different value.",
+    "function innerTimeoutMs() {",
+    '  const raw = Number.parseInt(process.env.META_KIM_HOOKPROMPT_INNER_TIMEOUT_MS ?? "", 10);',
+    "  return Number.isFinite(raw) && raw > 0 ? raw : 10000;",
+    "}",
+    "",
+    "// This adjacent preference is user-owned and survives generated adapter updates.",
+    "function displayMode() {",
+    '  const valid = (value) => value === "full" || value === "summary";',
+    "  if (valid(process.env.HOOKPROMPT_DISPLAY_MODE)) return process.env.HOOKPROMPT_DISPLAY_MODE;",
+    "  let descriptor;",
+    "  try {",
+    '    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "hookprompt-display.json");',
+    "    const before = lstatSync(file);",
+    "    if (!before.isFile() || before.isSymbolicLink() || before.size > 4096) return null;",
+    "    descriptor = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));",
+    "    const opened = fstatSync(descriptor);",
+    "    if (!opened.isFile() || opened.size > 4096 || opened.ino !== before.ino || opened.dev !== before.dev) return null;",
+    "    const buffer = Buffer.alloc(4097);",
+    "    const size = readSync(descriptor, buffer, 0, buffer.length, 0);",
+    "    if (size > 4096) return null;",
+    '    const preference = JSON.parse(buffer.subarray(0, size).toString("utf8"));',
+    "    return valid(preference?.mode) ? preference.mode : null;",
+    "  } catch { return null; }",
+    "  finally { if (descriptor !== undefined) closeSync(descriptor); }",
+    "}",
+    "",
     "function emitAdditionalContext(additionalContext) {",
     `  const runtimeId = ${JSON.stringify(runtimeId)};`,
     '  if (runtimeId === "cursor") {',
@@ -272,14 +420,16 @@ export function buildHookPromptAdapterSource(runtimeId) {
     "}",
     "",
     "const payload = readPayload();",
-    "const prompt = promptFromPayload(payload);",
+    "const prompt = userPromptText(promptFromPayload(payload));",
     "const script = findHookPromptScript();",
     "if (prompt && script) {",
+    "  const mode = displayMode();",
     '  const result = spawnSync("node", [script], {',
     '    input: JSON.stringify({ prompt }),',
     '    encoding: "utf8",',
     '    windowsHide: true,',
-    '    timeout: 10000,',
+    '    env: { ...process.env, ...(mode ? { HOOKPROMPT_DISPLAY_MODE: mode } : {}) },',
+    '    timeout: innerTimeoutMs(),',
     "  });",
     "  const additionalContext = parseClaudeAdditionalContext(result.stdout || '');",
     "  if (additionalContext) {",
@@ -297,11 +447,19 @@ export function buildCodexHooksJson({
   packageRoot = null,
   enforceAgentDispatchHookPath = ".codex/hooks/enforce-agent-dispatch.mjs",
   hookPromptAdapterPath = null,
+  planningContinuityHookPath = ".codex/hooks/planning-continuity.mjs",
+  stopSpineCleanupHookPath = null,
 } = {}) {
   const userPromptHooks = [];
-  const spineHookArgs = packageRoot ? ["--package-root", packageRoot] : [];
+  const spineHookArgs = ["--runtime", "codex", ...(packageRoot ? ["--package-root", packageRoot] : [])];
+  const lifecycleHook = () => hookCommand(nodeHookCommand(spineHookPath, spineHookArgs), 5);
   if (spineHookPath) {
     userPromptHooks.push(hookCommand(nodeHookCommand(spineHookPath, spineHookArgs), 5));
+  }
+  if (planningContinuityHookPath) {
+    userPromptHooks.push(hookCommand(nodeHookCommand(planningContinuityHookPath, [
+      "--event", "user-prompt", "--runtime", "codex",
+    ]), 10));
   }
   if (memoryHookPath) {
     userPromptHooks.push(
@@ -322,7 +480,7 @@ export function buildCodexHooksJson({
       // Capability-first + meta-readonly deny gate must run before any other
       // PreToolUse logic so it can short-circuit unsafe dispatches.
       {
-        matcher: "Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit|Agent|spawn_agent",
+        matcher: "Bash|apply_patch|Edit|Write|MultiEdit|NotebookEdit|Agent|spawn_agent|followup_task|collaboration\\.spawn_agent|collaboration\\.followup_task",
         hooks: [
           hookCommand(
             nodeHookCommand(enforceAgentDispatchHookPath, ["--runtime", "codex"]),
@@ -331,8 +489,30 @@ export function buildCodexHooksJson({
         ],
       },
       {
+        matcher: "Agent|spawn_agent|followup_task|collaboration\\.spawn_agent|collaboration\\.followup_task",
+        hooks: [lifecycleHook()],
+      },
+      {
         matcher: "Bash",
         hooks: [hookCommand(nodeHookCommand(graphifyHookPath))],
+      },
+    ],
+    PostToolUse: [
+      {
+        matcher: "Agent|spawn_agent|followup_task|collaboration\\.spawn_agent|collaboration\\.followup_task",
+        hooks: [lifecycleHook()],
+      },
+    ],
+    SubagentStart: [
+      {
+        matcher: "*",
+        hooks: [lifecycleHook()],
+      },
+    ],
+    SubagentStop: [
+      {
+        matcher: "*",
+        hooks: [lifecycleHook()],
       },
     ],
     Skill: [
@@ -343,20 +523,61 @@ export function buildCodexHooksJson({
     ],
   };
 
-  if (memoryHookPath) {
+  if (memoryHookPath || planningContinuityHookPath) {
+    const sessionHooks = [];
+    if (planningContinuityHookPath) {
+      sessionHooks.push(hookCommand(nodeHookCommand(planningContinuityHookPath, [
+        "--event", "session-start", "--runtime", "codex",
+      ]), 10, { statusMessage: "Loading Meta_Kim planning continuity" }));
+    }
+    if (memoryHookPath) {
+      sessionHooks.push(
+        hookCommand(nodeHookCommand(memoryHookPath, ["--event", "session-start"]), 10, {
+          statusMessage: "Loading Meta_Kim memory",
+        }),
+      );
+    }
     hooks.SessionStart = [
       {
         matcher: "startup|resume",
-        hooks: [
-          hookCommand(nodeHookCommand(memoryHookPath, ["--event", "session-start"]), 10, {
-            statusMessage: "Loading Meta_Kim memory",
-          }),
-        ],
+        hooks: sessionHooks,
       },
     ];
+  }
+  if (planningContinuityHookPath) {
+    hooks.PreCompact = [{
+      matcher: "*",
+      hooks: [hookCommand(nodeHookCommand(planningContinuityHookPath, [
+        "--event", "pre-compact", "--runtime", "codex",
+      ]), 10)],
+    }];
+    hooks.PostToolUse = [...(hooks.PostToolUse ?? []), {
+      matcher: "Edit|Write",
+      hooks: [hookCommand(nodeHookCommand(planningContinuityHookPath, [
+        "--event", "post-tool", "--runtime", "codex",
+      ]), 10)],
+    }];
+  }
+  const stopHooks = [];
+  if (spineHookPath) stopHooks.push(lifecycleHook());
+  if (planningContinuityHookPath) {
+    stopHooks.push(hookCommand(nodeHookCommand(planningContinuityHookPath, [
+      "--event", "stop", "--runtime", "codex",
+    ]), 10));
+  }
+  if (memoryHookPath) {
+    stopHooks.push(
+      hookCommand(nodeHookCommand(memoryHookPath, ["--event", "stop"]), 10),
+    );
+  }
+  if (stopSpineCleanupHookPath) {
+    stopHooks.push(hookCommand(nodeHookCommand(stopSpineCleanupHookPath), 10));
+  }
+  if (stopHooks.length > 0) {
     hooks.Stop = [
       {
-        hooks: [hookCommand(nodeHookCommand(memoryHookPath, ["--event", "stop"]), 10)],
+        matcher: "*",
+        hooks: stopHooks,
       },
     ];
   }
@@ -378,14 +599,27 @@ export function buildCursorHooksJson({
   packageRoot = null,
   enforceAgentDispatchHookPath = ".cursor/hooks/enforce-agent-dispatch.mjs",
   hookPromptAdapterPath = null,
+  planningContinuityHookPath = null,
 } = {}) {
-  const spineHookArgs = packageRoot ? ["--package-root", packageRoot] : [];
+  const spineHookArgs = ["--runtime", "cursor", ...(packageRoot ? ["--package-root", packageRoot] : [])];
+  const lifecycleHook = () => ({
+    command: nodeHookCommand(spineHookPath, spineHookArgs),
+    timeout: 5,
+  });
   const beforeSubmitPromptHooks = [
     {
       command: nodeHookCommand(spineHookPath, spineHookArgs),
       timeout: 5,
     },
   ];
+  if (planningContinuityHookPath) {
+    beforeSubmitPromptHooks.push({
+      command: nodeHookCommand(planningContinuityHookPath, [
+        "--event", "user-prompt", "--runtime", "cursor",
+      ]),
+      timeout: 10,
+    });
+  }
   if (memoryHookPath) {
     beforeSubmitPromptHooks.push({
       command: nodeHookCommand(memoryHookPath, ["--event", "user-prompt"]),
@@ -412,21 +646,51 @@ export function buildCursorHooksJson({
       {
         command: nodeHookCommand(graphifyHookPath),
       },
+      lifecycleHook(),
     ],
-  };
-  if (memoryHookPath) {
-    hooks.sessionStart = [
+    // Cursor declares the command directly on the event and carries the matcher
+    // as a sibling field. A nested `hooks` array is Claude's shape: Cursor reads
+    // no command out of it, so the lifecycle hook would be registered on paper
+    // and never invoked. Every other event in this builder is already flat.
+    postToolUse: [
       {
+        ...lifecycleHook(),
+        matcher: "Agent|spawn_agent|followup_task|collaboration\\.spawn_agent|collaboration\\.followup_task",
+      },
+    ],
+    subagentStart: [lifecycleHook()],
+    stop: [lifecycleHook()],
+  };
+  if (memoryHookPath || planningContinuityHookPath) {
+    hooks.sessionStart = [];
+    if (planningContinuityHookPath) {
+      hooks.sessionStart.push({
+        command: nodeHookCommand(planningContinuityHookPath, [
+          "--event", "session-start", "--runtime", "cursor",
+        ]),
+        timeout: 10,
+      });
+    }
+    if (memoryHookPath) {
+      hooks.sessionStart.push({
         command: nodeHookCommand(memoryHookPath, ["--event", "session-start"]),
         timeout: 10,
-      },
-    ];
-    hooks.stop = [
-      {
+      });
+    }
+    if (planningContinuityHookPath) {
+      hooks.stop.push({
+        command: nodeHookCommand(planningContinuityHookPath, [
+          "--event", "stop", "--runtime", "cursor",
+        ]),
+        timeout: 10,
+      });
+    }
+    if (memoryHookPath) {
+      hooks.stop.push({
         command: nodeHookCommand(memoryHookPath, ["--event", "stop"]),
         timeout: 10,
-      },
-    ];
+      });
+    }
   }
 
   return {

@@ -1,0 +1,268 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const NPM_PACK_COMMAND = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
+const NPM_PACK_ARGS = process.platform === "win32"
+  ? ["/d", "/s", "/c", "npm.cmd pack --dry-run --json --ignore-scripts"]
+  : ["pack", "--dry-run", "--json", "--ignore-scripts"];
+
+const DECISION_PACKAGE_FILES = [
+  "src/adapters/claude/native-decision-surface-adapter.mjs",
+  "src/adapters/claude/sdk-decision-host-adapter.mjs",
+  "src/adapters/codex/app-server-decision-host-adapter.mjs",
+  "src/adapters/codex/native-decision-surface-adapter.mjs",
+  "src/data/repositories/native-host-answer-repository.mjs",
+  "src/data/schemas/decision.schema.json",
+  "src/data/schemas/native-decision-authority.schema.json",
+  "src/data/schemas/native-host-answer-authority.schema.json",
+  "src/domain/decision/decision.mjs",
+  "src/domain/decision/legacy-decision-projection.mjs",
+  "src/domain/decision/native-decision-authority.mjs",
+  "src/domain/decision/native-host-answer-authority.mjs",
+];
+const GOVERNANCE_EVALUATOR = "src/domain/governance/governance-requirements.mjs";
+const LEASE_CLAIM_AUTHORITY_DOMAIN = "src/domain/claims/lease-claim-authority-shadow.mjs";
+const EVIDENCE_TRANSITION_DOMAIN = "src/domain/evidence/evidence-transition.mjs";
+const CONTINUATION_POLICY_DOMAIN = "src/domain/continuation/continuation-policy-shadow.mjs";
+const SCHEDULER_AUTHORITY_REUSE_DOMAIN = "src/domain/scheduling/scheduler-authority-reuse-shadow.mjs";
+const QUOTA_USAGE_PROJECTION_DOMAIN = "src/domain/quota/quota-usage-projection.mjs";
+const RUNTIME_HEALTH_PROJECTION_DOMAIN = "src/domain/runtime/runtime-health-projection.mjs";
+const TODO_SAFE_PROGRESS_DOMAIN = "src/domain/work/todo-dependency-safe-progress-shadow.mjs";
+const CANDIDATE_RUNTIME_ADAPTER_FILES = [
+  "src/runtimes/deepseek-harness/candidate-adapter.mjs",
+  "src/runtimes/qoder/candidate-adapter.mjs",
+  "src/runtimes/trae/candidate-adapter.mjs",
+  "src/runtimes/zcode/candidate-adapter.mjs",
+];
+const BETA_RUNTIME_ADAPTER_BUNDLE_FILES = [
+  "src/application/installer/beta-runtime-adapter-bundle.mjs",
+  "src/infrastructure/installer/beta-runtime-adapter-bundle.mjs",
+];
+const READ_ONLY_SURFACE_SOURCE_FILES = [
+  "src/domain/shared/canonical-digest.mjs",
+  "src/domain/presentation/read-only-run-projection-schema.mjs",
+  "src/domain/presentation/read-only-run-projection-surfaces.mjs",
+  "src/application/presentation/build-read-only-run-projection-surfaces.mjs",
+  "src/data/projections/read-only-run-authority-snapshot.mjs",
+  "src/presentation/run-surfaces/read-only-run-surface-renderers.mjs",
+];
+const DATA_EVENT_REPOSITORY_SOURCE_FILES = [
+  "src/domain/execution/durable-run-repository-semantics.mjs",
+  "src/application/ports/durable-run-repository-port.mjs",
+  "src/application/run/open-durable-run-repository.mjs",
+  "src/data/repositories/sqlite-durable-run-repository.mjs",
+  "src/data/sqlite/runtime.mjs",
+  "src/data/sqlite/transaction.mjs",
+];
+const SETUP_INSTALLER_DECOMPOSITION_SOURCE_FILES = [
+  "src/application/installer/ensure-stable-global-projection-package.mjs",
+  "src/infrastructure/installer/projection-package-boundary.mjs",
+];
+const KNOWLEDGE_LIFECYCLE_SOURCE_FILES = [
+  "src/application/evolution/apply-knowledge-lifecycle-transition.mjs",
+  "src/application/ports/knowledge-lifecycle-registry-port.mjs",
+  "src/data/repositories/json-knowledge-lifecycle-registry-repository.mjs",
+  "src/domain/evolution/knowledge-lifecycle.mjs",
+  "src/domain/evolution/warden-writeback-approval.mjs",
+];
+const GOVERNANCE_REQUIREMENT_CUTOVER_SOURCE_FILES = [
+  "src/data/schemas/governance-requirement-plan.schema.json",
+  "src/domain/governance/governance-requirement-cutover.mjs",
+];
+const LIVE_SOURCE_FILES = [
+  "src/application/live/build-live-share-artifact.mjs",
+  "src/application/live/live-acceptance-fixture-loader.mjs",
+  "src/application/live/live-catalog-scan-policy.mjs",
+  "src/application/live/live-control-room-service.mjs",
+  "src/application/live/live-conversation-link-vocabulary.mjs",
+  "src/application/live/live-default-selection.mjs",
+  "src/application/live/live-display-format.mjs",
+  "src/application/live/live-graph-camera.mjs",
+  "src/application/live/live-graph-layout.mjs",
+  "src/application/live/live-hub-lifecycle-budget.mjs",
+  "src/application/live/live-projection-backfill-policy.mjs",
+  "src/application/live/live-record-origin.mjs",
+  "src/application/live/live-replay-visibility.mjs",
+  "src/application/live/live-run-retention.mjs",
+  "src/application/live/live-run-substance.mjs",
+  "src/application/live/live-run-visibility.mjs",
+  "src/application/live/live-scheduling-projection.mjs",
+  "src/application/live/live-spacing-scale.mjs",
+  "src/application/live/live-status-vocabulary.mjs",
+  "src/application/live/live-stream-policy.mjs",
+  "src/application/live/live-typography-scale.mjs",
+  "src/application/live/live-viewport-budget.mjs",
+  "src/application/live/plan-live-continuation.mjs",
+  "src/application/live/prepare-live-projection-record.mjs",
+  "src/domain/live/live-continuation-command.mjs",
+  "src/domain/live/live-share-artifact.mjs",
+  "src/infrastructure/live/live-continuation-command-store.mjs",
+  "src/infrastructure/live/live-control-room-server.mjs",
+  "src/infrastructure/live/live-hub-lifecycle.mjs",
+  "src/infrastructure/live/live-hub-project-catalog.mjs",
+  "src/infrastructure/live/live-projection-backfill.mjs",
+  "src/infrastructure/live/live-read-repository.mjs",
+  "src/infrastructure/live/live-run-retention-store.mjs",
+  "src/infrastructure/live/live-runtime-adapter-registry.mjs",
+  "src/presentation/live/assets/meta-kim-k-mark.png",
+  "src/presentation/live/assets/meta-kim-live.ico",
+  "src/presentation/live/live-control-room-page.mjs",
+  "src/presentation/live/render-live-share-card.mjs",
+  "src/sdk/live/common.mjs",
+  "src/sdk/live/evidence-card.mjs",
+  "src/sdk/live/index.mjs",
+  "src/sdk/live/replay-theme.mjs",
+  "src/sdk/live/runtime-adapter.mjs",
+];
+// Explicitly reviewed additions to the existing M3 package boundary.
+// Keep this list independent of package.json so accidental widening fails.
+const APPROVED_HARNESS_ADDITIONS = [
+  "src/application/decision/route-candidate-options.mjs",
+  "src/application/governance/task-design-dispatch.mjs",
+  "src/application/runtime/operating-system.mjs",
+  "src/data/repositories/live-deliverable-repository.mjs",
+  "src/adapters/codex/desktop-decision-host-adapter.mjs",
+  "src/application/live/live-deliverables.mjs",
+  "src/application/live/live-graph-readability.mjs",
+  "src/application/live/live-human-gate-projection.mjs",
+  "src/application/live/live-native-codex-projection.mjs",
+  "src/application/live/live-native-zcode-projection.mjs",
+  "src/domain/design/software-design.mjs",
+  "src/domain/governance/numeric-measurement.mjs",
+  "src/domain/governance/task-outcome.mjs",
+  "src/domain/scheduling/human-gate-progress.mjs",
+  "src/infrastructure/capabilities/dependency-method-knowledge.mjs",
+  "src/infrastructure/capabilities/optional-engine-discovery.mjs",
+  "src/infrastructure/capabilities/source-integrity.mjs",
+  "src/infrastructure/installer/retired-dependency-copies.mjs",
+  "src/infrastructure/live/claude-native-session-reader.mjs",
+  "src/infrastructure/live/codex-native-session-reader.mjs",
+  "src/infrastructure/live/codex-native-turn-locator.mjs",
+  "src/infrastructure/live/live-native-bindings.mjs",
+  "src/infrastructure/live/zcode-native-session-reader.mjs",
+  "src/infrastructure/project/project-relations.mjs",
+  "src/presentation/live/live-feedback-copy.mjs",
+  "src/presentation/live/live-feedback-draft.mjs",
+  "src/presentation/live/live-run-overview.mjs",
+  "src/presentation/live/live-token-usage.mjs",
+];
+const PACKAGE_SOURCE_FILES = [
+  ...APPROVED_HARNESS_ADDITIONS,
+  ...DECISION_PACKAGE_FILES,
+  LEASE_CLAIM_AUTHORITY_DOMAIN,
+  CONTINUATION_POLICY_DOMAIN,
+  EVIDENCE_TRANSITION_DOMAIN,
+  GOVERNANCE_EVALUATOR,
+  QUOTA_USAGE_PROJECTION_DOMAIN,
+  RUNTIME_HEALTH_PROJECTION_DOMAIN,
+  SCHEDULER_AUTHORITY_REUSE_DOMAIN,
+  TODO_SAFE_PROGRESS_DOMAIN,
+  ...READ_ONLY_SURFACE_SOURCE_FILES,
+  ...DATA_EVENT_REPOSITORY_SOURCE_FILES,
+  ...SETUP_INSTALLER_DECOMPOSITION_SOURCE_FILES,
+  ...KNOWLEDGE_LIFECYCLE_SOURCE_FILES,
+  ...GOVERNANCE_REQUIREMENT_CUTOVER_SOURCE_FILES,
+  ...LIVE_SOURCE_FILES,
+  ...CANDIDATE_RUNTIME_ADAPTER_FILES,
+  ...BETA_RUNTIME_ADAPTER_BUNDLE_FILES,
+].sort();
+const IMPORT_CLOSURE_ROOTS = [
+  "src/adapters/claude/native-decision-surface-adapter.mjs",
+  "src/adapters/claude/sdk-decision-host-adapter.mjs",
+  "src/adapters/codex/app-server-decision-host-adapter.mjs",
+  "src/adapters/codex/native-decision-surface-adapter.mjs",
+  "src/data/repositories/native-host-answer-repository.mjs",
+  "src/domain/decision/legacy-decision-projection.mjs",
+  "src/domain/decision/native-decision-authority.mjs",
+  "src/domain/decision/native-host-answer-authority.mjs",
+];
+
+let packedFiles;
+
+function packageFileSet() {
+  if (packedFiles) return packedFiles;
+
+  const result = spawnSync(NPM_PACK_COMMAND, NPM_PACK_ARGS, {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const [pack] = JSON.parse(result.stdout);
+  assert.ok(pack, "npm pack --dry-run did not return package metadata");
+  packedFiles = new Set(pack.files.map(({ path: filePath }) => filePath));
+  return packedFiles;
+}
+
+function resolvePackageRelativeImport(fromPath, specifier) {
+  return path.posix.normalize(path.posix.join(path.posix.dirname(fromPath), specifier));
+}
+
+test("M3 native Decision package closure is exact and does not widen src", () => {
+  const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+  const sourceWhitelist = manifest.files.filter((entry) => entry.startsWith("src/")).sort();
+
+  assert.deepEqual(sourceWhitelist, PACKAGE_SOURCE_FILES);
+  assert.equal(
+    manifest.files.some((entry) => /^src(?:\/|\/\*\*)?$/u.test(entry)),
+    false,
+    "package files must not contain a broad src/ or src/** entry",
+  );
+
+  const files = packageFileSet();
+  const packedSourceFiles = [...files].filter((filePath) => filePath.startsWith("src/")).sort();
+  assert.deepEqual(packedSourceFiles, PACKAGE_SOURCE_FILES);
+  for (const requiredPath of DECISION_PACKAGE_FILES) {
+    assert.ok(files.has(requiredPath), `packed package is missing ${requiredPath}`);
+  }
+});
+
+test("both native adapters and the authority resolve only to files in the packed layout", () => {
+  const files = packageFileSet();
+
+  for (const importerPath of IMPORT_CLOSURE_ROOTS) {
+    assert.ok(files.has(importerPath), `packed package is missing importer ${importerPath}`);
+    const source = readFileSync(path.join(REPO_ROOT, importerPath), "utf8");
+    const relativeSpecifiers = [...source.matchAll(/\bfrom\s+["'](\.[^"']+)["']/gu)]
+      .map((match) => match[1]);
+
+    assert.ok(relativeSpecifiers.length > 0, `${importerPath} must expose its relative import closure`);
+    for (const specifier of relativeSpecifiers) {
+      const resolvedPath = resolvePackageRelativeImport(importerPath, specifier);
+      assert.ok(
+        files.has(resolvedPath),
+        `${importerPath} import ${specifier} resolves outside the packed package`,
+      );
+    }
+  }
+});
+
+
+test("entry, task design, decision and OS adapters have a closed npm package import graph", () => {
+  const files = packageFileSet();
+  const pending = ["scripts/meta-theory-entry-classifier.mjs", "scripts/governed-execution/task-design-dispatch.mjs",
+    "scripts/governed-execution/intent-dialogue.mjs", "scripts/governed-execution/choice-policy.mjs",
+    "scripts/runtime-operating-system.mjs", "scripts/governance-lib.mjs"];
+  const visited = new Set();
+  while (pending.length) {
+    const importer = pending.pop();
+    if (visited.has(importer)) continue;
+    visited.add(importer);
+    assert.ok(files.has(importer), `packed package is missing ${importer}`);
+    if (!importer.endsWith(".mjs")) continue;
+    const source = readFileSync(path.join(REPO_ROOT, importer), "utf8");
+    for (const [, specifier] of source.matchAll(/\bfrom\s+["'](\.[^"']+)["']/gu)) {
+      const dependency = resolvePackageRelativeImport(importer, specifier);
+      assert.ok(files.has(dependency), `${importer} import ${specifier} is missing from npm pack`);
+      pending.push(dependency);
+    }
+  }
+  assert.ok(visited.has("canonical/runtime-assets/shared/hooks/entry-classification-lexicon.json"));
+  assert.ok(visited.has("config/governance/material-decision-policy.json"));
+});

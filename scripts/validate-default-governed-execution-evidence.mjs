@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { runMetaTheoryGovernedExecution } from "./run-meta-theory-governed-execution.mjs";
+import { runDiagnosticReadPlan } from "./diagnostic-host-protocol.mjs";
 
 const MULTI_CAPABILITY_TASK = [
   "同一套 PRD review standard 需要 skill。",
@@ -13,6 +14,7 @@ const MULTI_CAPABILITY_TASK = [
   "release summary JSON 需要脚本。",
   "内部知识库需要 MCP provider 边界。"
 ].join("\n");
+const BOUNDED_FANOUT_TASK = "Run meta-theory. In parallel inspect package.json; review AGENTS.md; read README.md; audit config/contracts/workflow-contract.json.";
 
 const REQUIRED_GOVERNANCE_AGENTS = [
   "meta-warden",
@@ -93,8 +95,8 @@ function validateWorkerExecutionEvidence(report) {
     report.coreLoop.thinkingPacket.workerTaskPackets.length,
     "every worker task must have a worker result packet"
   );
-  assert.equal(report.coreLoop.executionResult.actualWorkerExecution, true);
-  assert.equal(report.coreLoop.executionResult.mergeResult.liveExecutionMerged, true);
+  assert.equal(report.coreLoop.executionResult.actualWorkerExecution, false);
+  assert.equal(report.coreLoop.executionResult.mergeResult.liveExecutionMerged, false);
 
   const taskById = new Map(
     report.coreLoop.thinkingPacket.workerTaskPackets.map((packet) => [packet.taskPacketId, packet])
@@ -102,8 +104,8 @@ function validateWorkerExecutionEvidence(report) {
   for (const [index, resultPacket] of report.coreLoop.executionResult.workerResultPackets.entries()) {
     const taskPacket = taskById.get(resultPacket.taskPacketId);
     assert.ok(taskPacket, `worker result ${resultPacket.taskPacketId} must match a task packet`);
-    assert.equal(resultPacket.status, "executed");
-    assert.equal(resultPacket.evidenceKind, "local_worker_execution");
+    assert.equal(resultPacket.status, "planned_not_executed");
+    assert.equal(resultPacket.evidenceKind, "structural_worker_plan");
     assert.equal(resultPacket.output.externalWritePerformed, false);
     assertPacketArray(
       resultPacket.workerExecutionEvidence,
@@ -115,14 +117,11 @@ function validateWorkerExecutionEvidence(report) {
       "nested worker evidence must cover every verify step exactly once"
     );
     for (const evidence of resultPacket.workerExecutionEvidence) {
-      assert.equal(evidence.status, "verified");
-      assert.equal(evidence.exitCode, 0);
-      assert.ok(evidence.commandRanAt);
+      assert.equal(evidence.status, "pending_execution");
+      assert.equal(evidence.exitCode, undefined);
+      assert.equal(evidence.commandRanAt, undefined);
       assert.ok(taskPacket.verifySteps.some((step) => step.id === evidence.verifyStepRef));
-      assert.ok(
-        !FORBIDDEN_EXECUTION_EVIDENCE_KINDS.has(evidence.evidenceKind),
-        `worker evidence kind ${evidence.evidenceKind} is not execution evidence`
-      );
+      assert.equal(evidence.evidenceKind, "structural_worker_plan");
     }
   }
 
@@ -130,9 +129,10 @@ function validateWorkerExecutionEvidence(report) {
   assert.equal(report.coreLoop.reviewPacket.protocolCompliance.governanceAgentResultPacketsPresent, true);
   assert.equal(report.coreLoop.reviewPacket.protocolCompliance.conductorConsumptionEvidencePresent, true);
   assert.equal(report.coreLoop.reviewPacket.protocolCompliance.executionEvidenceLayerIsHonest, true);
-  assert.equal(report.coreLoop.verificationResult.workerEvidence.workerResultPackets, 4);
-  assert.equal(report.coreLoop.verificationResult.workerEvidence.workerExecutionEvidence, 4);
-  assert.equal(report.coreLoop.verificationResult.workerEvidence.nestedWorkerExecutionEvidence, 4);
+  assert.equal(report.coreLoop.verificationResult.workerEvidence.workerResultPackets, report.coreLoop.thinkingPacket.workerTaskPackets.length);
+  assert.equal(report.coreLoop.verificationResult.workerEvidence.workerExecutionEvidence, report.coreLoop.executionResult.workerExecutionEvidence.length);
+  assert.equal(report.coreLoop.verificationResult.workerEvidence.nestedWorkerExecutionEvidence,
+    report.coreLoop.executionResult.workerResultPackets.reduce((total, packet) => total + packet.workerExecutionEvidence.length, 0));
   assert.equal(report.coreLoop.publicReadyDecision.publicReady, false);
 }
 
@@ -140,8 +140,29 @@ function validateProductExperienceEvidence(report) {
   assert.equal(report.coreLoop.goalContractPacket.status, "pass");
   assert.equal(report.coreLoop.langGraphRunPacket.status, "pass");
   assert.equal(report.coreLoop.peerAgentMeshPacket.status, "pass");
-  assert.equal(report.coreLoop.agentTeamsPlaybookPacket.status, "pass");
-  assert.equal(report.coreLoop.agentTeamsPlaybookPacket.selected, true);
+  const playbook = report.coreLoop.agentTeamsPlaybookPacket;
+  const resolution = playbook.providerResolution;
+  const nearestProvider = resolution.candidates.find((candidate) => candidate.found) ?? null;
+  const providerAvailable = nearestProvider !== null;
+  assert.equal(resolution.found, providerAvailable);
+  assert.equal(resolution.selectedSource, nearestProvider?.source ?? null);
+  assert.equal(resolution.selectedPathRef, nearestProvider?.pathRef ?? null);
+  assert.equal(resolution.selectedVersion, nearestProvider?.version ?? null);
+  // Discovery may find a real optional provider on this host. Both branches
+  // must retain native DAG readiness; discovery alone never proves invocation.
+  assert.equal(playbook.status, "pass", JSON.stringify(playbook.fanoutSafetyPacket));
+  assert.equal(playbook.selected, providerAvailable);
+  assert.equal(playbook.selectedAs, providerAvailable
+    ? "parallel_fanout_orchestration_adapter"
+    : "optional_adapter_not_required_for_native_fanout");
+  assert.equal(playbook.evidenceKind, providerAvailable
+    ? "orchestration_provider_selected"
+    : "native_stage_dag_ready_optional_playbook_not_selected");
+  assert.equal(
+    playbook.acceptance.optionalProviderDoesNotGateNativeFanout,
+    !providerAvailable,
+  );
+  assert.equal(playbook.acceptance.orchestrationReadyWhenParallelLanes, true);
   assert.equal(report.coreLoop.agentTeamsPlaybookPacket.fanoutSafetyPacket.safeForParallelFanout, true);
   assert.equal(report.coreLoop.agentTeamsPlaybookPacket.acceptance.independentLanesProven, true);
   assert.equal(report.coreLoop.agentTeamsPlaybookPacket.acceptance.parallelWaveExists, true);
@@ -164,8 +185,15 @@ function validateProductExperienceEvidence(report) {
   assert.ok(report.coreLoop.peerAgentMeshPacket.peers.length > 0);
   assert.equal(report.coreLoop.visibleMetaTheorySurfacePacket.capabilityInventory.notSkillOnly, true);
   assert.equal(
-    report.coreLoop.visibleMetaTheorySurfacePacket.capabilityInvocationTruth.status,
-    report.coreLoop.capabilityInvocationTruthPacket.status
+    Object.hasOwn(
+      report.coreLoop.visibleMetaTheorySurfacePacket,
+      "capabilityInvocationTruth",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    report.capabilityInvocationTruthPacket,
+    report.coreLoop.capabilityInvocationTruthPacket,
   );
   assert.equal(
     report.coreLoop.visibleMetaTheorySurfacePacket.dynamicWorkflow.status,
@@ -201,9 +229,12 @@ function validateProductExperienceEvidence(report) {
   assert.equal(report.coreLoop.runtimeSubagentInvocationPacket.status, "unavailable");
   assert.equal(invocationByFamily.get("agent_subagent").state, "unavailable");
   assert.equal(invocationByFamily.get("app_visible_subagent").state, "not_required");
-  assert.equal(invocationByFamily.get("worker_task").state, "invoked");
+  assert.equal(invocationByFamily.get("worker_task").state, "blocked");
   assert.equal(invocationByFamily.get("prompt_rule").state, "applied");
-  assert.equal(invocationByFamily.get("agent_teams_playbook").state, "selected_not_invoked");
+  const playbookInvocation = invocationByFamily.get("agent_teams_playbook");
+  assert.equal(playbookInvocation.state, providerAvailable ? "selected_not_invoked" : "not_required");
+  assert.equal(playbookInvocation.selectedCount, providerAvailable ? 1 : 0);
+  assert.equal(playbookInvocation.invokedCount, 0);
   assert.equal(report.coreLoop.capabilityInvocationProbePacket.status, "not_run");
   assert.ok(
     ["selected_not_invoked", "discovered_not_selected", "not_required"].includes(
@@ -267,12 +298,24 @@ function validateDefaultCompletionStatus(report) {
 async function main() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-default-evidence-"));
   try {
-    const report = await runMetaTheoryGovernedExecution({
+    const discoveryReport = await runMetaTheoryGovernedExecution({
       task: MULTI_CAPABILITY_TASK,
-      runId: "validate-default-governed-execution-evidence",
+      runId: "validate-default-multi-capability-planning",
       stateDir: tempDir,
       dbPath: path.join(tempDir, "runs.sqlite")
     });
+    assert.equal(discoveryReport.artifactKind, "host_preparation");
+    assert.equal(discoveryReport.preparation.status, "needs_thinking");
+    assert.deepEqual(discoveryReport.workerTaskPackets, []);
+    assert.equal(discoveryReport.coreLoop.stageDagPacket, undefined);
+    assert.equal(discoveryReport.publicReadyDecision.publicReady, false);
+    assert.ok(discoveryReport.hostInvocationRequestPacket.nextAction);
+    const report = await runDiagnosticReadPlan(runMetaTheoryGovernedExecution, {
+      task: BOUNDED_FANOUT_TASK,
+      runId: "validate-default-governed-execution-evidence",
+      stateDir: tempDir,
+      dbPath: path.join(tempDir, "runs.sqlite")
+    }, ["package.json", "AGENTS.md", "README.md", "config/contracts/workflow-contract.json"]);
 
     validateDefaultCompletionStatus(report);
     validateGovernanceEvidence(report);
@@ -284,11 +327,31 @@ async function main() {
         status: report.status === "pass" ? "validated_pass" : "validated_partial",
         validationStatus: "pass",
         governedExecutionStatus: report.status,
+        multiCapabilityPlanning: {
+          status: discoveryReport.status,
+          preparationRequired: true,
+          plannedWorkers: discoveryReport.workerTaskPackets.length,
+          actualWorkerExecution: false,
+          executionReady: false,
+        },
         governanceAgentResultPackets: report.coreLoop.governanceAgentResultPackets.length,
         consumedGovernancePackets: report.coreLoop.conductorConsumptionEvidence.consumedPacketRefs.length,
         workerResultPackets: report.coreLoop.executionResult.workerResultPackets.length,
         workerExecutionEvidence: report.coreLoop.executionResult.workerExecutionEvidence.length,
-        productExperience: report.coreLoop.productExperiencePacket.status
+        productExperience: report.coreLoop.productExperiencePacket.status,
+        optionalProvider: {
+          available: report.coreLoop.agentTeamsPlaybookPacket.providerResolution.found,
+          selected: report.coreLoop.agentTeamsPlaybookPacket.selected,
+          selectedSource: report.coreLoop.agentTeamsPlaybookPacket.providerResolution.selectedSource,
+          invocationState: report.coreLoop.capabilityInvocationTruthPacket.rows.find((row) => row.family === "agent_teams_playbook").state,
+          invokedCount: report.coreLoop.capabilityInvocationTruthPacket.rows.find((row) => row.family === "agent_teams_playbook").invokedCount,
+          nativeFanoutReady: report.coreLoop.agentTeamsPlaybookPacket.acceptance.orchestrationReadyWhenParallelLanes,
+          fanoutSafety: report.coreLoop.agentTeamsPlaybookPacket.fanoutSafetyPacket.safeForParallelFanout,
+          dagAndCollisionSafe: report.coreLoop.agentTeamsPlaybookPacket.acceptance.dagAndCollisionSafe,
+          parallelWaveExists: report.coreLoop.agentTeamsPlaybookPacket.acceptance.parallelWaveExists,
+          workerTaskIds: report.coreLoop.agentTeamsPlaybookPacket.waves.flatMap((wave) => wave.taskPacketIds),
+          actualWorkerExecution: report.coreLoop.executionResult.actualWorkerExecution,
+        }
       }, null, 2)}\n`
     );
   } finally {

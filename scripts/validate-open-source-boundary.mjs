@@ -11,6 +11,9 @@ const forbiddenRuntimeSources = [
   ".codex/",
   ".agents/",
   ".cursor/",
+  ".gemini/",
+  ".zcode/",
+  ".dsh/",
   "openclaw/",
   "codex/",
   ".mcp.json",
@@ -101,30 +104,33 @@ function assertTrackedFilesExcludeRuntimeProjections() {
 function assertDocsExplainBoundary() {
   const docs = [
     {
-      file: "README.md",
-      pattern:
-        /Generated runtime projection directories are local outputs, gitignored, and not GitHub source\./,
+      readme: "README.md",
+      generationPattern: /directories.*generated locally.*npm run meta:sync/,
+      boundaryPattern:
+        /excluded from GitHub source.*kept local.*\.gitignore/,
     },
     {
-      file: "README.zh-CN.md",
-      pattern:
-        /生成的 runtime projection 目录是本地输出，由 `?\.gitignore`? 保护，不能作为 GitHub source 提交。/,
+      readme: "README.zh-CN.md",
+      generationPattern: /客户端目录.*npm run meta:sync.*在本地生成/,
+      boundaryPattern: /\.gitignore.*保留在本地.*不提交到 GitHub 源码/,
     },
     {
-      file: "README.ja-JP.md",
-      pattern:
-        /生成された runtime projection directory は local output で、`?\.gitignore`? により GitHub source には入りません。/,
+      readme: "README.ja-JP.md",
+      generationPattern: /クライアント別ディレクトリ.*npm run meta:sync.*ローカルに生成/,
+      boundaryPattern: /\.gitignore.*GitHub のソースから除外.*ローカルに保持/,
     },
     {
-      file: "README.ko-KR.md",
-      pattern:
-        /생성된 runtime projection directory는 local output이며 `?\.gitignore`?로 보호되고 GitHub source에 들어가지 않습니다\./,
+      readme: "README.ko-KR.md",
+      generationPattern: /클라이언트별 디렉터리.*npm run meta:sync.*로컬에 생성/,
+      boundaryPattern: /\.gitignore.*GitHub 소스에서 제외.*로컬에 유지/,
     },
   ];
 
-  for (const { file, pattern } of docs) {
-    const raw = readFileSync(repoPath(file), "utf8");
-    assert(pattern.test(raw), `${file} must explain generated runtime projections are not GitHub source.`);
+  for (const { readme, generationPattern, boundaryPattern } of docs) {
+    const raw = readFileSync(repoPath(readme), "utf8");
+    assert(raw.includes("`canonical/`") && raw.includes("`config/`"), `${readme} must identify the canonical source and configuration directories.`);
+    assert(generationPattern.test(raw), `${readme} must explain that runtime directories are generated locally by meta:sync.`);
+    assert(boundaryPattern.test(raw), `${readme} must explain that .gitignore keeps generated runtime projections local and out of GitHub source.`);
   }
 }
 

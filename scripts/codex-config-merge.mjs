@@ -1,8 +1,11 @@
-import { existsSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 export const CODEX_REQUEST_USER_INPUT_FEATURE = "default_mode_request_user_input";
 export const CODEX_JS_REPL_FEATURE = "js_repl";
+export const CODEX_DEFAULT_AGENT_MAX_THREADS = 2;
+export const CODEX_LEGACY_META_KIM_AGENT_MAX_THREADS = 6;
+export const CODEX_DEFAULT_AGENT_MAX_DEPTH = 1;
 export const CODEX_APP_NATIVE_PLUGIN_IDS = [
   "browser@openai-bundled",
   "chrome@openai-bundled",
@@ -241,6 +244,38 @@ function sectionNames(lines) {
     .filter(Boolean);
 }
 
+function codexProjectPathFromSectionName(sectionName = "") {
+  const match = String(sectionName).match(/^projects\.(?:'([^']+)'|"([^"]+)")$/u);
+  return match?.[1] ?? match?.[2] ?? null;
+}
+
+function isMetaKimTemporaryProjectPath(projectPath = "") {
+  const normalized = String(projectPath).replaceAll("\\", "/").toLowerCase();
+  return (
+    normalized.includes("/meta-kim-harness-fitness-lab-workspaces/") ||
+    normalized.includes("/.meta-kim/state/default/harness-fitness-lab/workspaces/") ||
+    /\/temp\/meta-kim-context-ab(?:-formal)?-[a-f0-9]+\//u.test(normalized) ||
+    /\/temp\/meta-kim-p116-(?:permission-profile|formal)-workspaces\//u.test(normalized)
+  );
+}
+
+export function removeMetaKimTemporaryProjectResidue(configText = "") {
+  assertCodexConfigTomlMergeable(configText);
+  const lines = normalizeLines(configText);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const sectionName = lines[index].match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/u)?.[1];
+    const projectPath = codexProjectPathFromSectionName(sectionName);
+    if (!projectPath || !isMetaKimTemporaryProjectPath(projectPath)) continue;
+    let end = index + 1;
+    while (end < lines.length && !/^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(lines[end])) {
+      end += 1;
+    }
+    lines.splice(index, end - index);
+  }
+  while (lines.length > 0 && lines.at(-1).trim() === "") lines.pop();
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+}
+
 function sectionSettingLines(lines, sectionName) {
   const section = findSection(lines, sectionName);
   if (!section) return [];
@@ -420,6 +455,7 @@ function codexComputerUseNotifyBlock(command) {
 function findCodexComputerUseNotifyCommand({
   codexHome,
   pathExists = defaultPathExists,
+  readDirectory = readdirSync,
 } = {}) {
   if (!codexHome) return null;
   const helperRoot = path.win32.join(
@@ -432,7 +468,7 @@ function findCodexComputerUseNotifyCommand({
 
   let versionDirs = [];
   try {
-    versionDirs = readdirSync(helperRoot, { withFileTypes: true })
+    versionDirs = readDirectory(helperRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort(compareVersionLikeNamesDesc);
@@ -620,13 +656,93 @@ function normalizeWindowsPathForToml(filePath) {
 
 function isStaleBundledMarketplaceSource(source = "", pathExists = defaultPathExists) {
   const normalized = String(source).replace(/\//g, "\\");
-  if (/\\\.codex\\\.tmp\\bundled-marketplaces\\openai-bundled$/i.test(normalized)) {
-    return true;
-  }
   if (/\\bundled-marketplaces\\openai-bundled$/i.test(normalized)) {
     return !pathExists(source);
   }
   return false;
+}
+
+function isPlainMaterializationPath(root, relative, kind) {
+  try {
+    let current = root;
+    const rootStat = lstatSync(current);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return false;
+    const parts = relative.split("/");
+    for (let index = 0; index < parts.length; index += 1) {
+      if (!parts[index] || parts[index] === "." || parts[index] === "..") return false;
+      current = path.join(current, parts[index]);
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) return false;
+      if (index === parts.length - 1 && kind === "file") {
+        if (!stat.isFile()) return false;
+      } else if (!stat.isDirectory()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Read only bounded, regular metadata; neither source declarations nor links escape root. */
+function readMaterializationJson(root, relative, maxBytes) {
+  if (!isPlainMaterializationPath(root, relative, "file")) return null;
+  let descriptor;
+  try {
+    descriptor = openSync(path.join(root, relative), "r");
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    const bytes = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(descriptor, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    if (length > maxBytes) return null;
+    return JSON.parse(bytes.subarray(0, length).toString("utf8"));
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+/** Discover only the App's fixed, internally consistent materialization under codexHome. */
+function findCodexAppMaterializedMarketplaceSource(codexHome, pathExists) {
+  if (!codexHome || !path.isAbsolute(withoutExtendedWindowsPrefix(codexHome))) return null;
+  const home = path.resolve(withoutExtendedWindowsPrefix(codexHome));
+  const relative = ".tmp/bundled-marketplaces/openai-bundled";
+  const candidate = path.join(home, relative);
+  if (!pathExists(candidate) || !isPlainMaterializationPath(home, relative, "directory")) return null;
+  const key = readMaterializationJson(candidate, ".materialization-key", 64 * 1024);
+  const marketplace = readMaterializationJson(candidate, ".agents/plugins/marketplace.json", 256 * 1024);
+  const validVersion = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(value);
+  const validName = value => typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
+  if (
+    key?.version !== 1 || key.marketplaceName !== "openai-bundled" || !validVersion(key.appVersion) ||
+    marketplace?.name !== "openai-bundled" || !Array.isArray(marketplace.plugins) ||
+    marketplace.plugins.length === 0 || marketplace.plugins.length > 128 ||
+    !Array.isArray(key.plugins) || key.plugins.length !== marketplace.plugins.length
+  ) return null;
+  const versions = new Map();
+  for (const plugin of key.plugins) {
+    if (!validName(plugin?.name) || !validVersion(plugin.version) || versions.has(plugin.name)) return null;
+    versions.set(plugin.name, plugin.version);
+  }
+  const declared = new Set();
+  for (const plugin of marketplace.plugins) {
+    if (!validName(plugin?.name) || declared.has(plugin.name) || !versions.has(plugin.name)) return null;
+    declared.add(plugin.name);
+    const expectedPath = `plugins/${plugin.name}`;
+    if (
+      plugin.source?.source !== "local" ||
+      ![expectedPath, `./${expectedPath}`].includes(plugin.source.path) ||
+      (plugin.version !== undefined && plugin.version !== versions.get(plugin.name))
+    ) return null;
+    const manifest = readMaterializationJson(candidate, `${expectedPath}/.codex-plugin/plugin.json`, 64 * 1024);
+    if (manifest?.name !== plugin.name || manifest.version !== versions.get(plugin.name)) return null;
+  }
+  return normalizeWindowsPathForToml(candidate);
 }
 
 function compareVersionLikeNamesDesc(left, right) {
@@ -639,8 +755,12 @@ function compareVersionLikeNamesDesc(left, right) {
 function findCodexAppBundledMarketplaceSource({
   platformName = process.platform,
   pathExists = defaultPathExists,
+  env = process.env,
+  readDirectory = readdirSync,
   windowsAppsRoots,
   bundledMarketplaceSource,
+  codexHome,
+  existingSource,
 } = {}) {
   if (bundledMarketplaceSource && pathExists(bundledMarketplaceSource)) {
     return normalizeWindowsPathForToml(bundledMarketplaceSource);
@@ -649,15 +769,16 @@ function findCodexAppBundledMarketplaceSource({
     return null;
   }
 
-  const roots = windowsAppsRoots ?? [
-    process.env.ProgramFiles ? path.win32.join(process.env.ProgramFiles, "WindowsApps") : null,
-    "C:\\Program Files\\WindowsApps",
-  ].filter(Boolean);
+  const roots = windowsAppsRoots ?? [...new Set(
+    [env.ProgramFiles, env.ProgramW6432]
+      .filter((root) => typeof root === "string" && path.win32.isAbsolute(root))
+      .map((root) => path.win32.join(root, "WindowsApps")),
+  )];
 
   for (const root of roots) {
     let entries = [];
     try {
-      entries = readdirSync(root, { withFileTypes: true })
+      entries = readDirectory(root, { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && /^OpenAI\.Codex_/i.test(entry.name))
         .map((entry) => entry.name);
     } catch {
@@ -679,14 +800,15 @@ function findCodexAppBundledMarketplaceSource({
     }
   }
 
-  return null;
+  if (existingSource && !isStaleBundledMarketplaceSource(existingSource, pathExists)) return null;
+  return findCodexAppMaterializedMarketplaceSource(codexHome, pathExists);
 }
 
 function ensureOpenAiBundledMarketplace(lines, options = {}) {
   const sectionName = "marketplaces.openai-bundled";
   const pathExists = options.pathExists ?? defaultPathExists;
   const existingSource = sectionSettingValue(lines, sectionName, "source");
-  const discoveredSource = findCodexAppBundledMarketplaceSource(options);
+  const discoveredSource = findCodexAppBundledMarketplaceSource({ ...options, existingSource });
   const sourceToKeep =
     discoveredSource ??
     (existingSource && !isStaleBundledMarketplaceSource(existingSource, pathExists)
@@ -715,6 +837,26 @@ export function ensureCodexAppNativeControls(configText = "", options = {}) {
 
   ensureSectionSetting(lines, "features", CODEX_REQUEST_USER_INPUT_FEATURE, "true");
   ensureSectionSetting(lines, "features", CODEX_JS_REPL_FEATURE, "true");
+  const configuredMaxThreads = sectionSettingValue(lines, "agents", "max_threads");
+  if (
+    configuredMaxThreads === null ||
+    configuredMaxThreads === String(CODEX_LEGACY_META_KIM_AGENT_MAX_THREADS)
+  ) {
+    ensureSectionSetting(
+      lines,
+      "agents",
+      "max_threads",
+      String(CODEX_DEFAULT_AGENT_MAX_THREADS),
+    );
+  }
+  if (sectionSettingValue(lines, "agents", "max_depth") === null) {
+    ensureSectionSetting(
+      lines,
+      "agents",
+      "max_depth",
+      String(CODEX_DEFAULT_AGENT_MAX_DEPTH),
+    );
+  }
   if (platformName === "win32") {
     ensureSectionSetting(lines, "windows", "sandbox", tomlString("unelevated"));
     ensureOpenAiBundledMarketplace(lines, { ...options, platformName });
@@ -731,4 +873,813 @@ export function ensureCodexAppNativeControls(configText = "", options = {}) {
     platformName,
     options,
   );
+}
+
+function codexConfigTextStyle(configText = "") {
+  const text = String(configText ?? "");
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const body = bom ? text.slice(1) : text;
+  const eol = body.match(/\r\n|\n|\r/u)?.[0] ?? "\n";
+  return {
+    text,
+    bom,
+    body,
+    eol,
+    trailingNewline: /(?:\r\n|\n|\r)$/u.test(body),
+  };
+}
+
+function codexConfigLineRecords(configText = "") {
+  const style = codexConfigTextStyle(configText);
+  const records = [];
+  let offset = style.bom.length;
+  const matcher = /([^\r\n]*)(\r\n|\n|\r|$)/gu;
+  let match;
+  while ((match = matcher.exec(style.body)) !== null) {
+    const [whole, body, eol] = match;
+    if (whole === "" && matcher.lastIndex === style.body.length) break;
+    records.push({
+      start: offset,
+      bodyEnd: offset + body.length,
+      end: offset + whole.length,
+      body,
+      eol,
+    });
+    offset += whole.length;
+    if (!eol) break;
+  }
+  return { ...style, records };
+}
+
+function parseCodexConfigLocators(configText = "") {
+  const document = codexConfigLineRecords(configText);
+  const tables = new Map();
+  const assignments = new Map();
+  let table = "";
+
+  const push = (map, key, value) => {
+    const values = map.get(key) ?? [];
+    values.push(value);
+    map.set(key, values);
+  };
+
+  for (const record of document.records) {
+    const header = record.body.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/u);
+    if (header) {
+      table = header[1];
+      push(tables, table, record);
+      continue;
+    }
+    const assignment = record.body.match(/^(\s*)([A-Za-z0-9_.-]+)(\s*=\s*)(.*)$/u);
+    if (!assignment) continue;
+    const code = codeBeforeTomlComment(assignment[4]);
+    const stack = [];
+    scanTomlContainers(code, stack, 1);
+    push(assignments, `${table}\u0000${assignment[2]}`, {
+      ...record,
+      table,
+      key: assignment[2],
+      indent: assignment[1],
+      separator: assignment[3],
+      rhs: assignment[4],
+      multiline: stack.length > 0,
+    });
+  }
+  return { ...document, tables, assignments };
+}
+
+function expandedAssignment(text, assignment) {
+  if (!assignment.multiline) return assignment;
+  const parsed = codexConfigLineRecords(text);
+  const startIndex = parsed.records.findIndex((record) => record.start === assignment.start);
+  if (startIndex < 0) throw new Error("Codex config multiline locator disappeared.");
+  const stack = [];
+  const firstCode = codeBeforeTomlComment(assignment.rhs);
+  scanTomlContainers(firstCode, stack, 1);
+  let last = parsed.records[startIndex];
+  for (let index = startIndex + 1; stack.length > 0 && index < parsed.records.length; index += 1) {
+    last = parsed.records[index];
+    scanTomlContainers(codeBeforeTomlComment(last.body), stack, index + 1);
+  }
+  if (stack.length > 0) {
+    throw new Error(`Codex config mutation cannot safely locate multiline ${assignment.table}.${assignment.key}.`);
+  }
+  return {
+    ...assignment,
+    bodyEnd: last.bodyEnd,
+    end: last.end,
+    body: text.slice(assignment.start, last.bodyEnd),
+  };
+}
+
+function mutationLocatorKey(locator) {
+  return `${locator.table}\u0000${locator.key}`;
+}
+
+function splitTomlRhsComment(rhs) {
+  const code = codeBeforeTomlComment(rhs);
+  return { code, comment: rhs.slice(code.length) };
+}
+
+function sameTomlScalar(rhs, desiredValue) {
+  return splitTomlRhsComment(rhs).code.trim() === desiredValue;
+}
+
+function replaceTomlScalar(assignment, desiredValue) {
+  const { code, comment } = splitTomlRhsComment(assignment.rhs);
+  const trailing = code.slice(code.trimEnd().length);
+  return `${assignment.indent}${assignment.key}${assignment.separator}${desiredValue}${trailing}${comment}`;
+}
+
+function assertSinglePlanningTable(parsed, tableName) {
+  const headers = parsed.tables.get(tableName) ?? [];
+  if (headers.length > 1) {
+    throw new Error(`Codex config mutation is ambiguous: duplicate [${tableName}] tables.`);
+  }
+  return headers[0] ?? null;
+}
+
+function planCodexSettingMutation(configText, table, key, desiredValue) {
+  const parsed = parseCodexConfigLocators(configText);
+  const header = table ? assertSinglePlanningTable(parsed, table) : null;
+  const locator = { table, key };
+  const existing = parsed.assignments.get(mutationLocatorKey(locator)) ?? [];
+  if (existing.length > 1) {
+    throw new Error(`Codex config mutation is ambiguous: duplicate ${table ? `[${table}].` : ""}${key}.`);
+  }
+  if (existing.length === 1) {
+    const assignment = existing[0];
+    if (assignment.multiline) {
+      throw new Error(`Codex config mutation cannot safely locate multiline ${table ? `[${table}].` : ""}${key}.`);
+    }
+    if (sameTomlScalar(assignment.rhs, desiredValue)) {
+      return { text: configText, mutation: null };
+    }
+    const afterFragment = replaceTomlScalar(assignment, desiredValue);
+    return {
+      text: `${configText.slice(0, assignment.start)}${afterFragment}${configText.slice(assignment.bodyEnd)}`,
+      mutation: {
+        kind: "replace",
+        locator,
+        beforeFragment: assignment.body,
+        afterFragment,
+      },
+    };
+  }
+
+  const settingLine = `${key} = ${desiredValue}`;
+  let position;
+  let afterFragment;
+  if (table && !header) {
+    position = configText.length;
+    const hasContent = parsed.body.length > 0;
+    const lastLine = parsed.records.at(-1)?.body ?? "";
+    const separator = !hasContent
+      ? ""
+      : parsed.trailingNewline
+        ? (lastLine.trim() === "" ? "" : parsed.eol)
+        : `${parsed.eol}${parsed.eol}`;
+    const suffix = parsed.trailingNewline ? parsed.eol : "";
+    afterFragment = `${separator}[${table}]${parsed.eol}${settingLine}${suffix}`;
+  } else if (table) {
+    const headerIndex = parsed.records.indexOf(header);
+    const nextHeader = parsed.records.slice(headerIndex + 1).find((record) =>
+      /^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(record.body)
+    );
+    position = nextHeader?.start ?? configText.length;
+    const prefix = position === configText.length && !parsed.trailingNewline && parsed.body.length > 0
+      ? parsed.eol
+      : "";
+    const suffix = position < configText.length || parsed.trailingNewline ? parsed.eol : "";
+    afterFragment = `${prefix}${settingLine}${suffix}`;
+  } else {
+    const firstHeader = parsed.records.find((record) =>
+      /^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(record.body)
+    );
+    position = firstHeader?.start ?? configText.length;
+    const suffix = position < configText.length || parsed.trailingNewline ? parsed.eol : "";
+    afterFragment = `${settingLine}${suffix}`;
+  }
+  return {
+    text: `${configText.slice(0, position)}${afterFragment}${configText.slice(position)}`,
+    mutation: {
+      kind: "insert",
+      locator,
+      beforeFragment: "",
+      afterFragment,
+    },
+  };
+}
+
+function planCodexSettingRemoval(configText, table, key) {
+  const parsed = parseCodexConfigLocators(configText);
+  if (table) assertSinglePlanningTable(parsed, table);
+  const locator = { table, key };
+  const candidates = parsed.assignments.get(mutationLocatorKey(locator)) ?? [];
+  if (candidates.length === 0) return { text: configText, mutation: null };
+  if (candidates.length !== 1) {
+    throw new Error(`Codex config mutation is ambiguous: duplicate ${table}.${key}.`);
+  }
+  const assignment = expandedAssignment(configText, candidates[0]);
+  let beforeFragment = assignment.body;
+  const afterFragment = assignment.body
+    .split(/\r\n|\n|\r/u)
+    .map((line) => `# Meta_Kim disabled conflicting ${table ? `[${table}].` : ""}${key}: ${line}`)
+    .join(parsed.eol);
+  let replaceStart = assignment.start;
+  let replaceEnd = assignment.bodyEnd;
+  const existingIndexes = [];
+  for (
+    let index = configText.indexOf(afterFragment);
+    index >= 0;
+    index = configText.indexOf(afterFragment, index + afterFragment.length)
+  ) {
+    existingIndexes.push(index);
+  }
+  if (existingIndexes.length === 1) {
+    const existingStart = existingIndexes[0];
+    const existingEnd = existingStart + afterFragment.length;
+    const adjacentLine = (value) => /^[\t ]*(?:\r\n|\n|\r)[\t ]*$/u.test(value);
+    if (
+      existingStart >= assignment.bodyEnd &&
+      adjacentLine(configText.slice(assignment.bodyEnd, existingStart))
+    ) {
+      replaceEnd = existingEnd;
+      beforeFragment = configText.slice(replaceStart, replaceEnd);
+    } else if (
+      existingEnd <= assignment.start &&
+      adjacentLine(configText.slice(existingEnd, assignment.start))
+    ) {
+      replaceStart = existingStart;
+      beforeFragment = configText.slice(replaceStart, replaceEnd);
+    }
+  }
+  return {
+    text: `${configText.slice(0, replaceStart)}${afterFragment}${configText.slice(replaceEnd)}`,
+    mutation: {
+      kind: "replace",
+      locator,
+      beforeFragment,
+      afterFragment,
+    },
+  };
+}
+
+function planCodexStaleDisabledCommentCleanup(configText, table, key) {
+  const parsed = parseCodexConfigLocators(configText);
+  if (table) assertSinglePlanningTable(parsed, table);
+  const locator = { table, key };
+  const assignments = parsed.assignments.get(mutationLocatorKey(locator)) ?? [];
+  if (assignments.length !== 1) return { text: configText, mutation: null };
+  const assignment = expandedAssignment(configText, assignments[0]);
+  const disabledPrefix = `# Meta_Kim disabled conflicting ${table ? `[${table}].` : ""}${key}:`;
+  const comments = parsed.records.filter((record) => record.body.startsWith(disabledPrefix));
+  if (comments.length === 0) return { text: configText, mutation: null };
+  if (comments.length !== 1) {
+    throw new Error(`Codex config managed disabled comment is ambiguous: ${table}.${key}`);
+  }
+  const comment = comments[0];
+  const adjacentLine = (value) => /^[\t ]*(?:\r\n|\n|\r)[\t ]*$/u.test(value);
+  let replaceStart;
+  let replaceEnd;
+  if (
+    comment.start >= assignment.bodyEnd &&
+    adjacentLine(configText.slice(assignment.bodyEnd, comment.start))
+  ) {
+    replaceStart = assignment.start;
+    replaceEnd = comment.bodyEnd;
+  } else if (
+    comment.bodyEnd <= assignment.start &&
+    adjacentLine(configText.slice(comment.bodyEnd, assignment.start))
+  ) {
+    replaceStart = comment.start;
+    replaceEnd = assignment.bodyEnd;
+  } else {
+    throw new Error(`Codex config managed disabled comment drifted: ${table}.${key}`);
+  }
+  const beforeFragment = configText.slice(replaceStart, replaceEnd);
+  return {
+    text: `${configText.slice(0, replaceStart)}${assignment.body}${configText.slice(replaceEnd)}`,
+    mutation: {
+      kind: "replace",
+      locator,
+      beforeFragment,
+      afterFragment: assignment.body,
+    },
+  };
+}
+
+function normalizedWindowsMarketplacePath(source) {
+  if (typeof source !== "string" || !source) return null;
+  const ordinary = source.replace(/\//gu, "\\")
+    .replace(/^\\\\\?\\UNC\\/iu, "\\\\")
+    .replace(/^\\\\\?\\/u, "");
+  return path.win32.normalize(ordinary).replace(/\\+$/u, "").toLowerCase();
+}
+
+function planCodexBundledSourceCommentRecovery(configText, source, codexHome) {
+  const table = "marketplaces.openai-bundled";
+  const locator = { table, key: "source" };
+  const parsed = parseCodexConfigLocators(configText);
+  const header = assertSinglePlanningTable(parsed, table);
+  const prefix = "# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source:";
+  const comments = parsed.records.filter(record => record.body.startsWith(prefix));
+  if (comments.length === 0) return null;
+  if (comments.length !== 1) throw new Error("Codex config managed disabled comment is ambiguous: marketplaces.openai-bundled.source");
+  const comment = comments[0];
+  const nextHeader = header && parsed.records.find(record => record.start > header.start && /^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(record.body));
+  const original = comment.body.slice(prefix.length).trimStart();
+  if (
+    !header || comment.start < header.end || comment.start >= (nextHeader?.start ?? configText.length) ||
+    !/^source\s*=\s*(?:'[^']*'|"(?:[^"\\]|\\.)*")\s*(?:#.*)?$/u.test(original)
+  ) throw new Error("Codex config managed disabled comment drifted: marketplaces.openai-bundled.source");
+  const materializedSource = codexHome && path.isAbsolute(withoutExtendedWindowsPrefix(codexHome))
+    ? path.join(path.resolve(withoutExtendedWindowsPrefix(codexHome)), ".tmp", "bundled-marketplaces", "openai-bundled")
+    : null;
+  if (materializedSource && normalizedWindowsMarketplacePath(source) === normalizedWindowsMarketplacePath(materializedSource)) {
+    const rhs = codeBeforeTomlComment(original.replace(/^source\s*=\s*/u, "")).trim();
+    let originalSource;
+    try { originalSource = rhs.startsWith("'") ? rhs.slice(1, -1) : JSON.parse(rhs); } catch { originalSource = null; }
+    if (normalizedWindowsMarketplacePath(originalSource) !== normalizedWindowsMarketplacePath(materializedSource)) {
+      throw new Error("Codex config managed disabled source differs from App materialization");
+    }
+  }
+  const afterFragment = `source = ${tomlLiteralString(normalizeWindowsPathForToml(source))}`;
+  return {
+    text: `${configText.slice(0, comment.start)}${afterFragment}${configText.slice(comment.bodyEnd)}`,
+    mutation: { kind: "replace", locator, beforeFragment: comment.body, afterFragment },
+  };
+}
+
+function planCodexNotifyMutation(configText, platformName, options) {
+  if (platformName !== "win32" || !/terminal-notifier/u.test(configText)) {
+    return { text: configText, mutation: null };
+  }
+  const parsed = parseCodexConfigLocators(configText);
+  const locator = { table: "", key: "notify" };
+  const candidates = parsed.assignments.get(mutationLocatorKey(locator)) ?? [];
+  if (candidates.length !== 1) {
+    throw new Error("Codex config notify mutation is missing or ambiguous.");
+  }
+  const assignment = expandedAssignment(configText, candidates[0]);
+  if (!/terminal-notifier/u.test(assignment.body)) {
+    return { text: configText, mutation: null };
+  }
+  const helperCommand = findCodexComputerUseNotifyCommand(options);
+  const replacementLines = helperCommand
+    ? codexComputerUseNotifyBlock(helperCommand)
+    : windowsNotifyBlock();
+  const indent = assignment.indent;
+  const afterFragment = replacementLines
+    .map((line) => `${indent}${line}`)
+    .join(parsed.eol);
+  return {
+    text: `${configText.slice(0, assignment.start)}${afterFragment}${configText.slice(assignment.bodyEnd)}`,
+    mutation: {
+      kind: "replace",
+      locator,
+      beforeFragment: assignment.body,
+      afterFragment,
+    },
+  };
+}
+
+export function normalizeCodexConfigMutations(mutations = []) {
+  if (!Array.isArray(mutations)) {
+    throw new TypeError("Codex config mutations must be an array.");
+  }
+  const normalized = [];
+  const indexes = new Map();
+  for (const [index, mutation] of mutations.entries()) {
+    if (
+      !mutation ||
+      !["insert", "replace", "remove"].includes(mutation.kind) ||
+      !mutation.locator ||
+      typeof mutation.locator.table !== "string" ||
+      typeof mutation.locator.key !== "string" ||
+      !mutation.locator.key ||
+      typeof mutation.beforeFragment !== "string" ||
+      typeof mutation.afterFragment !== "string" ||
+      (mutation.kind !== "remove" && !mutation.afterFragment)
+    ) {
+      throw new TypeError(`Invalid Codex config mutation at index ${index}.`);
+    }
+    if (
+      (mutation.kind === "insert" && mutation.beforeFragment !== "") ||
+      (mutation.kind === "replace" && (!mutation.beforeFragment || !mutation.afterFragment)) ||
+      (mutation.kind === "remove" && (!mutation.beforeFragment || mutation.afterFragment !== ""))
+    ) {
+      throw new TypeError(`Invalid ${mutation.kind} Codex config mutation at index ${index}.`);
+    }
+    const key = mutationLocatorKey(mutation.locator);
+    const next = {
+      kind: mutation.kind,
+      locator: {
+        table: mutation.locator.table,
+        key: mutation.locator.key,
+      },
+      beforeFragment: mutation.beforeFragment,
+      afterFragment: mutation.afterFragment,
+    };
+    const previousIndex = indexes.get(key);
+    if (previousIndex === undefined) {
+      indexes.set(key, normalized.length);
+      normalized.push(next);
+      continue;
+    }
+    const previous = normalized[previousIndex];
+    let chained = null;
+    if (
+      previous.kind === next.kind &&
+      previous.beforeFragment === next.beforeFragment &&
+      previous.afterFragment === next.afterFragment
+    ) {
+      // A host may restore the pre-merge value between runs. Reapplying the
+      // exact same mutation does not create a second ownership layer; retain
+      // the original reversible journal entry.
+      chained = previous;
+    } else if (
+      previous.kind === "replace" &&
+      next.kind === "replace" &&
+      (() => {
+        const managedIndex = next.beforeFragment.indexOf(previous.afterFragment);
+        if (
+          managedIndex < 0 ||
+          next.beforeFragment.indexOf(
+            previous.afterFragment,
+            managedIndex + previous.afterFragment.length,
+          ) >= 0
+        ) return false;
+        const before = next.beforeFragment.slice(0, managedIndex);
+        const after = next.beforeFragment.slice(managedIndex + previous.afterFragment.length);
+        const separator = /^[\t ]*(?:\r\n|\n|\r)[\t ]*$/u;
+        return (
+          managedIndex === 0 &&
+          after.endsWith(next.afterFragment) &&
+          separator.test(after.slice(0, -next.afterFragment.length))
+        ) || (
+          managedIndex + previous.afterFragment.length === next.beforeFragment.length &&
+          before.startsWith(next.afterFragment) &&
+          separator.test(before.slice(next.afterFragment.length))
+        );
+      })()
+    ) {
+      // The host restored a current active value next to Meta_Kim's prior
+      // disabled fragment. Removing that stale managed fragment closes this
+      // locator's ownership; uninstall must leave the host value in place.
+      normalized.splice(previousIndex, 1);
+      indexes.clear();
+      normalized.forEach((item, itemIndex) => indexes.set(mutationLocatorKey(item.locator), itemIndex));
+      continue;
+    } else if (previous.kind === "insert" && next.kind === "replace") {
+      const at = previous.afterFragment.indexOf(next.beforeFragment);
+      if (at >= 0 && previous.afterFragment.indexOf(next.beforeFragment, at + next.beforeFragment.length) < 0) {
+        chained = {
+          ...previous,
+          afterFragment: `${previous.afterFragment.slice(0, at)}${next.afterFragment}${previous.afterFragment.slice(at + next.beforeFragment.length)}`,
+        };
+      }
+    } else if (previous.kind === "replace" && next.kind === "replace" && previous.afterFragment === next.beforeFragment) {
+      chained = { ...previous, afterFragment: next.afterFragment };
+    } else if (
+      previous.kind === "replace" &&
+      next.kind === "replace" &&
+      previous.afterFragment === next.afterFragment
+    ) {
+      // The host restored or regenerated the unmanaged baseline while the
+      // desired managed result stayed exact. Rebase the reversible journal to
+      // the latest baseline so cleanup restores current host state.
+      chained = next;
+    } else if (previous.kind === "replace" && next.kind === "insert") {
+      // The host deleted the locator Meta_Kim previously replaced, so the fresh
+      // insert is the only reversible ownership record. Inverting the stale
+      // replace would restore a key the host itself removed, and refusing the
+      // chain would fail the whole manifest flush over a host-side deletion.
+      chained = next;
+    } else if (previous.kind === "replace" && next.kind === "remove" && previous.afterFragment === next.beforeFragment) {
+      chained = { ...previous, kind: "remove", afterFragment: "" };
+    } else if (previous.kind === "remove" && next.kind === "insert") {
+      chained = {
+        ...previous,
+        kind: "replace",
+        afterFragment: next.afterFragment,
+      };
+    } else if (previous.kind === "insert" && next.kind === "remove") {
+      const inserted = previous.afterFragment.includes(next.beforeFragment);
+      if (inserted) chained = null;
+      if (inserted) {
+        normalized.splice(previousIndex, 1);
+        indexes.clear();
+        normalized.forEach((item, itemIndex) => indexes.set(mutationLocatorKey(item.locator), itemIndex));
+        continue;
+      }
+    }
+    if (!chained) {
+      throw new Error(`Non-contiguous Codex config mutation chain: ${mutation.locator.table}.${mutation.locator.key}`);
+    }
+    normalized[previousIndex] = chained;
+  }
+  return normalized;
+}
+
+export function planCodexAppNativeControls(configText = "", options = {}) {
+  assertCodexConfigTomlMergeable(configText);
+  let text = String(configText ?? "");
+  const mutations = [];
+  const settings = [
+    ["features", CODEX_REQUEST_USER_INPUT_FEATURE, "true"],
+    ["features", CODEX_JS_REPL_FEATURE, "true"],
+  ];
+  const initialLines = normalizeLines(text);
+  const configuredMaxThreads = sectionSettingValue(initialLines, "agents", "max_threads");
+  if (
+    configuredMaxThreads === null ||
+    configuredMaxThreads === String(CODEX_LEGACY_META_KIM_AGENT_MAX_THREADS)
+  ) {
+    settings.push(["agents", "max_threads", String(CODEX_DEFAULT_AGENT_MAX_THREADS)]);
+  }
+  if (sectionSettingValue(initialLines, "agents", "max_depth") === null) {
+    settings.push(["agents", "max_depth", String(CODEX_DEFAULT_AGENT_MAX_DEPTH)]);
+  }
+  const platformName = options.platformName ?? process.platform;
+  if (platformName === "win32") {
+    settings.push(
+      ["windows", "sandbox", tomlString("unelevated")],
+      ["marketplaces.openai-bundled", "source_type", tomlString("local")],
+      ...CODEX_APP_NATIVE_PLUGIN_IDS.map((pluginId) => [
+        `plugins."${pluginId}"`,
+        "enabled",
+        "true",
+      ]),
+    );
+  }
+  for (const [table, key, value] of settings) {
+    const planned = planCodexSettingMutation(text, table, key, value);
+    text = planned.text;
+    if (planned.mutation) mutations.push(planned.mutation);
+  }
+
+  if (platformName === "win32") {
+    const pathExists = options.pathExists ?? defaultPathExists;
+    const currentLines = normalizeLines(text);
+    const existingSource = sectionSettingValue(
+      currentLines,
+      "marketplaces.openai-bundled",
+      "source",
+    );
+    const discoveredSource = findCodexAppBundledMarketplaceSource({
+      ...options,
+      platformName,
+      pathExists,
+      existingSource,
+    });
+    const sourceToKeep = discoveredSource ?? (
+      existingSource && !isStaleBundledMarketplaceSource(existingSource, pathExists)
+        ? existingSource
+        : null
+    );
+    const sourcePlan = sourceToKeep
+      ? (!existingSource && planCodexBundledSourceCommentRecovery(
+          text,
+          sourceToKeep,
+          options.codexHome,
+        )) || planCodexSettingMutation(
+          text,
+          "marketplaces.openai-bundled",
+          "source",
+          tomlLiteralString(normalizeWindowsPathForToml(sourceToKeep)),
+        )
+      : planCodexSettingRemoval(text, "marketplaces.openai-bundled", "source");
+    text = sourcePlan.text;
+    if (sourcePlan.mutation) mutations.push(sourcePlan.mutation);
+
+    if (sourceToKeep) {
+      const cleanupPlan = planCodexStaleDisabledCommentCleanup(
+        text,
+        "marketplaces.openai-bundled",
+        "source",
+      );
+      text = cleanupPlan.text;
+      if (cleanupPlan.mutation) mutations.push(cleanupPlan.mutation);
+    }
+
+    const notifyPlan = planCodexNotifyMutation(text, platformName, options);
+    text = notifyPlan.text;
+    if (notifyPlan.mutation) mutations.push(notifyPlan.mutation);
+  }
+
+  const conflictLines = normalizeLines(text);
+  for (const sectionName of sectionNames(conflictLines)) {
+    if (!isTopLevelMcpServerSection(sectionName)) continue;
+    if (!codexMcpServerTransportConflict(conflictLines, sectionName)) continue;
+    const preferred = mcpTransportForSection(conflictLines, sectionName) ?? "stdio";
+    const removals = preferred === "remote"
+      ? ["command", "args", "cwd"]
+      : ["url", "bearer_token_env_var", "oauth_client_id", "oauth_resource"];
+    const type = sectionSettingValue(conflictLines, sectionName, "type");
+    if (
+      type !== null &&
+      (preferred === "remote" ? isStdioTransportType(type) : isRemoteTransportType(type))
+    ) {
+      removals.push("type");
+    }
+    for (const key of removals) {
+      const removal = planCodexSettingRemoval(text, sectionName, key);
+      text = removal.text;
+      if (removal.mutation) mutations.push(removal.mutation);
+    }
+  }
+
+  assertCodexConfigTomlMergeable(text);
+  return { text, mutations: normalizeCodexConfigMutations(mutations) };
+}
+
+/**
+ * Restore the exact user-owned Codex config after a dependency installer ran.
+ *
+ * Dependency CLIs are not an authority for the user's global MCP registry,
+ * project trust ledger, agents, hooks, or root settings. Importing their whole
+ * output additively can resurrect servers the user deleted and can persist
+ * temporary benchmark workspaces. Only Meta_Kim's narrowly planned native
+ * controls are applied to the pre-install snapshot.
+ */
+export function reconcileCodexConfigAfterUpstreamInstall(
+  snapshotText = null,
+  _upstreamText = "",
+  options = {},
+) {
+  const userBaseline = snapshotText == null ? "" : String(snapshotText);
+  return ensureCodexAppNativeControls(
+    removeMetaKimTemporaryProjectResidue(userBaseline),
+    options,
+  );
+}
+
+function uniqueAssignmentForInverse(text, locator) {
+  const parsed = parseCodexConfigLocators(text);
+  if (locator.table && (parsed.tables.get(locator.table) ?? []).length !== 1) {
+    throw new Error(`Codex config managed table is missing or ambiguous: ${locator.table}`);
+  }
+  const assignments = parsed.assignments.get(mutationLocatorKey(locator)) ?? [];
+  if (assignments.length !== 1) {
+    throw new Error(
+      `Codex config managed locator is ${assignments.length === 0 ? "missing" : "ambiguous"}: ${locator.table}.${locator.key}`,
+    );
+  }
+  return expandedAssignment(text, assignments[0]);
+}
+
+function insertedTableHasUnmanagedContent(text, mutation, assignment) {
+  const headerMatch = mutation.afterFragment.match(
+    new RegExp(`(?:^|\\r\\n|\\n|\\r)\\s*\\[${mutation.locator.table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\s*(?:#.*)?(?:\\r\\n|\\n|\\r)`, "u"),
+  );
+  if (!mutation.locator.table || !headerMatch) return false;
+  const parsed = parseCodexConfigLocators(text);
+  const header = [...parsed.records]
+    .reverse()
+    .find((record) =>
+      record.start < assignment.start &&
+      new RegExp(`^\\s*\\[${mutation.locator.table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\s*(?:#.*)?$`, "u").test(record.body)
+    );
+  if (!header) return true;
+  const nextHeader = parsed.records.find((record) =>
+    record.start > header.start && /^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(record.body)
+  );
+  const sectionEnd = nextHeader?.start ?? text.length;
+  const remainder = `${text.slice(header.end, assignment.start)}${text.slice(assignment.end, sectionEnd)}`;
+  return remainder.split(/\r\n|\n|\r/u).some((line) => {
+    const trimmed = line.trim();
+    return Boolean(trimmed && !trimmed.startsWith("#"));
+  });
+}
+
+export function invertCodexConfigMutations(configText = "", mutations = []) {
+  const normalized = normalizeCodexConfigMutations(mutations);
+  let text = String(configText ?? "");
+
+  // Preflight and simulate the complete inverse in memory. No caller-visible
+  // result is produced unless every managed locator and exact fragment passes.
+  for (const mutation of [...normalized].reverse()) {
+    if (mutation.kind === "remove") {
+      const parsed = parseCodexConfigLocators(text);
+      if (
+        mutation.locator.table &&
+        (parsed.tables.get(mutation.locator.table) ?? []).length !== 1
+      ) {
+        throw new Error(`Codex config managed table is missing or ambiguous: ${mutation.locator.table}`);
+      }
+      if ((parsed.assignments.get(mutationLocatorKey(mutation.locator)) ?? []).length !== 0) {
+        throw new Error(`Codex config removed locator was recreated: ${mutation.locator.table}.${mutation.locator.key}`);
+      }
+      let position = text.length;
+      if (mutation.locator.table) {
+        const header = parsed.tables.get(mutation.locator.table)[0];
+        position = parsed.records.find((record) =>
+          record.start > header.start && /^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(record.body)
+        )?.start ?? text.length;
+      } else {
+        position = parsed.records.find((record) =>
+          /^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(record.body)
+        )?.start ?? text.length;
+      }
+      text = `${text.slice(0, position)}${mutation.beforeFragment}${text.slice(position)}`;
+      continue;
+    }
+    if (mutation.kind === "replace") {
+      const parsed = parseCodexConfigLocators(text);
+      if (
+        mutation.locator.table &&
+        (parsed.tables.get(mutation.locator.table) ?? []).length !== 1
+      ) {
+        throw new Error(`Codex config managed table is missing or ambiguous: ${mutation.locator.table}`);
+      }
+      const assignments = parsed.assignments.get(mutationLocatorKey(mutation.locator)) ?? [];
+      const disabledPrefix = `# Meta_Kim disabled conflicting ${mutation.locator.table ? `[${mutation.locator.table}].` : ""}${mutation.locator.key}:`;
+      const isDisabledConflict = mutation.afterFragment
+        .split(/\r\n|\n|\r/u)
+        .every((line) => line.startsWith(disabledPrefix));
+      let exactIndex;
+      let replaceEnd;
+      if (isDisabledConflict) {
+        if (assignments.length !== 0) {
+          throw new Error(
+            `Codex config disabled locator was recreated or duplicated: ${mutation.locator.table}.${mutation.locator.key}`,
+          );
+        }
+        exactIndex = text.indexOf(mutation.afterFragment);
+        if (
+          exactIndex < 0 ||
+          text.indexOf(mutation.afterFragment, exactIndex + mutation.afterFragment.length) >= 0
+        ) {
+          throw new Error(
+            `Codex config managed fragment drifted: ${mutation.locator.table}.${mutation.locator.key}`,
+          );
+        }
+        replaceEnd = exactIndex + mutation.afterFragment.length;
+      } else {
+        if (assignments.length !== 1) {
+          throw new Error(
+            `Codex config managed locator is ${assignments.length === 0 ? "missing" : "ambiguous"}: ${mutation.locator.table}.${mutation.locator.key}`,
+          );
+        }
+        const assignment = expandedAssignment(text, assignments[0]);
+        exactIndex = text.indexOf(mutation.afterFragment);
+        const fragmentEnd = exactIndex + mutation.afterFragment.length;
+        const locatorInsideFragment =
+          exactIndex >= 0 &&
+          text.indexOf(mutation.afterFragment, fragmentEnd) < 0 &&
+          assignment.start >= exactIndex &&
+          assignment.bodyEnd <= fragmentEnd &&
+          text.slice(assignment.start, assignment.bodyEnd) === assignment.body;
+        if (!locatorInsideFragment) {
+          throw new Error(
+            `Codex config managed fragment drifted: ${mutation.locator.table}.${mutation.locator.key}`,
+          );
+        }
+        replaceEnd = fragmentEnd;
+      }
+      if (exactIndex < 0) {
+        throw new Error(
+          `Codex config managed fragment drifted: ${mutation.locator.table}.${mutation.locator.key}`,
+        );
+      }
+      text = `${text.slice(0, exactIndex)}${mutation.beforeFragment}${text.slice(replaceEnd)}`;
+      continue;
+    }
+    const assignment = uniqueAssignmentForInverse(text, mutation.locator);
+    let expected = mutation.afterFragment;
+    if (mutation.kind === "insert") {
+      const fragmentParsed = parseCodexConfigLocators(mutation.afterFragment);
+      const candidates = [...fragmentParsed.assignments.values()]
+        .flat()
+        .filter((candidate) => candidate.key === mutation.locator.key);
+      expected = candidates.length === 1
+        ? expandedAssignment(mutation.afterFragment, candidates[0]).body
+        : null;
+    }
+    if (!expected || assignment.body !== expected) {
+      throw new Error(
+        `Codex config managed fragment drifted: ${mutation.locator.table}.${mutation.locator.key}`,
+      );
+    }
+    const exactIndex = text.indexOf(mutation.afterFragment);
+    const exactUnique = exactIndex >= 0 && text.indexOf(
+      mutation.afterFragment,
+      exactIndex + mutation.afterFragment.length,
+    ) < 0;
+    if (
+      exactUnique &&
+      !insertedTableHasUnmanagedContent(text, mutation, assignment)
+    ) {
+      text = `${text.slice(0, exactIndex)}${text.slice(exactIndex + mutation.afterFragment.length)}`;
+      continue;
+    }
+
+    // A newly inserted table may now contain unrelated user settings. Remove
+    // only the exact managed assignment and deliberately preserve the header.
+    const removeEnd = assignment.end;
+    text = `${text.slice(0, assignment.start)}${text.slice(removeEnd)}`;
+  }
+  assertCodexConfigTomlMergeable(text);
+  return text;
 }

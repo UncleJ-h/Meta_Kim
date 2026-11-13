@@ -2,6 +2,43 @@
   "schemaVersion": 1,
   "contractId": "meta-kim-core-loop-contract",
   "owner": "meta-warden",
+  "projectResearchPolicy": {
+    "id": "project-research-prd-v2",
+    "projectAnalysisPosition": "before_critical_without_new_stage",
+    "requiredWhen": [
+      "decision_changing_unknown",
+      "explicit_research_request"
+    ],
+    "sufficiencyRule": "Resolve the declared decision question with source-backed conclusions or retain an explicit unknown/conflict; source count, popularity and mandatory query channels are not default acceptance criteria.",
+    "explicitConstraintRule": "Apply source counts, star floors and query channels only when current task-specific requirements carry user evidence references.",
+    "recordSchemaVersion": 2,
+    "legacyReadRule": "Read v1 evidence without rewriting it; require current decision review before writing a single v2 successor or dispatching a legacy research-bound task.",
+    "authority": "Existing requirements dialogue and PRD remain the only requirement/task authority; immutable research records hold supporting evidence only.",
+    "workerRule": "Task slices select relevant source IDs. Verify current task/intent, source freshness, stored bytes and selected summaries before dispatch; send only selected evidence and stable reread references.",
+    "truthBoundary": "A project scan or supplied source metadata does not prove host understanding, external invocation, semantic relevance or user approval. Gaps return to Fetch; material choices return to the existing Critical dialogue."
+  },
+  "taskProgressPolicy": {
+    "id": "task-progress-v1",
+    "sourcePolicyRef": "config/contracts/core-loop-contract.json#/productExperienceCoreGoals/supportGateRequirements/P-107",
+    "sameBasisIneffectiveThreshold": 2,
+    "units": "terminal_execution_attempt_per_logical_task",
+    "ignoredClassifications": [
+      "waiting",
+      "question",
+      "running",
+      "paused"
+    ],
+    "nonCountingTerminalClassifications": [
+      "unresolved"
+    ],
+    "mutationAuthority": "none",
+    "rolloutRule": "Start with one in-flight attempt per logical task. Inspect exposes canary, open, recovery_trial or observed_progress from the existing result ledger; elapsed time and warning counts never open a circuit. A reviewed correction changes the affected route before another bounded trial. No automatic external rollback or new execution authority is implied.",
+    "scope": "current goal, criterion, logical task and dependency context; only recorded attempts are supervised and historical records remain preserved",
+    "identityRule": "Deduplicate stable attempt/result identities; timestamps, summaries and evidence-reference renames do not create attempts or change the evidence basis.",
+    "correctionRule": "Persist a task-scoped Thinking correction after the second ineffective same-basis terminal attempt. Preserve independent work; reject the unchanged affected task until an explicitly reviewed replacement changes the substantive route or evidence contents under the original goal and authority.",
+    "dependencyRule": "After a prerequisite is corrected, its transitive dependents wait for fresh accepted current-context prerequisite results. Generate the dependent context from the correction, preserve old records without carrying stale counts into the new basis, and never cancel or duplicate an in-flight attempt.",
+    "truthBoundary": "Host assessments remain owner-reported. Counters establish recorded execution history, not native invocation, semantic truth, universal interception or user acceptance."
+  },
   "defaultEntry": {
     "path": "governed_execution_layer",
     "trigger": "ordinary natural-language durable task or explicit meta-theory shortcut",
@@ -19,10 +56,70 @@
     "packageScript": "meta:theory:run",
     "contractIsDefaultPath": true
   },
+  "fitnessInformedDefaultApplicationPolicy": {
+    "evidenceRef": "P-135 p135-formal-native-windows-20260725",
+    "preserveCanonicalSpine": true,
+    "coreGovernance": "conditional_depth",
+    "coreRule": "Critical, Fetch, and Thinking remain the ordering and truth boundary, but a clear low-risk local task uses concise inline records and no extra governance worker, planning artifact, or route ceremony unless ambiguity, capability choice, dependency, risk, or durable planning changes execution.",
+    "reviewChain": "conditional_by_risk_and_claim",
+    "reviewTriggers": [
+      "security, permissions, privacy, auth, payment, dependency, runtime, install, release, public-ready, or cross-platform claim",
+      "multi-file or high-blast-radius mutation",
+      "ambiguous product or UX acceptance",
+      "fresh verification exposes a failure, regression, or unresolved trade-off"
+    ],
+    "evolution": "removed_from_default_scaffold",
+    "evolutionTriggers": [
+      "reusable capability gap or repeated failure scar",
+      "agent, skill, tool, MCP, hook, workflow, runtime, OS, or governance-contract lesson must survive the run",
+      "user explicitly requests durable learning or evolution"
+    ],
+    "noTriggerRule": "When no Evolution trigger exists, close inline with none-with-reason; do not dispatch meta-chrysalis or run candidate-analysis lanes.",
+    "truthBoundary": "Cost-only evidence can justify conditional or default removal policy, but it never proves a quality benefit and never deletes a canonical stage or runtime capability."
+  },
+  "parallelExecutionPolicy": {
+    "authority": "This contract is the single machine authority for stage order, stage barriers, stage-internal parallelism, and final stage authority. Skills, references, runners, adapters, and hooks are projections or consumers and must not define a competing wave model.",
+    "mode": "ordered_stage_barriers_with_maximal_safe_internal_parallelism",
+    "runtimeDagPacket": "coreLoop.stageDagPacket",
+    "stageOrderSource": "defaultEntry.spine",
+    "stageBarrierRule": "No lane in the next stage may start until the current stage merge node has completed. Cross-stage overlap is forbidden; parallelism is maximized inside the active stage.",
+    "laneReadinessRule": "Run every ready lane up to active host capacity when its dependencies are complete, its resource scopes do not conflict with another ready lane, its permission boundary is satisfied, and dispatch plus merge overhead is justified.",
+    "resourceRule": "Unknown write scope is unsafe for parallel mutation. Same-file, same-state, same-port, same-service, or same external-resource writes serialize unless verified isolation and an explicit merge contract remove the conflict.",
+    "sideEffectRule": "Read-only support lanes may fan out by default. Project writes require bounded resource scopes and collision policy. External or irreversible writes require the applicable approval before invocation and remain serialized unless approved, disjoint, isolated, and idempotent.",
+    "capacityRule": "Use the active runtime capacity; Meta_Kim must not impose an arbitrary fixed lane or wave count.",
+    "mergeRule": "Each stage has one merge or verdict authority. Support lanes may prepare evidence and recommendations, but only that authority closes the stage outputs and releases the next-stage barrier.",
+    "invocationTruthRule": "A planned lane, derived wave, selected provider, host invocation request, or dispatched label is not execution evidence. Completion requires an exact run-and-lane-bound native host call and successful terminal result; claimed concurrency additionally requires batched native calls or overlapping invocation intervals.",
+    "degradationRule": "Unavailable capacity, permission, isolation, owner, or host surface may produce an explicit partial or degraded route. Degradation must not be relabeled as parallel execution, completion, verification pass, or public-ready.",
+    "compatibilityViews": [
+      "thinkingPacket.workerTaskPackets for Execution lanes",
+      "agentTeamsPlaybookPacket.waves",
+      "langGraphRunPacket",
+      "dispatchBoard",
+      "stageOperationPlan"
+    ]
+  },
+  "stageRunnerBridgePolicy": {
+    "contractRef": "config/contracts/stage-runner-bridge-contract.json",
+    "prdTaskId": "P-117",
+    "defaultMode": "planned_only",
+    "explicitExecutionMode": "read_only_shadow",
+    "primaryRuntimes": [
+      "codex",
+      "claude"
+    ],
+    "singleAuthorityPacket": "coreLoop.stageDagPacket",
+    "noRuntimeSpecificGraph": true,
+    "realExecutionEvidencePacket": "coreLoop.stageRunnerBridgePacket",
+    "durabilityClaim": "not_claimed"
+  },
   "stages": [
     {
       "stage": "Critical",
-      "requiredInputs": ["userRequest", "repoContext", "permissionBoundary"],
+      "requiredInputs": [
+        "userRequest",
+        "repoContext",
+        "permissionBoundary"
+      ],
       "requiredOutputs": [
         "intentPacket.realIntent",
         "intentPacket.successCriteria",
@@ -38,9 +135,32 @@
         "missing intent that changes route, scope, risk, acceptance, permission, or non-goal",
         "unclear architecture type"
       ],
-      "blockingGates": ["unclear_user_intent", "unsafe_or_unbounded_permission"],
-      "warningGates": ["minor wording ambiguity with no route impact"],
+      "blockingGates": [
+        "unclear_user_intent",
+        "unsafe_or_unbounded_permission"
+      ],
+      "warningGates": [
+        "minor wording ambiguity with no route impact"
+      ],
       "defaultOwner": "meta-warden",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "request and pain/value decomposition",
+          "success criteria and non-goal extraction",
+          "permission, irreversibility, and risk analysis",
+          "architecture and project-context support analysis"
+        ],
+        "effectClass": "read_only_support",
+        "mergeAuthority": "meta-warden",
+        "singleAuthorityOutputs": [
+          "intentPacket",
+          "intentGatePacket",
+          "native user-choice request"
+        ],
+        "previousStageMergeRequired": false,
+        "nextStageRequiresMerge": true,
+        "notes": "Support analyses may run in parallel, but only the merge authority locks intent or asks the consolidated route-changing questions."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "intent_lock",
         "decisionQuestion": "Which missing intent, success, non-goal, permission, or architecture-type fact would change the route?",
@@ -62,7 +182,11 @@
     },
     {
       "stage": "Fetch",
-      "requiredInputs": ["intentPacket", "taskClassification", "readBeforeEditEvidence"],
+      "requiredInputs": [
+        "intentPacket",
+        "taskClassification",
+        "readBeforeEditEvidence"
+      ],
       "requiredOutputs": [
         "fetchPacket.evidence",
         "fetchPacket.decisionImpactMap",
@@ -72,15 +196,43 @@
         "contextEngineeringBudget",
         "fileChangeFactCard"
       ],
-      "skipConditions": ["fast_path read-only answer with explicit evidence boundary"],
+      "skipConditions": [
+        "fast_path read-only answer with explicit evidence boundary"
+      ],
       "gateConditions": [
         "capability discovery missing",
         "route-changing source unread",
         "known unsupported runtime or OS"
       ],
-      "blockingGates": ["missing_fetch_evidence", "missing_capability_discovery", "known_unsupported_runtime_or_os"],
-      "warningGates": ["stale global cache that does not affect selected route"],
+      "blockingGates": [
+        "missing_fetch_evidence",
+        "missing_capability_discovery",
+        "known_unsupported_runtime_or_os"
+      ],
+      "warningGates": [
+        "stale global cache that does not affect selected route"
+      ],
       "defaultOwner": "meta-conductor",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "local source, graph, memory, and read-before-edit evidence",
+          "global and runtime capability discovery",
+          "runtime, OS, dependency, and provider compatibility",
+          "external or current authoritative research when required",
+          "worktree and source/projection boundary inspection"
+        ],
+        "effectClass": "read_only_discovery",
+        "mergeAuthority": "meta-conductor",
+        "singleAuthorityOutputs": [
+          "fetchPacket",
+          "capabilityDiscovery",
+          "contradictionLog",
+          "fileChangeFactCard"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Use cached global inventory plus a project-light scan by default, stop on a qualified match, cancel no-impact searches, and reserve full scans for capabilityDiscovery.fullScanTriggers."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "evidence_and_capability_discovery",
         "decisionQuestion": "Which evidence or capability fact changes candidate routes, owners, risk, scope, or verification?",
@@ -102,7 +254,11 @@
     },
     {
       "stage": "Thinking",
-      "requiredInputs": ["intentPacket", "fetchPacket", "capabilityInventory"],
+      "requiredInputs": [
+        "intentPacket",
+        "fetchPacket",
+        "capabilityInventory"
+      ],
       "requiredOutputs": [
         "thinkingPacket.designFrame",
         "thinkingPacket.owner",
@@ -112,27 +268,61 @@
         "thinkingPacket.verificationOwner",
         "thinkingPacket.mergeOwner",
         "thinkingPacket.parallelGroups",
+        "stageDagPacket",
         "thinkingPacket.dependencyPolicy",
         "thinkingPacket.omittedLanesWithReason",
+        "preDecisionOptionFrame.planChallengeState",
+        "preDecisionOptionFrame.unresolvedQuestions",
         "dynamicWorkflowRuntimePacket.capabilityBindingRows",
         "agentTeamsPlaybookPacket",
         "peerAgentMeshPacket.peers",
         "capabilityInvocationTruthPacket",
+        "capabilityLedgerPacket.families",
+        "projectCustomizationPacket.decision",
         "visibleMetaTheorySurfacePacket",
         "governanceAgentResultPackets",
         "conductorConsumptionEvidence"
       ],
-      "skipConditions": ["fast_path read-only answer with no execution route"],
+      "skipConditions": [
+        "fast_path read-only answer with no execution route"
+      ],
       "gateConditions": [
         "owner or weapon not selected from Fetch evidence",
         "main thread would become all-purpose executor",
         "dependency policy missing"
       ],
-      "blockingGates": ["missing_owner", "missing_weapon", "missing_verification_owner", "blind_execute"],
-      "warningGates": ["single obvious path recorded as no_branching_choice"],
+      "blockingGates": [
+        "missing_owner",
+        "missing_weapon",
+        "missing_verification_owner",
+        "blind_execute"
+      ],
+      "warningGates": [
+        "single obvious path recorded as no_branching_choice"
+      ],
       "defaultOwner": "meta-conductor",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "candidate route exploration",
+          "owner and capability-loadout matching",
+          "dependency, resource, side-effect, runtime, and OS analysis",
+          "review and verification path design"
+        ],
+        "effectClass": "read_only_design",
+        "mergeAuthority": "meta-conductor",
+        "singleAuthorityOutputs": [
+          "thinkingPacket",
+          "preDecisionOptionFrame",
+          "stageDagPacket",
+          "dispatchEnvelopePacket"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Candidate analyses may run in parallel. The merge authority selects one route, derives the stage DAG, and consolidates any material user choice before Execution."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "route_design_and_owner_selection",
+        "choicePolicyRef": "config/governance/material-decision-policy.json",
         "decisionQuestion": "Which owner, weapon, dependency, runtime, OS, lane shape, and verification path best serves the intent?",
         "informationToCollect": [
           "candidate routes",
@@ -148,12 +338,17 @@
           "workerTaskPackets",
           "review and verification owner"
         ],
-        "userChoiceWhen": "Ask before Execution when candidate routes differ in scope, cost, risk, owner, acceptance, or persistence."
+        "userChoiceWhen": "Ask before Execution only when an unresolved, evidenced alternative materially changes the user-visible result, scope, cost, risk, permission, compatibility, acceptance, or persistence. Owner and loadout differences alone are internal selections; reuse existing user direction and authorization."
       }
     },
     {
       "stage": "Execution",
-      "requiredInputs": ["thinkingPacket", "workerTaskPackets", "sideEffectLedgerPacket"],
+      "requiredInputs": [
+        "thinkingPacket",
+        "workerTaskPackets",
+        "sideEffectLedgerPacket",
+        "preDecisionOptionFrame.planChallengeState"
+      ],
       "requiredOutputs": [
         "conductorConsumptionEvidence",
         "agUiStageEvents",
@@ -165,19 +360,51 @@
         "peerAgentMeshPacket.handoffs",
         "agentTeamsPlaybookPacket",
         "capabilityInvocationTruthPacket.rows",
+        "capabilityLedgerPacket.families",
+        "projectCustomizationPacket",
+        "executionResult.executionAllowed",
+        "executionResult.executionGate",
         "executionResult.workerResultPackets",
         "executionResult.workerExecutionEvidence",
         "executionResult.mergeResult"
       ],
-      "skipConditions": ["read-only analysis", "blocked approval gate", "capability gap requires creation before execution"],
+      "skipConditions": [
+        "read-only analysis",
+        "blocked approval gate",
+        "capability gap requires creation before execution"
+      ],
       "gateConditions": [
         "selected worker cannot execute",
         "unsafe mutation",
-        "missing approval for external write or global install"
+        "missing approval for external write or global install",
+        "pre-host plan challenge may be satisfied, but host execution has not occurred and executionAllowed remains false"
       ],
-      "blockingGates": ["unsafe_mutation", "external_write_without_approval", "global_write_without_approval"],
-      "warningGates": ["low-risk local wording edit"],
+      "blockingGates": [
+        "unsafe_mutation",
+        "external_write_without_approval",
+        "global_write_without_approval",
+        "plan_challenge_not_ready"
+      ],
+      "warningGates": [
+        "low-risk local wording edit"
+      ],
       "defaultOwner": "selected worker or selected capability provider",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "all dependency-ready read-only work nodes",
+          "dependency-ready project-write nodes with disjoint resource scopes",
+          "isolated verification-support and artifact-production nodes"
+        ],
+        "effectClass": "bounded_execution",
+        "mergeAuthority": "thinkingPacket.mergeOwner with meta-conductor fallback",
+        "singleAuthorityOutputs": [
+          "executionResult.mergeResult",
+          "sideEffectLedgerPacket"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Schedule the maximal safe ready set rather than accepting or rejecting the whole stage. Serialize dependencies and resource conflicts; do not require an optional agent-teams provider when the native host surface and stage DAG are sufficient."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "bounded_execution_and_midrun_branching",
         "decisionQuestion": "Did execution discover a route-changing fact that should pause, continue, narrow, or return to Thinking?",
@@ -199,7 +426,12 @@
     },
     {
       "stage": "Review",
-      "requiredInputs": ["intentPacket", "fetchPacket", "thinkingPacket", "executionResult"],
+      "requiredInputs": [
+        "intentPacket",
+        "fetchPacket",
+        "thinkingPacket",
+        "executionResult"
+      ],
       "requiredOutputs": [
         "reviewPacket.upstreamQuality",
         "reviewPacket.ownerCoverage",
@@ -211,16 +443,40 @@
         "productExperiencePacket.capabilityInvocationTruthGate",
         "productExperiencePacket.noOverclaimGate"
       ],
-      "skipConditions": ["fast_path read-only answer with no durable artifact"],
+      "skipConditions": [
+        "fast_path read-only answer with no durable artifact",
+        "clear low-risk local task with deterministic acceptance, fresh independent verification, no regulated trigger, and a recorded review skip reason"
+      ],
       "gateConditions": [
         "Critical incomplete",
         "Fetch incomplete",
         "Thinking route unsupported",
         "execution evidence missing"
       ],
-      "blockingGates": ["review_finds_unresolved_critical_or_high_issue"],
-      "warningGates": ["minor polish issue that does not affect acceptance"],
+      "blockingGates": [
+        "review_finds_unresolved_critical_or_high_issue"
+      ],
+      "warningGates": [
+        "minor polish issue that does not affect acceptance"
+      ],
       "defaultOwner": "meta-prism",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "correctness and factual review",
+          "security and permission review",
+          "product, UX, accessibility, and acceptance review",
+          "test, consistency, redundancy, and source/projection review"
+        ],
+        "effectClass": "read_only_review",
+        "mergeAuthority": "meta-prism",
+        "singleAuthorityOutputs": [
+          "reviewPacket",
+          "productExperiencePacket"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Independent lenses may run concurrently; meta-prism deduplicates, prioritizes, and closes one review verdict."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "upstream_and_output_quality_review",
         "decisionQuestion": "Is the chain good enough for the claimed result, and which finding changes acceptance or revision direction?",
@@ -243,21 +499,48 @@
     },
     {
       "stage": "Meta-Review",
-      "requiredInputs": ["reviewPacket", "verificationPlan", "publicReadyIntent"],
+      "requiredInputs": [
+        "reviewPacket",
+        "verificationPlan",
+        "publicReadyIntent"
+      ],
       "requiredOutputs": [
         "metaReviewPacket.reviewStandard",
         "metaReviewPacket.biasCheck",
         "metaReviewPacket.publicReadyGateCheck"
       ],
-      "skipConditions": ["low-risk non-public local edit with recorded skip reason"],
+      "skipConditions": [
+        "low-risk non-public local edit with recorded skip reason"
+      ],
       "gateConditions": [
         "review standard too low",
         "missing public-ready evidence",
         "runtime claim overstates evidence"
       ],
-      "blockingGates": ["public_ready_overclaim", "review_standard_too_low"],
-      "warningGates": ["non-public smoke evidence only"],
+      "blockingGates": [
+        "public_ready_overclaim",
+        "review_standard_too_low"
+      ],
+      "warningGates": [
+        "non-public smoke evidence only"
+      ],
       "defaultOwner": "meta-warden",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "upstream stage-completeness evidence preparation",
+          "review-standard and bias analysis",
+          "public-ready, overclaim, runtime-truth, and residual-risk analysis"
+        ],
+        "effectClass": "read_only_meta_review",
+        "mergeAuthority": "meta-warden",
+        "singleAuthorityOutputs": [
+          "metaReviewPacket verdict",
+          "public-ready gate decision"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Evidence preparation may fan out, but only meta-warden issues the Meta-Review verdict or returns the run to Review or Verification."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "review_standard_and_public_ready_gate",
         "decisionQuestion": "Is Review's standard strong enough for the intended claim, especially public-ready or release-grade claims?",
@@ -279,7 +562,11 @@
     },
     {
       "stage": "Verification",
-      "requiredInputs": ["reviewPacket", "workerResultPackets", "verificationPlan"],
+      "requiredInputs": [
+        "reviewPacket",
+        "workerResultPackets",
+        "verificationPlan"
+      ],
       "requiredOutputs": [
         "verificationResult.status",
         "verificationResult.evidence",
@@ -287,13 +574,18 @@
         "performanceCostBudget",
         "goalContractPacket",
         "capabilityInvocationTruthPacket",
+        "capabilityLedgerPacket",
+        "projectCustomizationPacket",
         "visibleMetaTheorySurfacePacket",
         "userPerceptionPacket",
         "productExperiencePacket",
         "verificationResult.fixEvidence",
         "verificationResult.remainingRisk"
       ],
-      "skipConditions": ["no mutation and no completion claim", "explicit partial result"],
+      "skipConditions": [
+        "no mutation and no completion claim",
+        "explicit partial result"
+      ],
       "gateConditions": [
         "public-ready claim",
         "release-grade claim",
@@ -305,8 +597,27 @@
         "release_grade_without_live_or_declared_evidence",
         "unsafe_operation_unverified"
       ],
-      "warningGates": ["ordinary low-risk step that does not make a completion claim"],
+      "warningGates": [
+        "ordinary low-risk step that does not make a completion claim"
+      ],
       "defaultOwner": "verify",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "independent test, lint, typecheck, and security checks",
+          "isolated runtime and OS probes",
+          "isolated package, install, update, and smoke checks",
+          "artifact, UI, and user-visible acceptance checks"
+        ],
+        "effectClass": "fresh_verification",
+        "mergeAuthority": "verify",
+        "singleAuthorityOutputs": [
+          "verificationResult",
+          "completion and evidence-tier claim"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Run independent checks concurrently only when caches, services, ports, package targets, and temporary directories are isolated. The verification authority merges fresh results and sets the claim boundary."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "fresh_evidence_and_truth_state",
         "decisionQuestion": "Which fresh evidence proves, weakens, or limits the completion claim?",
@@ -329,22 +640,50 @@
     },
     {
       "stage": "Evolution",
-      "requiredInputs": ["reviewPacket", "verificationResult", "capabilityGapPacket"],
+      "requiredInputs": [
+        "reviewPacket",
+        "verificationResult",
+        "capabilityGapPacket"
+      ],
       "requiredOutputs": [
         "evolutionWritebackDecision",
         "evolutionWritebackPacket.writebacks",
         "evolutionWritebackPacket.noneWithReason",
         "scarPacket"
       ],
-      "skipConditions": ["no reusable lesson, recorded as none-with-reason"],
+      "skipConditions": [
+        "no reusable lesson or durable evolution trigger; close inline as none-with-reason without dispatching Evolution lanes"
+      ],
       "gateConditions": [
         "reusable capability gap discovered",
         "agent boundary change needed",
         "skill, tool, MCP, hook, workflow, runtime, or OS lesson should survive the run"
       ],
-      "blockingGates": ["writeback_without_warden_approval", "missing_writeback_or_none_reason"],
-      "warningGates": ["candidate writeback requires later approval"],
+      "blockingGates": [
+        "writeback_without_warden_approval",
+        "missing_writeback_or_none_reason"
+      ],
+      "warningGates": [
+        "candidate writeback requires later approval"
+      ],
       "defaultOwner": "meta-chrysalis",
+      "parallelPolicy": {
+        "laneFamilies": [
+          "reusable pattern and scar extraction",
+          "capability-gap and owner-boundary analysis",
+          "memory, documentation, telemetry, and workflow writeback candidates"
+        ],
+        "effectClass": "read_only_candidate_analysis_then_governed_write",
+        "mergeAuthority": "meta-chrysalis",
+        "singleAuthorityOutputs": [
+          "evolutionWritebackDecision",
+          "evolutionWritebackPacket",
+          "scarPacket"
+        ],
+        "previousStageMergeRequired": true,
+        "nextStageRequiresMerge": true,
+        "notes": "Candidate analysis may fan out. meta-chrysalis merges candidates; durable writes remain single-writer actions and require the existing Warden approval gate."
+      },
       "decisionResponsibilities": {
         "responsibilityRef": "durable_learning_and_writeback",
         "decisionQuestion": "What reusable lesson, capability gap, scar, or none-with-reason should survive this run?",
@@ -464,8 +803,19 @@
       "userPerceptionPacket",
       "productExperiencePacket"
     ],
-    "requiredGoalIds": ["P-102", "P-103", "P-104"],
-    "supportGateIds": ["P-105", "P-106", "P-107", "P-108", "P-109", "P-110"],
+    "requiredGoalIds": [
+      "P-102",
+      "P-103",
+      "P-104"
+    ],
+    "supportGateIds": [
+      "P-105",
+      "P-106",
+      "P-107",
+      "P-108",
+      "P-109",
+      "P-110"
+    ],
     "langGraphStyleRequirements": [
       "nodes",
       "edges",
@@ -486,18 +836,46 @@
       "workerResultPackets"
     ],
     "capabilityInvocationTruthRequirements": [
-      "stateTaxonomy includes invoked, applied, host_visible_observed, selected_not_invoked, discovered_not_selected, unavailable, blocked, not_required",
-      "agent/subagent live invocation is invoked only with external agent spawn evidence; otherwise use unavailable, blocked, not_required, or selected_not_invoked according to host-tool availability and authorization evidence",
+      "stateTaxonomy includes invoked, applied, host_visible_observed, selected_not_invoked, discovered_not_selected, unavailable, not_authorized, blocked, not_required",
+      "agent/subagent live invocation is invoked only with external agent spawn evidence; otherwise use unavailable, not_authorized, blocked, not_required, or selected_not_invoked according to host-tool availability and authorization evidence",
       "app-visible host UI subagents are recorded separately from runner Agent/spawn_agent tool invocation",
-      "agent-teams-playbook is selected for 2+ executable parallel lanes but is not relabeled as a live Skill/Agent Team/spawn_agent call",
-      "MCP binding is not relabeled as MCP tool call without invocation evidence",
+      "agent-teams-playbook is optional; when selected it is not relabeled as a live Skill/Agent Team/spawn_agent call, and when absent it must not block a native stage-DAG fan-out route",
+      "MCP binding or --self-test catalog output is not relabeled as an MCP tool call; live proof requires an externally observed tools/call result",
       "hook match or file is not relabeled as triggered hook",
       "command selection is not relabeled as command execution without fresh command output",
-      "run-scoped worker execution is not relabeled as live subagent invocation",
-      "realInvocationCoverage.status must be pass for product-experience pass when selected executable families include agent/subagent, skill, MCP, command/script, runtime-tool, or agent-teams-playbook",
+      "runner-generated worker plans are planned_not_executed and never synthesize executed, verified, or exitCode 0 evidence",
+      "realInvocationCoverage is binding-level, so every selected family+provider+task binding must have matching externally observed evidence",
+      "realInvocationCoverage.status must be pass for product-experience pass when selected executable bindings include agent/subagent, skill, MCP, hook, command/script, runtime-tool, or agent-teams-playbook",
       "hostInvocationRequestPacket must list every selected executable family that still needs a Claude Code/Codex host adapter call and the exact trusted evidence required",
       "selected_not_invoked is never execution pass for a selected executable family",
-      "product-experience pass requires capabilityInvocationProbePacket fresh local probes for callable MCP, command/script, and runtime-tool families when they are selected"
+      "capabilityInvocationProbePacket proves readiness/callability only and never contributes to realInvocationCoverage or product-experience live evidence"
+    ],
+    "capabilityLedgerRequirements": [
+      "families covers agent_subagent, skill, command_script, mcp, runtime_tool, and hook",
+      "every family records providerId, source, selected, state, invocationTruthBoundary, and nextAction",
+      "user-visible chat and report consume the same ledger instead of an agent-only summary",
+      "discovered, selected, configured, host-visible, and invoked states remain distinct"
+    ],
+    "projectCustomizationRequirements": [
+      "decision is use_global_directly, upgrade_existing_owner, or create_project_local_capability",
+      "decision records reason, targetPath, verification, and rollback",
+      "global candidates and existing project candidates are checked before a project-local create decision",
+      "use_global_directly never copies a reusable global capability into the project",
+      "create_project_local_capability requires project-specific need, review, approval, native project target, verification, rollback, and a runtime_sedimented_project_copy ownership record",
+      "upgrade_existing_owner that changes an Agent, Skill, or Command copies it into the native project directory before modification and protects it from dependency updates",
+      "the decision packet never claims that a candidate was written, loaded, or invoked"
+    ],
+    "planChallengeRequirements": [
+      "activate only for an explicit user request, material risk, or contradictory evidence",
+      "leave low-risk no-branching work unchanged",
+      "select exactly one highest-impact open question while retaining answered, skipped, and invalidated history",
+      "store dependencies, evidence, and recommendation state on preDecisionOptionFrame.unresolvedQuestions instead of creating a parallel question source",
+      "do not invent recommendations for preference-only or insufficient-evidence questions",
+      "shared understanding never implies execution authorization",
+      "authorization evidence is trusted, bound to the current side-effect set, and covers every concrete sideEffectAction",
+      "active non-ready or stopped challenges set executionAllowed=false before canonical writeback, project capability copy, or other execution side effects",
+      "pending host choice data reports required_not_invoked and never claims a native popup was shown",
+      "chat summary data includes confirmed decisions, open risks, and next step"
     ],
     "userPerceptionRequirements": [
       "what_to_do",
@@ -521,8 +899,7 @@
       "selected_command_as_executed",
       "selected_runtime_tool_as_called",
       "hook_file_or_match_as_triggered_hook",
-      "run_scoped_worker_as_live_subagent"
-      ,
+      "run_scoped_worker_as_live_subagent",
       "app_visible_subagent_as_runner_agent_spawn"
     ],
     "supportGateRequirements": {
@@ -555,18 +932,19 @@
       "P-109": [
         "capabilityInvocationTruthPacket.rows covers agent/subagent, app-visible host subagent, worker task, skill, MCP, hook, prompt/rule, command/script, and runtime tool families",
         "capabilityInvocationTruthPacket.rows also records agent_teams_playbook when fan-out orchestration is selected",
-        "each family records invoked, applied, host_visible_observed, selected_not_invoked, discovered_not_selected, unavailable, blocked, or not_required",
+        "each family records invoked, applied, host_visible_observed, selected_not_invoked, discovered_not_selected, unavailable, not_authorized, blocked, or not_required",
         "selected, discovered, configured, or matched capabilities cannot be displayed as invoked without attached invocation evidence",
         "run-scoped worker execution and app-visible host subagent UI evidence cannot be displayed as live runner Agent/spawn_agent invocation",
         "MCP config/binding and hook file/match cannot be displayed as MCP call or hook trigger",
-        "callableInvocationCoverage.status must be pass for product-experience pass, with fresh probes for selected MCP, command/script, and runtime-tool families",
-        "realInvocationCoverage.status must be pass for product-experience pass when any selected executable family needs host, skill, MCP, command, runtime-tool, or agent-team evidence",
+        "callableInvocationCoverage reports readiness probes separately from live invocation truth",
+        "realInvocationCoverage.status must be pass at binding level for product-experience pass when any selected executable binding needs host, skill, MCP, hook, command, runtime-tool, or agent-team evidence",
+        "live evidence must come from a hash-verified external runtime observation artifact with matching runId, sessionId, eventId, providerId, bindingRef, timestamp, and successful result",
         "hostInvocationRequestPacket.status must expose pending_host_invocation instead of hiding missing host calls inside reports"
       ],
       "P-110": [
         "agentTeamsPlaybookPacket is not_required for fewer than 2 executable worker lanes",
-        "2+ executable worker lanes must discover and select agent-teams-playbook as the fan-out orchestration adapter",
-        "fan-out waves use the current host/runtime capacity such as Codex [agents].max_threads or Claude Code's native dispatch capacity, not an arbitrary Meta_Kim hard cap, prove DAG/collision/workspace/external-write safety, and preserve workerTaskPackets",
+        "2+ executable worker lanes may use agent-teams-playbook as an optional orchestration adapter, but native Agent/Task/spawn_agent plus the authoritative stage DAG is sufficient",
+        "fan-out ready sets use the current host/runtime capacity such as Codex [agents].max_threads or Claude Code's native dispatch capacity; Meta_Kim installs a resource-safe Codex default of 2 while preserving explicit user overrides and adds no hidden hard cap; ready sets still prove dependency/resource/permission/isolation safety and preserve workerTaskPackets only as a derived compatibility view",
         "the Node runner must not claim a live Skill, Agent Team, or Codex spawn_agent call without host tool-call evidence"
       ]
     }
@@ -590,7 +968,11 @@
     ]
   },
   "evolutionWritebackPolicy": {
-    "requiredDecision": ["writeback", "candidate-writeback", "none-with-reason"],
+    "requiredDecision": [
+      "writeback",
+      "candidate-writeback",
+      "none-with-reason"
+    ],
     "writeReusableGapsTo": [
       "canonical/agents",
       "canonical/skills",
@@ -599,7 +981,11 @@
       "config/governance",
       "project state"
     ],
-    "forbiddenWithoutApproval": ["automatic canonical write", "global write", "external write"],
+    "forbiddenWithoutApproval": [
+      "automatic canonical write",
+      "global write",
+      "external write"
+    ],
     "noneRequiresReason": true
   },
   "publicReadyClaim": {
@@ -616,7 +1002,14 @@
     ]
   },
   "crossRuntimeBoundary": {
-    "targets": ["claude", "codex", "openclaw", "cursor"],
+    "targets": [
+      "claude",
+      "codex",
+      "openclaw",
+      "cursor",
+      "gemini",
+      "zcode"
+    ],
     "doNotMixFormats": true,
     "canonicalSourceFirst": true,
     "runtimeMirrorsAreGeneratedUnlessExplicitlyDocumented": true

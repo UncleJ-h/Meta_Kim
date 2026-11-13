@@ -2,9 +2,32 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFile } from "./_helpers.mjs";
-import { classifyMetaTheoryEntry } from "../../scripts/meta-theory-entry-classifier.mjs";
+import {
+  classifyMetaTheoryEntry,
+  validateEntryLexicon,
+} from "../../scripts/meta-theory-entry-classifier.mjs";
+import lexicon from "../../canonical/runtime-assets/shared/hooks/entry-classification-lexicon.json" with { type: "json" };
 
 describe("47 - Meta-theory entry classifier", () => {
+  test("entry lexicon enforces the complete bounded four-language schema", () => {
+    assert.equal(validateEntryLexicon(structuredClone(lexicon)).schemaVersion, 1);
+
+    const missingLanguage = structuredClone(lexicon);
+    delete missingLanguage.categories.action.ko;
+    assert.throws(() => validateEntryLexicon(missingLanguage), /exactly en, zh, ja, and ko/);
+
+    const emptyMatcher = structuredClone(lexicon);
+    emptyMatcher.categories.action.ja = [];
+    assert.throws(() => validateEntryLexicon(emptyMatcher), /must contain 1-128 terms/);
+
+    const oversized = structuredClone(lexicon);
+    oversized.categories.action.en = Array.from({ length: 129 }, (_, index) => `term-${index}`);
+    assert.throws(() => validateEntryLexicon(oversized), /must contain 1-128 terms/);
+
+    const extraCategory = structuredClone(lexicon);
+    extraCategory.categories.extra = structuredClone(extraCategory.categories.action);
+    assert.throws(() => validateEntryLexicon(extraCategory), /must define exactly/);
+  });
   test("explicit meta-theory activation enters regulated path", () => {
     const result = classifyMetaTheoryEntry("meta-theory 帮我做治理审查");
 
@@ -12,7 +35,9 @@ describe("47 - Meta-theory entry classifier", () => {
     assert.equal(result.path, "regulated_path");
     assert.equal(result.taskClassification, "meta_theory_explicit");
     assert.equal(result.triggerReason, "explicit_meta_theory");
-    assert.equal(result.fanoutEligible, false);
+    assert.equal(result.signals.explicitMetaTheory, true);
+    assert.equal("fanoutEligible" in result, false);
+    assert.equal("choiceSurfaceState" in result, false);
   });
 
   test("ordinary natural-language durable work enters governed path", () => {
@@ -26,7 +51,145 @@ describe("47 - Meta-theory entry classifier", () => {
     assert.equal(result.path, "standard_path");
     assert.equal(result.taskClassification, "meta_theory_auto");
     assert.equal(result.triggerReason, "natural_language_durable_work");
-    assert.equal(result.shouldAskBeforeFetch, false);
+    assert.equal(result.signals.durableOutputIntent, true);
+    assert.equal("shouldAskBeforeFetch" in result, false);
+  });
+
+  test("explicit engineering repairs enter governance without requiring a product rebuild", () => {
+    for (const prompt of [
+      "修复高并发平台超时，保留已认可产品",
+      "修复合并排序超时，保留完整产品",
+      "请修复平台超时，不要重新开发产品",
+      "保留现有平台并修复接口超时，不要重新开发产品。",
+      "Please repair the timeout, preserve the approved product.",
+      "Can you repair the timeout?",
+      "Can you repair the platform timeout and preserve the current product?",
+    ]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.governedEntry, true, prompt);
+      assert.equal(result.path, "standard_path", prompt);
+      assert.equal(result.signals.productBuildIntent, false, prompt);
+    }
+  });
+
+  test("engineering repair advice and explicit denials remain read-only requests", () => {
+    for (const prompt of [
+      "为什么高并发平台会超时？",
+      "如何修复高并发平台超时？",
+      "如何修复 API 超时？",
+      "请问如何修复 API 超时？",
+      "How do I fix API timeouts?",
+      "How can I repair a timeout?",
+      "How do I fix and test the API?",
+      "Why does the app time out and how should I repair it?",
+      "Why does the app time out? How should I repair it?",
+      "How do I fix API timeouts, and how should I verify the result?",
+      "What does it mean to repair a timeout?",
+      "不要修复高并发平台超时，保留完整产品",
+      "Do not repair the slow API.",
+      "不要修复这个太慢的接口",
+      "不要修复平台太慢的问题，只解释原因。",
+      "Do not fix the slow API; just explain the cause.",
+      "不需要修复 API 超时，只解释原因。",
+      "No need to repair the API, just explain why it times out.",
+      "无需修复接口，说明原因即可。",
+      "不必修复接口，说明原因即可。",
+      "不要修复 API，也不要修改文件。",
+    ]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.governedEntry, false, prompt);
+      assert.equal(result.path, "fast_path", prompt);
+      assert.equal(result.signals.productBuildIntent, false, prompt);
+    }
+  });
+
+  test("engineering advice keeps a later explicit repair request", () => {
+    for (const prompt of [
+      "为什么平台超时？请修复现有 API",
+      "如何修复接口然后请修改配置文件",
+      "How do I fix the API? Then please repair the timeout.",
+      "Do not repair the API, then please repair the timeout.",
+      "无需修复旧接口，但请修复新接口的超时。",
+    ]) assert.equal(classifyMetaTheoryEntry(prompt).governedEntry, true, prompt);
+  });
+
+  test("onboarding and recovery improvement requests enter the governed standard path", () => {
+    for (const prompt of [
+      "Please streamline the onboarding experience and make recovery clearer",
+      "把新手上手体验捋顺，失败后要能恢复",
+      "オンボーディング体験を改善し、失敗後の復旧を明確にしてください",
+      "온보딩 경험을 개선하고 실패 후 복구를 명확하게 해주세요",
+    ]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.governedEntry, true, prompt);
+      assert.equal(result.path, "standard_path", prompt);
+      assert.equal(result.taskClassification, "meta_theory_auto", prompt);
+    }
+  });
+
+  test("requested professional deliverables enter governance without requiring technical vocabulary", () => {
+    for (const prompt of [
+      "请把我的客服经历改成运营助理岗位简历",
+      "这篇正文写好了，请给小红书标题和封面文字",
+      "把本周报价进度写成发给主管的周报",
+      "根据这些实测参数写商品卖点文案",
+      "请按这些帆布袋参数写商品详情页和卖点",
+      "顾客一直催发货，帮我拟一段客服回复",
+      "帮我准备一份四十五分钟的分数教案",
+      "围绕这个知识点帮我出三道练习题",
+      "帮我核算这项服务的成本并给出报价",
+      "帮我比较这几家供应商",
+      "帮我比较材料中的两家采购供应商，算到货总支出和超购，不联系供应商或下单",
+      "Compare the supplied quotes and calculate landed cost and excess quantity",
+    ]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.path, "standard_path", prompt);
+      assert.equal(result.signals.durableOutputIntent, true, prompt);
+    }
+  });
+
+  test("professional terminology alone does not turn an informational question into execution", () => {
+    for (const prompt of ["简历是什么？", "标题与封面文字有什么区别？", "这个知识点我没懂是什么意思？", "超购和总支出是什么意思？", "供应商比较是什么意思？", "What does landed cost mean?", "What does it mean to compare landed cost?", "What does it mean to calculate excess quantity?"]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.path, "fast_path", prompt);
+      assert.equal(result.governedEntry, false, prompt);
+    }
+    assert.equal(classifyMetaTheoryEntry("What does landed cost mean? Then compare these supplier quotes and write a report.").path, "standard_path");
+    assert.equal(classifyMetaTheoryEntry("What does landed cost mean. Compare these supplier quotes and write a report.").path, "standard_path");
+    for (const prompt of [
+      "What does landed cost mean to a buyer, and please compare these supplier quotes and write a report",
+      "What does landed cost mean to a buyer, and could you calculate total expenditure?",
+      "What does it mean to compare landed cost and please write a report?",
+      "What does it mean to compare landed cost and can you calculate these quotes?",
+      "What does it mean to compare quotes, and please calculate landed cost for these supplier quotes?",
+    ]) assert.equal(classifyMetaTheoryEntry(prompt).path, "standard_path", prompt);
+  });
+
+  test("explanation clauses keep subsequent implementation and file output requests", () => {
+    for (const prompt of [
+      "Explain this design and then implement the frontend.",
+      "Describe this interface, then implement the backend.",
+      "Explain the implementation in a report and save it to design.md.",
+      "Explain the data model and export the report.",
+      "请解释如何写 PRD，然后生成一份方案。",
+      "请解释这个接口，然后修复代码。",
+    ]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.path, "standard_path", prompt);
+      assert.equal(result.signals.actionIntent, true, prompt);
+    }
+    for (const prompt of [
+      "Explain how to build a notification system.",
+      "Please describe how to implement the frontend.",
+      "Explain how to export a report and save it locally.",
+      "Explain this design, but do not implement the frontend.",
+      "请解释如何写 PRD，不要生成文件。",
+      "帮我说明这个接口如何实现，不要改代码。",
+    ]) {
+      const result = classifyMetaTheoryEntry(prompt);
+      assert.equal(result.path, "fast_path", prompt);
+      assert.equal(result.signals.actionIntent, false, prompt);
+    }
   });
 
   test("wish-style product build enters governed path without protocol words", () => {
@@ -39,11 +202,9 @@ describe("47 - Meta-theory entry classifier", () => {
     assert.equal(result.path, "standard_path");
     assert.equal(result.taskClassification, "meta_theory_auto");
     assert.equal(result.triggerReason, "natural_language_product_build");
-    assert.equal(result.shouldAskBeforeFetch, false);
-    assert.equal(result.fanoutEligible, true);
-    assert.ok(result.fanoutSignals.includes("product_build_has_multiple_execution_lanes"));
-    assert.equal(result.requiresSubagentAuthorization, true);
-    assert.equal(result.subagentAuthorizationSource, "native_choice_surface_required");
+    assert.equal(result.signals.productBuildIntent, true);
+    assert.equal("fanoutEligible" in result, false);
+    assert.equal("subagentAuthorizationSource" in result, false);
   });
 
   test("human fuzzy product idea enters product-build route without capability words", () => {
@@ -57,20 +218,41 @@ describe("47 - Meta-theory entry classifier", () => {
     assert.equal(result.path, "standard_path");
     assert.equal(result.taskClassification, "meta_theory_auto");
     assert.equal(result.triggerReason, "natural_language_product_build");
-    assert.equal(result.fanoutEligible, true);
-    assert.ok(result.fanoutSignals.includes("product_build_has_multiple_execution_lanes"));
+    assert.equal(result.signals.productBuildIntent, true);
+    assert.ok(result.signals.parallelismHints.distinctCapabilityTermCount >= 0);
   });
 
-  test("review plus fix plus verify is fan-out eligible before execution", () => {
+  test("review plus fix plus verify records parallel-work hints without deciding fan-out", () => {
     const result = classifyMetaTheoryEntry(
       "review + fix + verify 这个仓库的 hook、runner、测试，做完再告诉我。",
     );
 
     assert.equal(result.governedEntry, true);
-    assert.equal(result.fanoutEligible, true);
-    assert.ok(result.expectedIndependentLaneCount >= 3);
-    assert.equal(result.requiresSubagentAuthorization, false);
-    assert.equal(result.subagentAuthorizationSource, "direct_parallel_agent_request");
+    assert.equal(result.signals.directParallelRequest, true);
+    assert.equal(result.signals.parallelismHints.reviewFixVerifyPattern, true);
+    assert.equal("expectedIndependentLaneCount" in result, false);
+  });
+
+  test("direct Chinese dispatch and parallel correction records explicit concurrency intent", () => {
+    const result = classifyMetaTheoryEntry("不是 我要的是派发啊 并行啊");
+
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.path, "standard_path");
+    assert.equal(result.taskClassification, "meta_theory_auto");
+    assert.equal(result.triggerReason, "direct_parallel_dispatch_request");
+    assert.equal(result.signals.directParallelRequest, true);
+    assert.equal("fanoutEligible" in result, false);
+    assert.equal("requiresSubagentAuthorization" in result, false);
+  });
+
+  test("contextual repeated creation complaint enters governed diagnosis", () => {
+    const result = classifyMetaTheoryEntry("我看他好像还是一直在自己创建");
+
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.path, "standard_path");
+    assert.equal(result.taskClassification, "meta_theory_auto");
+    assert.equal(result.triggerReason, "serial_agent_route_complaint");
+    assert.equal(result.signals.serialOrSlowRouteComplaint, true);
   });
 
   test("critical fetch thinking review wording enters governed path without explicit meta-theory", () => {
@@ -81,33 +263,91 @@ describe("47 - Meta-theory entry classifier", () => {
     assert.equal(result.governedEntry, true);
     assert.equal(result.path, "standard_path");
     assert.equal(result.taskClassification, "meta_theory_auto");
-    assert.ok(result.fanoutSignals.includes("critical_fetch_thinking_review_requested"));
+    assert.equal(result.signals.structuredGovernanceChainRequest, true);
+    assert.equal("subagentAuthorizationSource" in result, false);
   });
 
-  test("explicit meta-theory with serial-agent complaint authorizes fan-out", () => {
+  test("arrow-form Critical Fetch Deep Thinking Review chain records a concurrency hint without claiming safe fan-out", () => {
+    const result = classifyMetaTheoryEntry(
+      "Critical Thinking → Fetch → Deep Thinking → Review 检查治理规则、Codex runtime、测试缺口",
+    );
+
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.path, "standard_path");
+    assert.equal(result.taskClassification, "meta_theory_auto");
+    assert.equal(result.triggerReason, "critical_fetch_thinking_review_requested");
+    assert.equal(result.signals.structuredGovernanceChainRequest, true);
+    assert.equal("fanoutEligible" in result, false);
+    assert.equal("expectedIndependentLaneCount" in result, false);
+  });
+
+  test("explicit meta-theory with a serial-agent complaint preserves both factual signals", () => {
     const result = classifyMetaTheoryEntry(
       "你太慢了，没看到多个 agent 并行，critical and fetch thinking and review /meta-theory",
     );
 
     assert.equal(result.governedEntry, true);
     assert.equal(result.path, "regulated_path");
-    assert.equal(result.fanoutEligible, true);
-    assert.equal(result.requiresSubagentAuthorization, false);
-    assert.equal(result.subagentAuthorizationSource, "explicit_meta_theory");
-    assert.ok(result.fanoutSignals.includes("user_reported_serial_or_slow_agent_route"));
+    assert.equal(result.signals.explicitMetaTheory, true);
+    assert.equal(result.signals.directParallelRequest, true);
+    assert.equal(result.signals.serialOrSlowRouteComplaint, true);
   });
 
-  test("subjective quality request asks through Critical before Fetch", () => {
+  test("explicit meta-theory without subagent wording does not claim fan-out or authorization", () => {
+    const result = classifyMetaTheoryEntry(
+      "[$meta-theory](D:/workspace/Meta_Kim/.agents/skills/meta-theory/SKILL.md) 帮我调整好，案例也需要对应检查，如果需要生成图片，用image2",
+    );
+
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.path, "regulated_path");
+    assert.equal(result.signals.explicitMetaTheory, true);
+    assert.equal("fanoutEligible" in result, false);
+    assert.equal("subagentAuthorizationSource" in result, false);
+  });
+
+  test("plain meta-theory trigger records text evidence and leaves fan-out to Thinking", () => {
+    const result = classifyMetaTheoryEntry(
+      "meta-theory 检查 meta-theory 规则、Codex runtime、测试缺口",
+    );
+
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.path, "regulated_path");
+    assert.equal(result.signals.explicitMetaTheory, true);
+    assert.equal(result.signals.governedMetaTrigger, true);
+    assert.equal("fanoutEligible" in result, false);
+  });
+
+  test("subjective quality request reports choice-relevant facts without owning the choice lifecycle", () => {
     const result = classifyMetaTheoryEntry("这个页面不好看，帮我弄高级一点");
 
     assert.equal(result.governedEntry, true);
     assert.equal(result.path, "standard_path");
     assert.equal(result.triggerReason, "subjective_quality_ambiguous");
-    assert.equal(result.choiceSurfaceState, "critical_clarification_allowed");
-    assert.equal(result.shouldAskBeforeFetch, true);
-    assert.equal(result.ambiguityPacket.choicePolicy, "must_ask");
-    assert.match(result.ambiguityPacket.basis, /route, acceptance, risk, owner, permission/);
-    assert.match(result.ambiguityPacket.mustAskReason, /native choice answer/);
+    assert.equal(result.signals.subjectiveQualitySignal, true);
+    assert.equal(result.signals.actionIntent, true);
+    assert.ok(result.signals.routeChangingDimensionSignals.includes("quality_or_acceptance"));
+    assert.equal("choiceSurfaceState" in result, false);
+    assert.equal("shouldAskBeforeFetch" in result, false);
+    assert.equal("ambiguityPacket" in result, false);
+  });
+
+  test("destructive production execution enters governance without owning the choice decision", () => {
+    const result = classifyMetaTheoryEntry("删除生产数据库并发布上线");
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.path, "standard_path");
+    assert.equal(result.triggerReason, "high_risk_execution_intent");
+    assert.equal(result.signals.highRiskTermSignal, true);
+    assert.equal(result.signals.destructiveOrProductionIntent, true);
+    assert.equal("ambiguityPacket" in result, false);
+  });
+
+  test("release-themed capability names are not mistaken for a live production operation", () => {
+    const result = classifyMetaTheoryEntry(
+      "请在当前项目新建 agent governed-release-auditor，负责审查发布配置并拒绝写操作。",
+    );
+    assert.equal(result.governedEntry, true);
+    assert.equal(result.signals.destructiveOrProductionIntent, false);
+    assert.equal(result.signals.destructiveOrProductionTermSignal, false);
   });
 
   test("project understanding questions enter governed Fetch path", () => {
@@ -164,8 +404,8 @@ describe("47 - Meta-theory entry classifier", () => {
     assert.equal(payload.path, "standard_path");
     assert.equal(payload.triggerReason, "natural_language_product_build");
     assert.equal(payload.taskClassification, "meta_theory_auto");
-    assert.equal(payload.fanoutEligible, true);
-    assert.equal(payload.subagentAuthorizationSource, "native_choice_surface_required");
+    assert.equal(payload.signals.productBuildIntent, true);
+    assert.equal("fanoutEligible" in payload, false);
   });
 
   test("CLI temp-output flag does not consume a positional task", () => {
@@ -195,10 +435,22 @@ describe("47 - Meta-theory entry classifier", () => {
     const skill = await readFile("canonical/skills/meta-theory/SKILL.md");
     const combined = `${readme}\n${readmeZh}\n${agents}\n${skill}`;
 
-    assert.match(readme, /humans should be able to use plain task language/i);
-    assert.match(readme, /maintainer shortcuts, not the normal user path/i);
-    assert.match(readmeZh, /人类应该直接用自然语言说任务/);
-    assert.match(readmeZh, /维护者快捷方式，不是普通用户入口/);
+    assert.match(readme, /describe (?:the|your) (?:outcome|goal|result) in your own words/i);
+    assert.match(readmeZh, /用自己的话.*(?:目标|结果|想得到什么)/);
+
+    // The actual first-task example after installation must use the ordinary
+    // governed entry, without requiring an activation phrase.
+    for (const [file, raw] of [["README.md", readme], ["README.zh-CN.md", readmeZh]]) {
+      const firstTaskSection = raw.match(/(?:^|\n)### 2\.[^\n]*\n([\s\S]*?)(?=\n### |$)/)?.[1];
+      assert.ok(firstTaskSection, `${file} must explain the first project task after installation`);
+      const example = firstTaskSection.match(/^>\s*[“"](.+?)[”"]\s*$/m)?.[1];
+      assert.ok(example, `${file} must show a concrete natural-language task request`);
+
+      const entry = classifyMetaTheoryEntry(example);
+      assert.equal(entry.governedEntry, true, `${file} first-task example must enter governed work`);
+      assert.equal(entry.path, "standard_path", `${file} first-task example must use the normal entry path`);
+    }
+
     assert.match(agents, /Do not require humans to know or type command words/);
     assert.match(skill, /ordinary natural-language durable work/);
     assert.match(skill, /not required human behavior/);

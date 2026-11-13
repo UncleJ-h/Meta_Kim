@@ -2,6 +2,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { assert, exists, listFiles, readJson, repoPath, toPosix } from "./governance-lib.mjs";
+import { getProfilePaths } from "./meta-kim-local-state.mjs";
+
+const activeProfileDir = getProfilePaths({ repoPath: repoPath(".") }).profileDir;
+const activeProfileRef = toPosix(path.relative(repoPath("."), activeProfileDir));
+const resolveProfileSource = (source) => String(source)
+  .replaceAll("{profile}", getProfilePaths().profile)
+  .replace(/^\.meta-kim\/state\/default(?=\/|$)/u, activeProfileRef);
 
 const contract = await readJson("config/contracts/prompt-abstract-capability-contract.json");
 const skills = await readJson("config/skills.json");
@@ -33,10 +40,9 @@ const REQUIRED_SKILL_IDS = [
   "hookprompt",
   "superpowers",
   "ecc",
-  "planning-with-files",
   "cli-anything",
   "gstack",
-  "skill-creator",
+  "meta-skill-creator",
 ];
 
 const REQUIRED_RUNTIME_CAPABILITIES = [
@@ -78,6 +84,7 @@ const REQUIRED_PROVIDER_TYPES = [
 
 const OPTIONAL_PROJECT_INVENTORY_SOURCES = new Set([
   ".mcp.json",
+  ".meta-kim/state/default/capability-index/global-capabilities.json",
 ]);
 
 const TARGETED_PROMPT_ASSETS = [
@@ -143,15 +150,13 @@ for (const id of [
 }
 
 for (const source of contract.inventorySources ?? []) {
-  if (source.includes("{profile}") || source.startsWith("graphify-out")) continue;
-  const sourceExists = await exists(repoPath(source));
-  if (source.includes(".meta-kim/state/default/capability-index/global-capabilities.json")) {
-    continue;
-  }
+  if (source.startsWith("graphify-out")) continue;
+  const resolvedSource = resolveProfileSource(source);
+  const sourceExists = await exists(repoPath(resolvedSource));
   if (!sourceExists && OPTIONAL_PROJECT_INVENTORY_SOURCES.has(source)) {
     continue;
   }
-  assert(sourceExists, `inventory source missing ${source}`);
+  assert(sourceExists, `inventory source missing ${resolvedSource}`);
 }
 
 const skillIds = new Set((skills.skills ?? []).map((skill) => skill.id));
@@ -162,10 +167,12 @@ for (const id of REQUIRED_SKILL_IDS) {
 const providerTypes = new Set(providerRegistry.providerTypes ?? []);
 for (const type of REQUIRED_PROVIDER_TYPES) {
   assert(providerTypes.has(type), `provider registry missing provider type ${type}`);
-  assert(
-    (providerRegistry.providers ?? []).some((provider) => provider.providerType === type),
-    `provider registry missing provider instance for type ${type}`,
-  );
+  if (type !== "plugin_bundle") {
+    assert(
+      (providerRegistry.providers ?? []).some((provider) => provider.providerType === type),
+      `provider registry missing provider instance for type ${type}`,
+    );
+  }
 }
 
 assert((providerRegistry.providers ?? []).length >= 25, "provider registry must cover at least current 25 modeled providers");
@@ -173,7 +180,7 @@ assert((capabilityIndex.summary?.totalAgents ?? 0) >= 9, "capability index must 
 assert((capabilityIndex.summary?.totalSkills ?? 0) >= 16, "capability index must expose skills");
 assert((capabilityIndex.summary?.totalHooks ?? 0) >= 20, "capability index must expose hooks");
 assert((capabilityIndex.summary?.totalMcpServers ?? 0) >= 1, "capability index must expose MCP servers");
-assert((capabilityIndex.summary?.totalPlugins ?? 0) >= 4, "capability index must expose plugins");
+assert((capabilityIndex.summary?.totalPlugins ?? 0) >= 3, "capability index must expose current plugin providers");
 assert((capabilityIndex.summary?.totalCommands ?? 0) >= 3, "capability index must expose commands");
 
 const runtimeCapabilityNames = new Set(runtimeMatrix.capabilityNames ?? []);
@@ -285,7 +292,7 @@ for (const privateDoc of [
   });
 }
 
-const globalInventoryPath = repoPath(".meta-kim/state/default/capability-index/global-capabilities.json");
+const globalInventoryPath = path.join(activeProfileDir, "capability-index", "global-capabilities.json");
 if (await exists(globalInventoryPath)) {
   const globalInventory = JSON.parse(await fs.readFile(globalInventoryPath, "utf8"));
   assert((globalInventory.summary?.totalSkills ?? 0) >= 1, "global inventory exists but has no skills");

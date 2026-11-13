@@ -3,13 +3,20 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { canonicalAgentsDir } from "../meta-kim-sync-config.mjs";
+import {
+  parseRuntimeCapabilityMatrix,
+  parseRuntimeCapabilityEvidenceLedger,
+  readRequiredPackagedText,
+  validateRequiredMarkdown,
+} from "./runtime-resource-contract.mjs";
+import { loadEffectiveRuntimeCapabilityClaims } from "../effective-runtime-capability-claims.mjs";
+import { runtimeCapabilityFailureDetails } from "../runtime-capability-evidence.mjs";
+import { standardRuntimeObservationSet } from "../runtime-execution-gate.mjs";
+import { runDependencyCalculation } from "../governed-execution/dependency-calculation.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
+const packagedCanonicalAgentsDir = path.join(repoRoot, "canonical", "agents");
 
 const preferredOrder = [
   "meta-warden",
@@ -68,13 +75,13 @@ function sortAgents(agents) {
 }
 
 async function loadAgents() {
-  const files = (await fs.readdir(canonicalAgentsDir))
+  const files = (await fs.readdir(packagedCanonicalAgentsDir))
     .filter((file) => metaAgentFilePattern.test(file))
     .sort();
 
   const agents = [];
   for (const file of files) {
-    const filePath = path.join(canonicalAgentsDir, file);
+    const filePath = path.join(packagedCanonicalAgentsDir, file);
     const raw = await fs.readFile(filePath, "utf8");
     const { data, body } = parseFrontmatter(raw, filePath);
     const title = body.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? data.name;
@@ -89,23 +96,66 @@ async function loadAgents() {
   return sortAgents(agents);
 }
 
-async function readUtf8IfExists(filePath, fallbackText) {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return fallbackText;
-  }
+async function loadRuntimeCapabilityMatrix(filePath) {
+  const raw = await readRequiredPackagedText(filePath, {
+    packageRoot: repoRoot,
+    label: "Meta_Kim runtime capability matrix",
+  });
+  const matrix = parseRuntimeCapabilityMatrix(raw, filePath);
+  return JSON.stringify(matrix, null, 2);
 }
 
-const FALLBACK_META_THEORY = `# Meta theory
+async function loadRuntimeCapabilityEvidence(filePath) {
+  const raw = await readRequiredPackagedText(filePath, {
+    packageRoot: repoRoot,
+    label: "Meta_Kim runtime capability evidence ledger",
+  });
+  return JSON.stringify(parseRuntimeCapabilityEvidenceLedger(raw, filePath), null, 2);
+}
 
-Use **CLAUDE.md**, **AGENTS.md**, \`canonical/skills/meta-theory/SKILL.md\`, and \`canonical/skills/meta-theory/references/meta-theory.md\` as the canonical Meta_Kim context.
-`;
-
-const FALLBACK_RUNTIME_MATRIX = `# Runtime capability matrix (stub)
-
-\`docs/runtime-capability-matrix.md\` is not present in this working tree. See **AGENTS.md** for Codex/OpenClaw mirrors and runtime sync commands (\`npm run meta:sync\`, \`npm run meta:validate\`).
-`;
+function currentEffectiveRuntimeCapabilities() {
+  const redact = (message) => String(message)
+    .replaceAll(repoRoot, "<package>")
+    .replaceAll(process.cwd(), "<cwd>")
+    .replace(/[A-Za-z]:[\\/][^\r\n;]+/gu, "<absolute>");
+  try {
+    const state = loadEffectiveRuntimeCapabilityClaims({
+      packageRoot: repoRoot,
+      projectRoot: process.env.META_KIM_CALLER_CWD || undefined,
+    });
+    const results = (state.overlayStatus?.applied ?? []).map((entry) => ({
+      ...entry,
+      evidenceClass: "advisory_persisted_observation",
+      observedInCurrentRun: false,
+      executionAuthority: false,
+    }));
+    const observed = new Set(results.map((entry) => `${entry.runtime}:${entry.capability}:${entry.mode}`));
+    const missing = standardRuntimeObservationSet().filter((entry) => !observed.has(`${entry.runtime}:${entry.capability}:${entry.mode}`));
+    return JSON.stringify({
+      matrix: state.effectiveMatrix,
+      overlayStatus: state.overlayStatus,
+      results,
+      missing,
+      evidenceClass: "advisory_persisted_observation",
+      observedInCurrentRun: false,
+      executionAuthority: false,
+      currentHostAdapter: "unavailable_over_mcp_resource_read",
+      issues: state.issues.map(redact),
+    }, null, 2);
+  } catch (error) {
+    return JSON.stringify({
+      matrix: null,
+      overlayStatus: { state: "blocked", applied: [], rejected: [] },
+      results: [],
+      missing: standardRuntimeObservationSet(),
+      evidenceClass: "advisory_persisted_observation",
+      observedInCurrentRun: false,
+      executionAuthority: false,
+      currentHostAdapter: "unavailable_over_mcp_resource_read",
+      ...runtimeCapabilityFailureDetails(error),
+    }, null, 2);
+  }
+}
 
 async function loadRuntimeData() {
   const agents = await loadAgents();
@@ -119,24 +169,40 @@ async function loadRuntimeData() {
   );
   const matrixPath = path.join(
     repoRoot,
-    "docs",
-    "runtime-capability-matrix.md",
+    "config",
+    "runtime-capability-matrix.json",
   );
-  const openclawSkillPath = path.join(
+  const evidencePath = path.join(repoRoot, "config", "runtime-capability-evidence.json");
+  const metaTheorySkillPath = path.join(
     repoRoot,
-    "openclaw",
+    "canonical",
     "skills",
     "meta-theory",
     "SKILL.md",
   );
 
-  const [metaTheory, runtimeMatrix, openclawSkill] = await Promise.all([
-    readUtf8IfExists(metaTheoryPath, FALLBACK_META_THEORY),
-    readUtf8IfExists(matrixPath, FALLBACK_RUNTIME_MATRIX),
-    readUtf8IfExists(openclawSkillPath, FALLBACK_META_THEORY),
+  const [metaTheoryRaw, runtimeMatrix, runtimeEvidence, metaTheorySkillRaw] = await Promise.all([
+    readRequiredPackagedText(metaTheoryPath, {
+      packageRoot: repoRoot,
+      label: "Meta_Kim theory reference",
+    }),
+    loadRuntimeCapabilityMatrix(matrixPath),
+    loadRuntimeCapabilityEvidence(evidencePath),
+    readRequiredPackagedText(metaTheorySkillPath, {
+      packageRoot: repoRoot,
+      label: "Meta_Kim skill definition",
+    }),
   ]);
 
-  return { agents, metaTheory, runtimeMatrix, openclawSkill };
+  const metaTheory = validateRequiredMarkdown(metaTheoryRaw, {
+    label: "Meta_Kim theory reference",
+  });
+  const metaTheorySkill = validateRequiredMarkdown(metaTheorySkillRaw, {
+    label: "Meta_Kim skill definition",
+    requireFrontmatter: true,
+    expectedFrontmatterName: "meta-theory",
+  });
+  return { agents, metaTheory, runtimeMatrix, runtimeEvidence, metaTheorySkill };
 }
 
 function jsonText(payload) {
@@ -225,24 +291,42 @@ async function runGovernedDispatch({ agent, scope, payload }) {
   });
 }
 
-const runtimeData = await loadRuntimeData();
+async function writeSelfTestOutput(text) {
+  // A fresh matrix is larger than a pipe buffer. Wait for the write callback
+  // before exit so a successful self-test cannot emit truncated JSON.
+  await new Promise((resolve, reject) => {
+    process.stdout.write(text, (error) => error ? reject(error) : resolve());
+  });
+}
+
+if (process.argv.includes("--effective-runtime-self-test")) {
+  await writeSelfTestOutput(`${currentEffectiveRuntimeCapabilities()}\n`);
+  process.exit(0);
+}
 
 if (process.argv.includes("--self-test")) {
-  process.stdout.write(
+  const agents = await loadAgents();
+  await writeSelfTestOutput(
     `${JSON.stringify(
       {
         ok: true,
-        agentCount: runtimeData.agents.length,
-        agentIds: runtimeData.agents.map((agent) => agent.id),
+        agentCount: agents.length,
+        agentIds: agents.map((agent) => agent.id),
+        agentSources: agents.map((agent) => agent.sourceFile),
         resources: [
           "meta://theory",
           "meta://runtime-matrix",
+          "meta://runtime-evidence",
+          "meta://runtime-effective",
           "meta://skill/meta-theory",
         ],
         tools: [
+          "calculate_materials",
           "list_meta_agents",
           "get_meta_agent",
           "get_meta_runtime_capabilities",
+          "get_meta_runtime_evidence",
+          "get_meta_effective_runtime_capabilities",
           "dispatch_meta_agent",
         ],
       },
@@ -252,6 +336,13 @@ if (process.argv.includes("--self-test")) {
   );
   process.exit(0);
 }
+
+const runtimeData = await loadRuntimeData();
+const [{ McpServer }, { StdioServerTransport }, { z }] = await Promise.all([
+  import("@modelcontextprotocol/sdk/server/mcp.js"),
+  import("@modelcontextprotocol/sdk/server/stdio.js"),
+  import("zod"),
+]);
 
 const server = new McpServer({
   name: "meta-kim-runtime",
@@ -306,10 +397,44 @@ server.registerResource(
       {
         uri: "meta://skill/meta-theory",
         mimeType: "text/markdown",
-        text: runtimeData.openclawSkill,
+        text: runtimeData.metaTheorySkill,
       },
     ],
   }),
+);
+
+server.registerResource(
+  "runtime-evidence",
+  "meta://runtime-evidence",
+  { description: "Canonical static runtime observation ledger", mimeType: "application/json" },
+  async () => ({ contents: [{ uri: "meta://runtime-evidence", mimeType: "application/json", text: runtimeData.runtimeEvidence }] }),
+);
+
+server.registerResource(
+  "runtime-effective",
+  "meta://runtime-effective",
+  { description: "Profile-local effective runtime capability status", mimeType: "application/json" },
+  async () => ({ contents: [{ uri: "meta://runtime-effective", mimeType: "application/json", text: currentEffectiveRuntimeCapabilities() }] }),
+);
+
+server.registerTool(
+  "calculate_materials",
+  {
+    description: "按用户原始需求、明确提供的 JSON 材料和当前宿主对已发现合同的 methodAssessment，通过既有 Meta 路由调用已审核的外部只读计算能力。选择须绑定原始任务、当前来源摘要和实际运行时；缺失或过期时停止，不按关键词自动选择。输入字段、材料上限、专业结果校验、补问与报告由所选能力合同提供。不授予外部行动权限，不声称原生 Agent 或模型语义验收。",
+    inputSchema: { task: z.string().min(1).max(6000), inputJson: z.string().max(262144),
+      dependencyRoot: z.string().optional(),
+      methodAssessment: z.object({ schemaVersion: z.literal(1), runtime: z.enum(["codex", "claude", "claude_code", "cursor", "openclaw"]),
+        taskHash: z.string().regex(/^[a-f0-9]{64}$/u), agentId: z.string().min(1).max(200),
+        contentDigest: z.string().regex(/^[a-f0-9]{64}$/u), componentContentSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+        operation: z.string().min(1).max(6000), deliverable: z.string().min(1).max(6000),
+        fitRationale: z.string().min(1).max(4000), nonGoals: z.array(z.string().min(1).max(1000)).max(32),
+        evidenceRefs: z.array(z.string().min(1).max(2048)).min(1).max(32),
+      }).strict().optional() },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async (args) => ({ content: [{ type: "text", text: JSON.stringify(await runDependencyCalculation({
+    ...args, runtime: process.env.META_KIM_RUNTIME_FAMILY,
+  })) }] }),
 );
 
 server.registerTool(
@@ -392,8 +517,7 @@ server.registerTool(
 server.registerTool(
   "get_meta_runtime_capabilities",
   {
-    description:
-      "Return the runtime capability matrix for Claude Code, OpenClaw, and Codex.",
+    description: "Return the canonical Meta_Kim runtime capability matrix.",
     inputSchema: {},
   },
   async () => ({
@@ -404,6 +528,18 @@ server.registerTool(
       },
     ],
   }),
+);
+
+server.registerTool(
+  "get_meta_runtime_evidence",
+  { description: "Return the canonical static runtime observation ledger.", inputSchema: {} },
+  async () => ({ content: [{ type: "text", text: runtimeData.runtimeEvidence }] }),
+);
+
+server.registerTool(
+  "get_meta_effective_runtime_capabilities",
+  { description: "Return profile-local advisory runtime observations. This read-only MCP result never grants current-run execution authority.", inputSchema: {} },
+  async () => ({ content: [{ type: "text", text: currentEffectiveRuntimeCapabilities() }] }),
 );
 
 server.registerTool(

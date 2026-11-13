@@ -1,10 +1,15 @@
+import { ENTRY_CLASSIFIER_HOOK_FILES } from "./runtime-hook-mapping.mjs";
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import {
   buildMetaKimHooksTemplate,
+  hookCommandNode,
   mergeGlobalMetaKimHooksIntoSettings,
   mergeRepoClaudeSettings,
+  stripRepoMetaKimHooksFromSettings,
 } from "./claude-settings-merge.mjs";
 import {
   buildCodexHooksJson,
@@ -12,8 +17,11 @@ import {
   buildHookPromptAdapterSource,
   hookCommand,
   nodeHookCommand,
+  runtimeHookSourceOwner,
+  SHARED_RUNTIME_HOOK_FILES,
 } from "./runtime-hook-mapping.mjs";
 import { ensureCodexAppNativeControls } from "./codex-config-merge.mjs";
+import { OPENCLAW_WORKSPACE_FILE_NAMES } from "./openclaw-workspace-projection.mjs";
 import {
   canonicalAgentsDir,
   canonicalCapabilityIndexDir,
@@ -21,6 +29,9 @@ import {
   canonicalSkillsDir,
   canonicalSkillPath,
   canonicalSkillReferencesDir,
+  GLOBAL_PROJECTION_OWNER_SYNC_RUNTIMES,
+  globalAgentProjectionFileName,
+  globalProjectionIsOwnedBy,
   repoRoot,
   resolveTargetContext,
   parseScopeArg,
@@ -30,8 +41,26 @@ import {
   resolveRuntimeHomeDir,
 } from "./meta-kim-sync-config.mjs";
 import { t } from "./meta-kim-i18n.mjs";
-import { CATEGORIES, openRecorder } from "./install-manifest.mjs";
+import {
+  CATEGORIES,
+  manifestFileEntryMatches,
+  manifestPathFor,
+  openRecorder,
+  readManifest,
+} from "./install-manifest.mjs";
 import { validateSkillFrontmatter } from "./install-skill-sanitizer.mjs";
+import {
+  collectProtectedProjectCapabilityPaths,
+  loadProjectCapabilityOwnershipPolicy,
+  loadProtectedProjectCapabilityPaths,
+} from "./project-capability-ownership.mjs";
+import { inspectTrustedPath, executeSafeManagedFileTransaction } from "./safe-managed-file-operations.mjs";
+import { metaKimMcpRuntimeEnvironment } from "./global-runtime-mcp.mjs";
+import { main as refreshRuntimeEvidencePinsCli } from "./refresh-runtime-evidence-pins.mjs";
+import {
+  applyNativeSkillPaths, buildPortableSkillContent, buildNativeRuntimeAgent, NATIVE_PROJECTION_RUNTIME_IDS,
+  invertNativeJsonMutations, planNativeRuntimeSettings,
+} from "./native-runtime-projection.mjs";
 
 const cliArgs = process.argv.slice(2);
 const checkOnly = process.argv.includes("--check");
@@ -39,12 +68,194 @@ const jsonMode = process.argv.includes("--json");
 const reverseMode = process.argv.includes("--reverse");
 const dryRun = process.argv.includes("--dry-run");
 const forceWrite = process.argv.includes("--force");
+const applyReverseWriteback = process.argv.includes("--apply");
+const refreshSourcePins = cliArgs.includes("--refresh-source-pins");
+const reverseApprovalArgIndex = cliArgs.indexOf("--approval");
+const reverseApprovalPath = reverseApprovalArgIndex >= 0
+  ? cliArgs[reverseApprovalArgIndex + 1]
+  : null;
+const reverseCandidateOutputArgIndex = cliArgs.indexOf("--candidate-output");
+const reverseCandidateOutputPath = reverseCandidateOutputArgIndex >= 0
+  ? cliArgs[reverseCandidateOutputArgIndex + 1]
+  : null;
 const PROJECT_RUNTIME_SKILL_IDS = new Set(["meta-theory"]);
+
+function sha256Binding(value) {
+  return `sha256:${createHash("sha256").update(String(value), "utf8").digest("hex")}`;
+}
+
+function canonicalTargetRef(filePath) {
+  return path.relative(repoRoot, filePath).replace(/\\/gu, "/");
+}
+
+export function buildReverseSyncMutationCandidate(signal) {
+  const targetRef = canonicalTargetRef(signal.canonicalPath);
+  const operation = signal.type === "new" ? "create" : "replace";
+  const expectedSourceDigest = sha256Binding(
+    signal.canonicalContent ?? "__META_KIM_MISSING_CANONICAL_SOURCE__",
+  );
+  const candidateDigest = sha256Binding(signal.runtimeContent);
+  const rollbackPlanDigest = sha256Binding(JSON.stringify({
+    operation: "restore_exact_prior_bytes",
+    targetRef,
+    expectedSourceDigest,
+  }));
+  const transitionId = sha256Binding(JSON.stringify({
+    targetRef,
+    operation,
+    candidateDigest,
+    expectedSourceDigest,
+  }));
+  return {
+    targetRef,
+    operation,
+    transitionId,
+    candidateDigest,
+    expectedSourceDigest,
+    rollbackPlanDigest,
+  };
+}
+
+export function buildReverseSyncCandidateArtifact(mutationCandidates) {
+  return {
+    schemaVersion: "reverse-sync-candidate-v1",
+    scope: "canonical_reverse_sync",
+    mutationCandidates: mutationCandidates.map((candidate) => ({ ...candidate })),
+    approvalPacketTemplate: {
+      schemaVersion: "warden-approval-v0.2",
+      approvalId: "replace-with-review-id",
+      approver: "meta-warden",
+      approvedAt: "replace-with-canonical-ISO-timestamp",
+      scope: "canonical_reverse_sync",
+      mutationBindings: mutationCandidates.map((candidate) => ({ ...candidate })),
+      diffSummary: "replace-with-reviewed-diff-summary",
+      rollbackPlan: { strategy: "restore_exact_prior_bytes" },
+      riskReview: {
+        status: "not_evaluated",
+        owner: "meta-sentinel",
+        // These are reviewer-reported assessments bound by the same approval;
+        // an evidence reference alone is never a claim that its contents were verified.
+        qualityChecks: Object.fromEntries(Object.entries({
+          fiveCriteria: ["independent", "smallEnough", "clearBoundaries", "replaceable", "reusable"],
+          prinSt: ["prinSt01", "prinSt02", "prinSt03", "prinSt04", "prinSt05"],
+          recursiveRisk: ["circularDependency", "transitiveOverflow", "thresholdGaming", "identityDrift"],
+        }).map(([section, names]) => [section, Object.fromEntries(names.map((name) => [name, {
+          verdict: "not_evaluated", reason: "", evidenceRefs: [],
+        }]))])),
+      },
+    },
+  };
+}
+
+async function readReverseSyncCanonicalContent(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "__META_KIM_MISSING_CANONICAL_SOURCE__";
+    throw error;
+  }
+}
+
+async function writeReverseSyncBytesAtomically(filePath, content) {
+  const tempPath = `${filePath}.meta-kim-restore-${process.pid}-${Date.now()}.tmp`;
+  let handle;
+  try {
+    handle = await fs.open(tempPath, "wx", 0o600);
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await fs.rename(tempPath, filePath);
+  } finally {
+    await handle?.close().catch(() => {});
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+  }
+}
+
+export async function rollbackReverseSyncPriorStates(priorStates, { faultInjector = null } = {}) {
+  const rollbackErrors = [];
+  for (const prior of [...priorStates].reverse()) {
+    try {
+      await faultInjector?.(prior);
+      if (prior.priorContent === null) {
+        await fs.rm(prior.path, { force: true });
+      } else {
+        await writeReverseSyncBytesAtomically(prior.path, prior.priorContent);
+      }
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+  }
+  if (rollbackErrors.length > 0) {
+    throw new AggregateError(rollbackErrors, "Reverse sync rollback could not restore every prior state");
+  }
+}
+
+export async function assertReverseSyncSourcePrestate(signal, candidate) {
+  const content = await readReverseSyncCanonicalContent(signal.canonicalPath);
+  if (sha256Binding(content) !== candidate.expectedSourceDigest) {
+    throw new Error(`Canonical source changed after approval candidate creation: ${candidate.targetRef}`);
+  }
+  return content === "__META_KIM_MISSING_CANONICAL_SOURCE__" ? null : content;
+}
+
+export function parseGlobalAssetTypesArg(
+  argv,
+  profiles,
+  targetIds = Object.keys(profiles ?? {}),
+) {
+  const values = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const current = argv[index];
+    if (current === "--global-assets") {
+      if (!argv[index + 1]) {
+        throw new Error("--global-assets requires a comma-separated value");
+      }
+      values.push(argv[index + 1]);
+      index += 1;
+    } else if (current.startsWith("--global-assets=")) {
+      values.push(current.slice("--global-assets=".length));
+    }
+  }
+  if (values.length === 0) return null;
+  const known = new Set(
+    targetIds.flatMap((targetId) => profiles[targetId]?.projection?.assetTypes ?? []),
+  );
+  const requested = [
+    ...new Set(
+      values
+        .join(",")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (requested.length === 0) {
+    throw new Error("--global-assets must select at least one asset type");
+  }
+  for (const assetType of requested) {
+    if (!known.has(assetType)) {
+      throw new Error(
+        `Unknown global asset type ${assetType}; expected one of ${[...known].sort().join(", ")}`,
+      );
+    }
+  }
+  return new Set(requested);
+}
 
 // Captures "will be written" entries whenever writeGeneratedFile runs under
 // --check. Populated even when not in --json mode so callers get deterministic
 // planning data; consumers just ignore it when they do not need it.
 const staleFiles = [];
+let canonicalAgentsForGlobalOnly = [];
+
+function assertSafeRepoProjectionPath(filePath, { allowMissing = true } = {}) {
+  if (!isRepoLocalPath(filePath)) return;
+  const relPath = path.relative(repoRoot, filePath).replace(/\\/gu, "/");
+  if (!inspectTrustedPath(repoRoot, relPath, { allowMissing })) {
+    throw new Error(`Refusing to follow a project symlink or Junction: ${relPath}`);
+  }
+}
 
 const SOURCE_REPO_PROJECT_PROJECTION_MARKERS = [
   ".claude/agents",
@@ -64,6 +275,17 @@ const SOURCE_REPO_PROJECT_PROJECTION_MARKERS = [
   ".codex/skills",
   ".cursor/agents",
   ".cursor/capability-index",
+  ".gemini/agents",
+  ".gemini/skills",
+  ".gemini/commands",
+  ".gemini/hooks",
+  ".gemini/settings.json",
+  ".gemini/capability-index",
+  ".zcode/agents",
+  ".zcode/skills",
+  ".zcode/commands",
+  ".zcode/config.json",
+  ".zcode/capability-index",
   ".cursor/hooks",
   ".cursor/hooks.json",
   ".cursor/mcp.json",
@@ -177,15 +399,89 @@ async function expectedSourceRepoProjectProjectionAbsence(scope, staleRecords) {
 // Recorder is lazily opened in main() when scope includes "project" so every
 // write point (writeGeneratedFile / writeGeneratedJson) can record through
 // this shared holder without plumbing a recorder arg through every build fn.
-// Failures are swallowed — a manifest glitch must never break sync itself.
+// Recorder failures are surfaced by flush() so sync cannot claim success with
+// incomplete ownership metadata.
 let manifestRecorder = null;
+let projectManifestAtStart = null;
+let runtimeSedimentedProjectPaths = new Set();
+let manifestScope = null;
+let syncScopeForWritePlan = null;
+let globalProjectionRecordDescriptors = [];
+let runtimeProfilesForSync = {};
+let requestedGlobalAssetTypes = null;
 function recordSafe(fn) {
   if (!manifestRecorder) return;
+  fn(manifestRecorder);
+}
+
+function protectedProjectPathKey(filePath) {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function collectRuntimeSedimentedProjectPaths(
+  manifest,
+  rootDir = repoRoot,
+  configRoot = repoRoot,
+) {
+  const policy = loadProjectCapabilityOwnershipPolicy(configRoot);
+  const protectedPaths = collectProtectedProjectCapabilityPaths(manifest, rootDir, policy);
+  // Preserve the historical Set API while carrying Skill-directory roots for
+  // descendant write/delete protection.
+  protectedPaths.absolutePaths.absoluteRoots = protectedPaths.absoluteRoots;
+  return protectedPaths.absolutePaths;
+}
+
+async function loadRuntimeSedimentedProjectPaths(rootDir = repoRoot) {
   try {
-    fn(manifestRecorder);
-  } catch {
-    /* recorder never breaks sync */
+    const protectedPaths = loadProtectedProjectCapabilityPaths(rootDir, repoRoot);
+    protectedPaths.absolutePaths.absoluteRoots = protectedPaths.absoluteRoots;
+    return protectedPaths.absolutePaths;
+  } catch (error) {
+    throw new Error(`Cannot safely read project capability ownership: ${error.message}`);
   }
+}
+
+export function isRuntimeSedimentedProjectPath(
+  filePath,
+  protectedPaths = runtimeSedimentedProjectPaths,
+) {
+  const key = protectedProjectPathKey(filePath);
+  if (protectedPaths.has(key)) return true;
+  for (const root of protectedPaths.absoluteRoots ?? []) {
+    const rel = path.relative(root, path.resolve(filePath));
+    if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return true;
+  }
+  return false;
+}
+
+function forgetRecordedPath(filePath) {
+  if (!manifestRecorder) return;
+  manifestRecorder.forget(filePath);
+}
+
+function exactSyncOwnershipEntry(filePath, installManifest = projectManifestAtStart) {
+  const normalized = protectedProjectPathKey(filePath);
+  return (installManifest?.entries ?? []).find(
+    (entry) =>
+      entry.source === "sync-runtimes" &&
+      entry.kind === "file" &&
+      protectedProjectPathKey(entry.path) === normalized,
+  ) ?? null;
+}
+
+export function inspectProjectProjectionOwnership(
+  filePath,
+  installManifest = projectManifestAtStart,
+  protectedPaths = runtimeSedimentedProjectPaths,
+) {
+  if (isRuntimeSedimentedProjectPath(filePath, protectedPaths)) {
+    return { preserve: true, reason: "runtime_sedimented_project_copy", entry: null };
+  }
+  const entry = exactSyncOwnershipEntry(filePath, installManifest);
+  return entry
+    ? { preserve: false, reason: "install_projection", entry }
+    : { preserve: true, reason: "not_manifest_owned", entry: null };
 }
 
 /**
@@ -219,14 +515,14 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
     rel.startsWith(".claude/hooks/") ||
     rel.startsWith(".codex/hooks/") ||
     rel.startsWith(".cursor/hooks/") ||
-    rel.startsWith("openclaw/hooks/")
+    rel.startsWith("openclaw/hooks/") || rel.startsWith(".gemini/hooks/") || rel.startsWith(".zcode/hooks/")
   ) {
     return CATEGORIES.E;
   }
   if (
     rel.startsWith(".claude/agents/") ||
     rel.startsWith(".codex/agents/") ||
-    rel.startsWith(".cursor/agents/")
+    rel.startsWith(".cursor/agents/") || rel.startsWith(".gemini/agents/") || rel.startsWith(".zcode/agents/")
   ) {
     return CATEGORIES.F;
   }
@@ -235,7 +531,7 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
     rel.startsWith(".agents/skills/") ||
     rel.startsWith(".cursor/skills/") ||
     rel.startsWith("openclaw/skills/") ||
-    rel.startsWith("openclaw/workspaces/")
+    rel.startsWith("openclaw/workspaces/") || rel.startsWith(".zcode/skills/")
   ) {
     return CATEGORIES.D;
   }
@@ -248,6 +544,7 @@ export function inferProjectCategory(filePath, rootDir = repoRoot) {
   ) {
     return CATEGORIES.G;
   }
+  if (rel.startsWith(".gemini/") || rel.startsWith(".zcode/")) return CATEGORIES.G;
   if (
     rel === "openclaw/openclaw.template.json" ||
     (rel.startsWith(".codex/") && !rel.startsWith(".codex/skills/"))
@@ -272,6 +569,147 @@ export function inferProjectPurpose(category) {
   }
 }
 
+export function inferProjectRuntimeTarget(filePath, rootDir = repoRoot) {
+  if (typeof filePath !== "string" || !filePath) return null;
+  const rel = path.relative(rootDir, filePath).replace(/\\/g, "/");
+  if (rel.startsWith(".claude/") || rel === ".mcp.json") return "claude";
+  if (rel.startsWith(".codex/") || rel.startsWith(".agents/") || rel.startsWith("codex/")) return "codex";
+  if (rel.startsWith(".cursor/")) return "cursor";
+  if (rel.startsWith(".gemini/")) return "gemini";
+  if (rel.startsWith(".zcode/")) return "zcode";
+  if (rel.startsWith("openclaw/")) return "openclaw";
+  return null;
+}
+
+function isPathAtOrWithin(rootPath, candidatePath) {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+  return relative === "" || (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+function globalProjectionAssetType(assetKey) {
+  const normalized = assetKey.toLowerCase();
+  if (normalized.includes("capabilityindex")) return "capabilityIndex";
+  if (normalized.includes("workspace")) return "workspaces";
+  if (normalized.includes("agent")) return "agents";
+  if (normalized.includes("skill")) return "skills";
+  if (normalized.includes("hook")) return "hooks";
+  if (normalized.includes("command")) return "commands";
+  if (normalized.includes("rule")) return "rules";
+  if (normalized.includes("mcp")) return "mcp";
+  if (
+    normalized.includes("config") ||
+    normalized.includes("settings") ||
+    normalized.includes("template")
+  ) {
+    return "config";
+  }
+  return null;
+}
+
+function globalProjectionCategory(assetType) {
+  if (assetType === "hooks") return CATEGORIES.B;
+  if (["config", "mcp"].includes(assetType)) {
+    return CATEGORIES.C;
+  }
+  return CATEGORIES.A;
+}
+
+function buildGlobalProjectionRecordDescriptors(targetIds) {
+  const descriptors = [];
+  for (const targetId of targetIds) {
+    const profile = runtimeProfilesForSync[targetId];
+    if (!profile) {
+      throw new Error(`Missing runtime profile for global write plan: ${targetId}`);
+    }
+    const projection = resolveRuntimeProjection(targetId, "global");
+    for (const [assetKey, assetPath] of Object.entries(projection)) {
+      if (
+        ["runtimeId", "scope", "baseDir", "display"].includes(assetKey) ||
+        typeof assetPath !== "string"
+      ) {
+        continue;
+      }
+      const assetType = globalProjectionAssetType(assetKey);
+      if (!assetType || !profile.projection.assetTypes.includes(assetType)) {
+        continue;
+      }
+      descriptors.push({
+        targetId,
+        assetKey,
+        assetType,
+        rootPath: assetPath,
+        category: globalProjectionCategory(assetType),
+        owner: profile.projection.globalAssetOwners[assetType],
+      });
+    }
+  }
+  return descriptors.sort((left, right) =>
+    right.rootPath.length - left.rootPath.length
+  );
+}
+
+function inferGlobalProjectionRecord(filePath) {
+  const descriptor = globalProjectionRecordDescriptors.find(({ rootPath }) =>
+    isPathAtOrWithin(rootPath, filePath)
+  );
+  if (!descriptor) return null;
+  return {
+    category: descriptor.category,
+    purpose: `${descriptor.targetId}-global-${descriptor.assetKey}`,
+    runtimeTarget: descriptor.targetId,
+    assetType: descriptor.assetType,
+    owner: descriptor.owner,
+  };
+}
+
+function runtimeHasSyncOwnedGlobalAssets(targetId, ignoredAssetTypes = []) {
+  const profile = runtimeProfilesForSync[targetId];
+  if (!profile) return false;
+  const ignored = new Set(ignoredAssetTypes);
+  return profile.projection.assetTypes.some(
+    (assetType) =>
+      !ignored.has(assetType) &&
+      (
+        requestedGlobalAssetTypes === null ||
+        requestedGlobalAssetTypes.has(assetType)
+      ) &&
+      globalProjectionIsOwnedBy(
+        profile,
+        assetType,
+        GLOBAL_PROJECTION_OWNER_SYNC_RUNTIMES,
+      ),
+  );
+}
+
+function shouldSyncRuntimeAsset(targetId, assetType, scope) {
+  if (scope !== "global") return true;
+  const profile = runtimeProfilesForSync[targetId];
+  return Boolean(
+    profile &&
+    profile.projection.assetTypes.includes(assetType) &&
+    (
+      requestedGlobalAssetTypes === null ||
+      requestedGlobalAssetTypes.has(assetType)
+    ) &&
+    globalProjectionIsOwnedBy(
+      profile,
+      assetType,
+      GLOBAL_PROJECTION_OWNER_SYNC_RUNTIMES,
+    )
+  );
+}
+
+function shouldRunRuntimeProjectionBranch(targetId, scope) {
+  return (
+    scope !== "global" ||
+    runtimeHasSyncOwnedGlobalAssets(targetId, ["capabilityIndex"])
+  );
+}
+
 /**
  * Safely read a canonical source file. Returns null if the file is missing
  * (e.g. when running via npx with a stale or incomplete cached package).
@@ -285,26 +723,31 @@ async function tryReadCanonical(filePath) {
   }
 }
 
-async function canonicalGlobalHookSource(fileName) {
-  for (const baseDir of [
-    path.join(canonicalRuntimeAssetsDir, "claude", "hooks"),
-    path.join(canonicalRuntimeAssetsDir, "shared", "hooks"),
-  ]) {
-    const sourcePath = path.join(baseDir, fileName);
-    try {
-      await fs.access(sourcePath);
-      return sourcePath;
-    } catch {
-      // try the next canonical hook source dir
-    }
+async function canonicalGlobalHookSource(fileName, runtimeId) {
+  const sharedHooksDir = path.join(canonicalRuntimeAssetsDir, "shared", "hooks");
+  const claudeHooksDir = path.join(canonicalRuntimeAssetsDir, "claude", "hooks");
+  const owner = runtimeHookSourceOwner(runtimeId, fileName);
+  if (!owner) return null;
+  const sourcePath = path.join(
+    owner === "shared" ? sharedHooksDir : claudeHooksDir,
+    fileName,
+  );
+  try {
+    await fs.access(sourcePath);
+    return sourcePath;
+  } catch {
+    return null;
   }
-  return null;
 }
 
-async function syncGlobalHookPackage(targetDir, displayDir, changedFiles) {
+async function syncGlobalHookPackage(targetDir, displayDir, changedFiles, runtimeId) {
   for (const fileName of GLOBAL_META_KIM_HOOK_PACKAGE_FILES) {
-    const sourcePath = await canonicalGlobalHookSource(fileName);
-    if (!sourcePath) continue;
+    const sourcePath = await canonicalGlobalHookSource(fileName, runtimeId);
+    if (!sourcePath) {
+      throw new Error(
+        `Missing canonical Hook source for ${runtimeId}:${fileName}`,
+      );
+    }
     const content = await fs.readFile(sourcePath, "utf8");
     if (
       (
@@ -625,67 +1068,10 @@ async function executeReverseSync(dirs, selectedTargets) {
 
   if (allSignals.length === 0) {
     console.log(t.reverseModeNoSignals);
-    return [];
+    return { signals: [], applied: false, canonicalWrites: 0 };
   }
 
   console.log(t.reverseModeSignalsFound(allSignals.length));
-  console.log("");
-
-  // Import gate functions for validation
-  const {
-    processEvolutionPacket
-  } = await import("./evolution-writeback-gate.mjs");
-
-  // Build evolution packet from signals
-  const evolutionPacket = {
-    writebackDecision: "writeback",
-    writebacks: allSignals.map(s => s.canonicalPath),
-    retain: [],
-    upgrade: [],
-    retire: [],
-    scarIds: [],
-    syncRequired: true,
-    signalSummary: {
-      totalSignals: allSignals.length,
-      byType: allSignals.reduce((acc, s) => {
-        acc[s.type] = (acc[s.type] || 0) + 1;
-        return acc;
-      }, {}),
-      bySeverity: allSignals.reduce((acc, s) => {
-        acc[s.severity] = (acc[s.severity] || 0) + 1;
-        return acc;
-      }, {})
-    }
-  };
-
-  // Pass through Evolution Writeback Gate
-  console.log("[Gate] Passing signals through Evolution Writeback Gate...");
-  const gateResult = await processEvolutionPacket(evolutionPacket, {
-    force: forceWrite,
-    dryRun: dryRun
-  });
-
-  console.log(`[Gate] Decision: ${gateResult.decision}`);
-  console.log(`[Gate] Risk Level: ${gateResult.riskLevel}`);
-  console.log(`[Gate] Reason: ${gateResult.reason}`);
-
-  // If gate rejects, stop here
-  if (gateResult.decision === "reject") {
-    console.log("");
-    console.error(`[Gate] Rejected: ${gateResult.reason}`);
-    throw new Error(`Evolution writeback rejected: ${gateResult.reason}`);
-  }
-
-  // If gate defers (needs user confirmation), stop unless --force
-  if (gateResult.decision === "defer" && !forceWrite) {
-    console.log("");
-    console.log("[Gate] User confirmation required");
-    console.log("Use --force to proceed anyway.");
-    throw new Error("Evolution writeback deferred: user confirmation required");
-  }
-
-  console.log("");
-  console.log("[Gate] Approved - proceeding with writeback");
   console.log("");
 
   // Categorize signals
@@ -725,7 +1111,7 @@ async function executeReverseSync(dirs, selectedTargets) {
       // In non-interactive context, abort on conflict
       console.error(t.reverseModeAborted);
       process.exitCode = 1;
-      return allSignals;
+      return { signals: allSignals, applied: false, canonicalWrites: 0 };
     }
 
     if (forceWrite) {
@@ -744,26 +1130,122 @@ async function executeReverseSync(dirs, selectedTargets) {
     }
   }
 
-  // Dry run: show what would be written
-  if (dryRun) {
+  // `--force` controls only already-approved conflict handling. It never
+  // creates, widens, or substitutes for Warden approval.
+  const toWrite = forceWrite ? [...safeWrites, ...conflicts] : safeWrites;
+  const mutationCandidates = toWrite.map(buildReverseSyncMutationCandidate);
+  const candidateArtifact = buildReverseSyncCandidateArtifact(mutationCandidates);
+  if (reverseCandidateOutputPath) {
+    const outputPath = path.resolve(reverseCandidateOutputPath);
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, `${JSON.stringify(candidateArtifact, null, 2)}\n`, "utf8");
+    console.log(`[ReverseSyncCandidate] ${outputPath}`);
+  }
+  if (jsonMode) {
+    console.log(`[ReverseSyncCandidateJSON] ${JSON.stringify(candidateArtifact)}`);
+  }
+  const approvalPacket = reverseApprovalPath
+    ? JSON.parse(await fs.readFile(path.resolve(reverseApprovalPath), "utf8"))
+    : null;
+
+  const { processEvolutionPacket } = await import("./evolution-writeback-gate.mjs");
+  const evolutionPacket = {
+    writebackDecision: "writeback",
+    decisionReason: "Runtime projection changes are lifecycle candidates until Warden approval is exact-bound",
+    writebacks: toWrite.map((signal) => signal.canonicalPath),
+    mutationCandidates,
+    retain: [],
+    upgrade: [],
+    retire: [],
+    scarIds: [],
+    syncRequired: true,
+    signalSummary: {
+      totalSignals: toWrite.length,
+      byType: toWrite.reduce((acc, signal) => {
+        acc[signal.type] = (acc[signal.type] || 0) + 1;
+        return acc;
+      }, {}),
+      bySeverity: toWrite.reduce((acc, signal) => {
+        acc[signal.severity] = (acc[signal.severity] || 0) + 1;
+        return acc;
+      }, {}),
+    },
+  };
+
+  console.log("[Gate] Passing exact-bound candidates through Evolution Writeback Gate...");
+  const gateResult = await processEvolutionPacket(evolutionPacket, {
+    force: forceWrite,
+    dryRun,
+    apply: applyReverseWriteback,
+    approvalPacket,
+    mutationCandidates,
+    requiredApprovalScope: "canonical_reverse_sync",
+  });
+  console.log(`[Gate] Decision: ${gateResult.decision}`);
+  console.log(`[Gate] Risk Level: ${gateResult.riskLevel}`);
+  console.log(`[Gate] Reason: ${gateResult.reason}`);
+
+  if (gateResult.decision === "reject") {
+    throw new Error(`Evolution writeback rejected: ${gateResult.reason}`);
+  }
+  if (gateResult.decision === "defer" || gateResult.decision === "escalate") {
+    throw new Error(`Evolution writeback ${gateResult.decision}: ${gateResult.reason}`);
+  }
+  if (dryRun || gateResult.decision !== "approve" || !applyReverseWriteback) {
     console.log("");
-    console.log(t.reverseModeDryRun);
-    return allSignals;
+    console.log(
+      dryRun
+        ? t.reverseModeDryRun
+        : "Candidate collection complete: canonicalWrites=0. Supply --approval <file> --apply after Warden review.",
+    );
+    return {
+      signals: allSignals,
+      mutationCandidates,
+      candidateArtifact,
+      applied: false,
+      canonicalWrites: 0,
+    };
   }
 
-  // Perform writeback for safe writes and forced conflicts
-  const toWrite = forceWrite ? [...safeWrites, ...conflicts] : safeWrites;
-  const writtenFiles = [];
+  // Re-read every canonical source before the first write. Approval binds the
+  // exact pre-state, so a concurrent/user edit invalidates the whole batch.
+  for (let index = 0; index < toWrite.length; index += 1) {
+    const signal = toWrite[index];
+    await assertReverseSyncSourcePrestate(signal, mutationCandidates[index]);
+  }
 
-  for (const signal of toWrite) {
-    try {
+  const writtenFiles = [];
+  const priorStates = [];
+
+  try {
+    for (let index = 0; index < toWrite.length; index += 1) {
+      const signal = toWrite[index];
+      const priorContent = await assertReverseSyncSourcePrestate(signal, mutationCandidates[index]);
+      priorStates.push({ path: signal.canonicalPath, priorContent });
       await ensureDir(path.dirname(signal.canonicalPath));
-      await fs.writeFile(signal.canonicalPath, signal.runtimeContent, "utf8");
+      const tempPath = `${signal.canonicalPath}.meta-kim-writeback-${process.pid}.tmp`;
+      try {
+        await fs.writeFile(tempPath, signal.runtimeContent, "utf8");
+        // The approval pre-state is rechecked immediately before each atomic
+        // rename, after the replacement bytes are fully materialized.
+        await assertReverseSyncSourcePrestate(signal, mutationCandidates[index]);
+        await fs.rename(tempPath, signal.canonicalPath);
+      } finally {
+        await fs.rm(tempPath, { force: true });
+      }
       console.log(`  [writeback] ${signal.displayPath} -> canonical/${path.relative(repoRoot, signal.canonicalPath)}`);
       writtenFiles.push(signal.canonicalPath);
-    } catch (error) {
-      console.error(t.reverseModeWriteFailed(signal.displayPath, error.message));
     }
+  } catch (error) {
+    try {
+      await rollbackReverseSyncPriorStates(priorStates);
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, ...rollbackError.errors],
+        "Reverse sync batch failed and rollback could not restore every prior state",
+      );
+    }
+    throw new Error(`Reverse sync batch rolled back: ${error.message}`);
   }
 
   if (writtenFiles.length > 0) {
@@ -771,7 +1253,13 @@ async function executeReverseSync(dirs, selectedTargets) {
     console.log(t.reverseModeComplete(writtenFiles.length));
   }
 
-  return allSignals;
+  return {
+    signals: allSignals,
+    mutationCandidates,
+    candidateArtifact,
+    applied: writtenFiles.length > 0,
+    canonicalWrites: writtenFiles.length,
+  };
 }
 
 /**
@@ -919,6 +1407,12 @@ const canonicalSharedSpineHookPath = path.join(
   "hooks",
   "activate-meta-theory-spine.mjs",
 );
+const canonicalSharedProjectRootHookPath = path.join(
+  canonicalRuntimeAssetsDir,
+  "shared",
+  "hooks",
+  "project-root.mjs",
+);
 const canonicalClaudeEnforceDispatchHookPath = path.join(
   canonicalRuntimeAssetsDir,
   "claude",
@@ -953,14 +1447,20 @@ const canonicalOpenClawStopSaveProgressHookPath = path.join(
   "hooks",
   "stop-save-progress.mjs",
 );
-const canonicalSharedMemorySaveHookPath = path.join(
-  canonicalRuntimeAssetsDir,
-  "shared",
-  "hooks",
-  "meta-kim-memory-save.mjs",
-);
 const GLOBAL_META_KIM_HOOK_PACKAGE_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
+  "planning-continuity.mjs",
   "bash-readonly-whitelist.mjs",
   "block-dangerous-bash.mjs",
   "ecc-permission-cache-wrapper.mjs",
@@ -976,28 +1476,38 @@ const GLOBAL_META_KIM_HOOK_PACKAGE_FILES = new Set([
   "stop-save-progress.mjs",
   "stop-spine-cleanup.mjs",
   "subagent-context.mjs",
-  "utils.mjs",
   "meta-kim-memory-save.mjs",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
 ]);
 
 const PROJECT_CLAUDE_HOOK_FILES = new Set([
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  "planning-continuity.mjs",
   "bash-readonly-whitelist.mjs",
   "enforce-agent-dispatch.mjs",
   "graphify-context.mjs",
-  "hook-i18n.mjs",
   "post-console-log-warn.mjs",
   "post-format.mjs",
   "post-typecheck.mjs",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
   "stop-compaction.mjs",
   "stop-completion-guard.mjs",
   "stop-console-log-audit.mjs",
   "stop-spine-cleanup.mjs",
   "subagent-context.mjs",
-  "utils.mjs",
+]);
+
+// These retired basenames may also belong to users. The v1 project install
+// manifest has no content hash, so it cannot prove exact ownership for safe
+// deletion. Keep them out of the active projection (and avoid missing-source
+// warnings) while preserving any existing file until stronger evidence exists.
+const PRESERVED_UNOWNED_LEGACY_PROJECT_HOOK_FILES = new Set([
+  "hook-i18n.mjs",
 ]);
 
 const REMOVED_PROJECT_CLAUDE_HOOK_FILES = [
@@ -1064,6 +1574,26 @@ function extractSummary(body, fallback) {
 function roleFromTitle(title, fallback) {
   const parts = title.split(":");
   return parts.length > 1 ? parts.slice(1).join(":").trim() : fallback;
+}
+
+export function parseCanonicalAgent(raw, sourceFile) {
+  const { data, body } = parseFrontmatter(raw, sourceFile);
+  if (!data.name || !data.description) {
+    throw new Error(
+      `${sourceFile} must define frontmatter name and description.`,
+    );
+  }
+  const title = extractTitle(body, data.name);
+  return {
+    id: data.name,
+    description: data.description,
+    sourceFile,
+    title,
+    summary: extractSummary(body, data.description),
+    role: roleFromTitle(title, data.description),
+    raw,
+    body: body.trim(),
+  };
 }
 
 function sortAgents(agents) {
@@ -1190,7 +1720,7 @@ Store information that stays true across sessions.
 `;
 }
 
-async function loadAgents() {
+export async function loadCanonicalAgents() {
   const files = (await fs.readdir(canonicalAgentsDir))
     .filter((file) => file.endsWith(".md"))
     .sort();
@@ -1199,24 +1729,8 @@ async function loadAgents() {
   for (const file of files) {
     const filePath = path.join(canonicalAgentsDir, file);
     const raw = await fs.readFile(filePath, "utf8");
-    const { data, body } = parseFrontmatter(raw, filePath);
-
-    if (!data.name || !data.description) {
-      throw new Error(
-        `${filePath} must define frontmatter name and description.`,
-      );
-    }
-
-    agents.push({
-      id: data.name,
-      description: data.description,
-      sourceFile: path.relative(repoRoot, filePath).replace(/\\/g, "/"),
-      title: extractTitle(body, data.name),
-      summary: extractSummary(body, data.description),
-      role: roleFromTitle(extractTitle(body, data.name), data.description),
-      raw,
-      body: body.trim(),
-    });
+    const sourceFile = path.relative(repoRoot, filePath).replace(/\\/g, "/");
+    agents.push(parseCanonicalAgent(raw, sourceFile));
   }
 
   return sortAgents(agents);
@@ -1575,15 +2089,67 @@ ${body}
 `;
 }
 
+const GLOBAL_AGENT_RENDERERS = Object.freeze({
+  canonical_markdown: (agent) => agent.raw,
+  codex_toml: buildCodexAgent,
+  cursor_markdown: buildCursorAgent,
+  gemini_markdown: (agent) => buildNativeRuntimeAgent(agent, "gemini"),
+  zcode_markdown: (agent) => buildNativeRuntimeAgent(agent, "zcode"),
+});
+
+export function renderGlobalAgentProjection(agent, projection) {
+  const renderer = GLOBAL_AGENT_RENDERERS[projection?.renderer];
+  if (!renderer) {
+    throw new Error(
+      `Unsupported global Agent renderer: ${projection?.renderer ?? "<missing>"}`,
+    );
+  }
+  return renderer(agent);
+}
+
 async function writeGeneratedFile(filePath, nextContent) {
+  assertSafeRepoProjectionPath(filePath);
+  if (isRuntimeSedimentedProjectPath(filePath)) {
+    return { changed: false, preserved: true, reason: "runtime_sedimented_project_copy" };
+  }
+  const globalRecord = syncScopeForWritePlan === "global"
+    ? inferGlobalProjectionRecord(filePath)
+    : null;
+  if (syncScopeForWritePlan === "global" && !globalRecord) {
+    throw new Error(
+      `Global projection path has no runtime-profile ownership mapping: ${filePath}`,
+    );
+  }
+  if (
+    globalRecord &&
+    (
+      globalRecord.owner !== GLOBAL_PROJECTION_OWNER_SYNC_RUNTIMES ||
+      (
+        requestedGlobalAssetTypes !== null &&
+        !requestedGlobalAssetTypes.has(globalRecord.assetType)
+      )
+    )
+  ) {
+    return {
+      changed: false,
+      preserved: true,
+      reason:
+        globalRecord.owner !== GLOBAL_PROJECTION_OWNER_SYNC_RUNTIMES
+          ? `owned_by:${globalRecord.owner}`
+          : `asset_not_selected:${globalRecord.assetType}`,
+    };
+  }
   const recordGeneratedFile = () => {
-    const category = inferProjectCategory(filePath);
+    const category = globalRecord?.category ?? inferProjectCategory(filePath);
     if (!category) return;
     recordSafe((rec) =>
       rec.recordFile(filePath, {
         source: "sync-runtimes",
-        purpose: inferProjectPurpose(category),
+        purpose: globalRecord?.purpose ?? inferProjectPurpose(category),
         category,
+        ownershipClass: "install_projection",
+        runtimeTarget:
+          globalRecord?.runtimeTarget ?? inferProjectRuntimeTarget(filePath),
       }),
     );
   };
@@ -1607,7 +2173,7 @@ async function writeGeneratedFile(filePath, nextContent) {
   if (checkOnly) {
     staleFiles.push({
       path: filePath,
-      category: inferProjectCategory(filePath),
+      category: globalRecord?.category ?? inferProjectCategory(filePath),
       action: currentContent === null ? "create" : "update",
     });
     return { changed: true };
@@ -1624,9 +2190,13 @@ async function writeGeneratedJson(filePath, value) {
   return writeGeneratedFile(filePath, nextContent);
 }
 
-function renderMetaKimRuntimeMcp(content, rootDir) {
+export function renderMetaKimRuntimeMcp(content, rootDir, runtimeFamily) {
+  if (runtimeFamily === undefined) throw new Error("MCP projection requires its target runtime.");
   const normalizedRoot = rootDir.replace(/\\/g, "/");
-  return content.replaceAll("__REPO_ROOT__", normalizedRoot);
+  const parsed = JSON.parse(content.replaceAll("__REPO_ROOT__", normalizedRoot));
+  const server = (parsed.mcpServers ?? parsed.mcp?.servers)?.["meta-kim-runtime"];
+  if (server) server.env = { ...server.env, ...metaKimMcpRuntimeEnvironment(runtimeFamily) };
+  return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
 function renderCodexConfigExample(content, rootDir) {
@@ -1696,6 +2266,7 @@ function emptyMcpConfigContent() {
 
 async function removeGeneratedPath(filePath) {
   if (!filePath) return { changed: false };
+  assertSafeRepoProjectionPath(filePath);
 
   let exists = false;
   try {
@@ -1720,6 +2291,302 @@ async function removeGeneratedPath(filePath) {
 
   await fs.rm(filePath, { recursive: true, force: true });
   return { changed: true };
+}
+
+export const GLOBAL_ONLY_DURABLE_PROJECTION_ROOTS = [
+  ".claude/agents",
+  ".claude/skills",
+  ".claude/commands",
+  ".claude/capability-index",
+  ".codex/agents",
+  ".agents/skills",
+  ".codex/commands",
+  ".codex/capability-index",
+  ".cursor/agents",
+  ".cursor/skills",
+  ".cursor/rules",
+  ".cursor/capability-index",
+  ".gemini/agents",
+  ".gemini/skills",
+  ".gemini/commands",
+  ".gemini/capability-index",
+  ".zcode/agents",
+  ".zcode/skills",
+  ".zcode/commands",
+  ".zcode/capability-index",
+  "codex",
+  "openclaw",
+];
+
+export const GLOBAL_ONLY_WHOLE_FILE_PROJECTIONS = [
+  ".codex/hooks.json",
+  ".cursor/hooks.json",
+];
+
+async function walkFiles(rootPath) {
+  assertSafeRepoProjectionPath(rootPath);
+  let stat;
+  try {
+    stat = await fs.stat(rootPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  if (stat.isFile()) return [rootPath];
+  if (!stat.isDirectory()) return [];
+  const out = [];
+  for (const entry of await fs.readdir(rootPath, { withFileTypes: true })) {
+    const childPath = path.join(rootPath, entry.name);
+    assertSafeRepoProjectionPath(childPath);
+    if (entry.isFile()) out.push(childPath);
+    else if (entry.isDirectory()) out.push(...await walkFiles(childPath));
+  }
+  return out;
+}
+
+async function removeEmptyTree(rootPath) {
+  assertSafeRepoProjectionPath(rootPath);
+  let entries;
+  try {
+    entries = await fs.readdir(rootPath, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) await removeEmptyTree(path.join(rootPath, entry.name));
+  }
+  const remaining = await fs.readdir(rootPath);
+  if (remaining.length === 0 && !checkOnly) await fs.rmdir(rootPath);
+}
+
+function projectionRelativeChild(rootPath, candidatePath) {
+  if (typeof rootPath !== "string" || !rootPath.trim()) return null;
+  const normalizedRoot = rootPath.replace(/\\/g, "/").replace(/^\.\//u, "").replace(/\/+$/u, "");
+  const normalizedCandidate = candidatePath.replace(/\\/g, "/").replace(/^\.\//u, "");
+  if (!normalizedCandidate.startsWith(`${normalizedRoot}/`)) return null;
+  const relativePath = normalizedCandidate.slice(normalizedRoot.length + 1);
+  return relativePath || null;
+}
+
+export async function canonicalGlobalOnlyProjectionContent(
+  filePath,
+  agents,
+  {
+    rootDir = repoRoot,
+    profiles = runtimeProfilesForSync,
+  } = {},
+) {
+  const relativePath = path.relative(rootDir, filePath).replace(/\\/g, "/");
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    path.isAbsolute(relativePath)
+  ) {
+    return null;
+  }
+  const candidates = [];
+  for (const [targetId, profile] of Object.entries(profiles ?? {})) {
+    const outputPaths = profile?.projection?.outputPaths ?? {};
+    const capabilityRelative = projectionRelativeChild(
+      outputPaths.capabilityIndexDir,
+      relativePath,
+    );
+    if (capabilityRelative) {
+      candidates.push({
+        targetId,
+        kind: "capability-index",
+        content: await tryReadCanonical(
+          path.join(canonicalCapabilityIndexDir, ...capabilityRelative.split("/")),
+        ),
+      });
+    }
+
+    const projection = profile?.projection?.globalAgentProjection;
+    if (!projection?.supported) continue;
+    const agentRelative = projectionRelativeChild(outputPaths.agentsDir, relativePath);
+    if (!agentRelative || agentRelative.includes("/")) continue;
+    const agent = agents.find((item) =>
+      globalAgentProjectionFileName(projection, item.id) === agentRelative
+    );
+    if (!agent) continue;
+    candidates.push({
+      targetId,
+      kind: "agent",
+      content: renderGlobalAgentProjection(agent, projection),
+    });
+  }
+  const matches = candidates.filter(({ content }) => content !== null);
+  if (matches.length > 1) {
+    throw new Error(
+      `Ambiguous runtime-profile canonical projection mapping for ${relativePath}: ` +
+        matches.map(({ targetId, kind }) => `${targetId}:${kind}`).join(", "),
+    );
+  }
+  return matches[0]?.content ?? null;
+}
+
+export function canRetireGlobalOnlyProjection({
+  manifestMatches,
+  actualContent,
+  expectedContent,
+}) {
+  return manifestMatches ||
+    (expectedContent !== null && actualContent === expectedContent);
+}
+
+async function removeExactlyOwnedProjectionFile(filePath, agents) {
+  assertSafeRepoProjectionPath(filePath);
+  const ownership = inspectProjectProjectionOwnership(filePath);
+  if (ownership.preserve) {
+    return { changed: false, preserved: true, reason: ownership.reason };
+  }
+  const { entry } = ownership;
+  const manifestMatches = manifestFileEntryMatches(entry, filePath);
+  const expectedContent = await canonicalGlobalOnlyProjectionContent(filePath, agents);
+  const actualContent = await fs.readFile(filePath, "utf8").catch(() => null);
+  if (!canRetireGlobalOnlyProjection({ manifestMatches, actualContent, expectedContent })) {
+    staleFiles.push({
+      path: filePath,
+      category: inferProjectCategory(filePath),
+      action: "preserve",
+      reason: entry.sha256 ? "managed_file_changed" : "legacy_manifest_missing_integrity",
+    });
+    return { changed: false, preserved: true, reason: "canonical_projection_not_exact" };
+  }
+  if (checkOnly) {
+    staleFiles.push({
+      path: filePath,
+      category: inferProjectCategory(filePath),
+      action: "delete",
+    });
+    return { changed: true };
+  }
+  await fs.unlink(filePath);
+  forgetRecordedPath(filePath);
+  return { changed: true };
+}
+
+async function removeExactlyOwnedProjectionTree(relativePath, changedFiles, agents) {
+  const rootPath = path.join(repoRoot, relativePath);
+  const files = await walkFiles(rootPath);
+  for (const filePath of files) {
+    const result = await removeExactlyOwnedProjectionFile(filePath, agents);
+    if (result.changed) changedFiles.push(path.relative(repoRoot, filePath).replace(/\\/g, "/"));
+  }
+  await removeEmptyTree(rootPath);
+}
+
+function stripTomlTable(raw, tableName) {
+  const lines = String(raw ?? "").split(/\r?\n/);
+  const escaped = tableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`);
+  if (!lines.some((line) => header.test(line))) return String(raw ?? "");
+  const out = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (header.test(line)) {
+      skipping = true;
+      continue;
+    }
+    if (skipping && /^\s*\[/.test(line)) skipping = false;
+    if (!skipping) out.push(line);
+  }
+  return `${out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
+async function rewriteGlobalOnlyConfig(filePath, transform, changedFiles) {
+  assertSafeRepoProjectionPath(filePath);
+  if (isRuntimeSedimentedProjectPath(filePath)) return;
+  let current;
+  try {
+    current = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  let next;
+  try {
+    next = transform(current);
+  } catch {
+    return; // Unknown or malformed user configuration is preserved verbatim.
+  }
+  if (next === current) return;
+  const rel = path.relative(repoRoot, filePath).replace(/\\/g, "/");
+  if (checkOnly) {
+    staleFiles.push({ path: filePath, category: inferProjectCategory(filePath), action: "update" });
+  } else {
+    const transaction = executeSafeManagedFileTransaction({
+      trustedRoot: repoRoot, backupRoot: path.join(repoRoot, ".meta-kim/backups"),
+      operations: [{ kind: "write", relPath: rel, content: next,
+        expectedOldHash: createHash("sha256").update(current).digest("hex") }],
+      transactionLabel: "global-only-project-config-retirement",
+    });
+    if (!transaction.ok) throw new Error(`Project config retirement failed: ${transaction.reason}`);
+    forgetRecordedPath(filePath);
+  }
+  changedFiles.push(rel);
+}
+
+async function enforceGlobalOnlyProjectShape(changedFiles) {
+  for (const relativePath of GLOBAL_ONLY_DURABLE_PROJECTION_ROOTS) {
+    await removeExactlyOwnedProjectionTree(relativePath, changedFiles, canonicalAgentsForGlobalOnly);
+  }
+  for (const relativePath of GLOBAL_ONLY_WHOLE_FILE_PROJECTIONS) {
+    const filePath = path.join(repoRoot, relativePath);
+    const result = await removeExactlyOwnedProjectionFile(filePath, canonicalAgentsForGlobalOnly);
+    if (result.changed) changedFiles.push(relativePath);
+  }
+  for (const runtimeId of NATIVE_PROJECTION_RUNTIME_IDS) {
+    const { settingsFile } = resolveRuntimeProjection(runtimeId, "project");
+    const journal = projectManifestAtStart?.entries?.find((entry) => entry.path === settingsFile &&
+      entry.kind === "json-fragment-merge" && entry.runtimeTarget === runtimeId)?.jsonMutationJournal;
+    if (!journal) continue;
+    await rewriteGlobalOnlyConfig(settingsFile, (raw) =>
+      `${JSON.stringify(invertNativeJsonMutations(JSON.parse(raw), journal), null, 2)}\n`, changedFiles);
+  }
+
+  await rewriteGlobalOnlyConfig(
+    path.join(repoRoot, ".claude", "settings.json"),
+    (raw) => {
+      const parsed = JSON.parse(raw);
+      const cleaned = stripRepoMetaKimHooksFromSettings(parsed);
+      return JSON.stringify(parsed) === JSON.stringify(cleaned)
+        ? raw
+        : `${JSON.stringify(cleaned, null, 2)}\n`;
+    },
+    changedFiles,
+  );
+  await rewriteGlobalOnlyConfig(
+    path.join(repoRoot, ".mcp.json"),
+    (raw) => {
+      const parsed = JSON.parse(raw);
+      if (!parsed?.mcpServers || typeof parsed.mcpServers !== "object") return raw;
+      if (!Object.prototype.hasOwnProperty.call(parsed.mcpServers, "meta-kim-runtime")) return raw;
+      delete parsed.mcpServers["meta-kim-runtime"];
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    },
+    changedFiles,
+  );
+  await rewriteGlobalOnlyConfig(
+    path.join(repoRoot, ".cursor", "mcp.json"),
+    (raw) => {
+      const parsed = JSON.parse(raw);
+      if (!parsed?.mcpServers || typeof parsed.mcpServers !== "object") return raw;
+      if (!Object.prototype.hasOwnProperty.call(parsed.mcpServers, "meta-kim-runtime")) return raw;
+      delete parsed.mcpServers["meta-kim-runtime"];
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    },
+    changedFiles,
+  );
+  await rewriteGlobalOnlyConfig(
+    path.join(repoRoot, ".codex", "config.toml"),
+    (raw) => stripTomlTable(
+      stripTomlTable(raw, "mcp_servers.meta-kim-runtime"),
+      "mcp_servers.meta_kim_runtime",
+    ),
+    changedFiles,
+  );
 }
 
 async function removeDirIfEmpty(dirPath) {
@@ -1778,7 +2645,11 @@ async function syncCapabilityIndexMirrors(dirs, selectedTargets, changedFiles) {
   };
 
   for (const targetId of selectedTargets) {
-    const target = targets[targetId];
+    const nativeProjection = NATIVE_PROJECTION_RUNTIME_IDS.includes(targetId)
+      ? resolveRuntimeProjection(targetId, dirs.scope) : null;
+    const target = targets[targetId] ?? (nativeProjection ? {
+      dir: nativeProjection.capabilityIndexDir, display: nativeProjection.display.capabilityIndexDir,
+    } : null);
     if (!target?.dir) continue;
 
     const mirrorPath = path.join(target.dir, "meta-kim-capabilities.json");
@@ -1921,11 +2792,14 @@ function buildRuntimeSkillMap(targetId) {
  * @returns {string}
  */
 export function applyRuntimePaths(content, targetId) {
+  // Both hosts discover this alias, with .agents taking precedence in Gemini.
+  // Keep its content identical no matter which target synchronized it last.
+  if (["codex", "gemini", "zcode"].includes(targetId)) return applyNativeSkillPaths(content, targetId);
   const rules = buildRuntimeSkillMap(targetId);
   const protectedBlocks = [];
   let result = content;
   for (const pattern of [
-    /Fetch discovery minimum checklist: before Thinking, search at least these locations \(even if results are empty\):[\s\S]*?\n(?=Pass condition:)/g,
+    /Fetch discovery minimum checklist:[\s\S]*?\n(?=Pass condition:)/g,
     /^- 项目内迭代或创新需要专用能力时，必须创建在对应 runtime 的原生项目目录[\s\S]*?\n/gm,
   ]) {
     result = result.replace(pattern, (block) => {
@@ -1943,53 +2817,8 @@ export function applyRuntimePaths(content, targetId) {
   return result;
 }
 
-function readFrontmatterField(frontmatter, key) {
-  const lines = frontmatter.split(/\r?\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(new RegExp(`^${key}:\\s*(.*)$`));
-    if (!match) continue;
-    const rawValue = match[1].trim();
-    if (rawValue === "|" || rawValue === ">") {
-      const blockLines = [];
-      for (let next = index + 1; next < lines.length; next += 1) {
-        if (/^[A-Za-z0-9_-]+:\s*/.test(lines[next])) {
-          break;
-        }
-        blockLines.push(lines[next].replace(/^\s{2}/, ""));
-      }
-      return blockLines.join("\n").trim();
-    }
-    return rawValue.replace(/^['"]|['"]$/g, "").trim();
-  }
-  return "";
-}
-
-function formatYamlScalar(value) {
-  const normalized = String(value ?? "").trim();
-  if (normalized.includes("\n")) {
-    return `|\n${normalized
-      .split(/\r?\n/)
-      .map((line) => `  ${line}`)
-      .join("\n")}`;
-  }
-  if (/^[A-Za-z0-9 _.,;()'"—-]+$/.test(normalized)) {
-    return normalized;
-  }
-  return JSON.stringify(normalized);
-}
-
 export function buildCodexSkillContent(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!match) {
-    return content;
-  }
-  const frontmatter = match[1];
-  const name = readFrontmatterField(frontmatter, "name");
-  const description = readFrontmatterField(frontmatter, "description");
-  if (!name || !description) {
-    return content;
-  }
-  return `---\nname: ${formatYamlScalar(name)}\ndescription: ${formatYamlScalar(description)}\n---\n\n${content.slice(match[0].length)}`;
+  return buildPortableSkillContent(content);
 }
 
 export function buildCodexGraphifyContextHook() {
@@ -2024,10 +2853,12 @@ export function buildCodexGraphifyContextHook() {
 
 export function buildCodexProjectHooksJson({
   graphifyHookPath = ".codex/hooks/graphify-context.mjs",
-  memoryHookPath = null,
+  memoryHookPath = ".codex/hooks/meta-kim-memory-save.mjs",
   spineHookPath = ".codex/hooks/activate-meta-theory-spine.mjs",
   enforceAgentDispatchHookPath = ".codex/hooks/enforce-agent-dispatch.mjs",
   hookPromptAdapterPath = null,
+  planningContinuityHookPath = ".codex/hooks/planning-continuity.mjs",
+  stopSpineCleanupHookPath = ".codex/hooks/stop-spine-cleanup.mjs",
   packageRoot = null,
 } = {}) {
   const config = buildCodexHooksJson({
@@ -2036,12 +2867,18 @@ export function buildCodexProjectHooksJson({
     spineHookPath,
     enforceAgentDispatchHookPath,
     hookPromptAdapterPath,
+    planningContinuityHookPath,
+    stopSpineCleanupHookPath,
     packageRoot,
   });
   config.hooks.PostToolUse = [
+    ...(config.hooks.PostToolUse ?? []),
     {
       matcher: "Edit|Write",
       hooks: [
+        hookCommand(nodeHookCommand(planningContinuityHookPath, [
+          "--event", "post-tool", "--runtime", "codex",
+        ]), 10),
         hookCommand(nodeHookCommand(".codex/hooks/post-format.mjs")),
         hookCommand(nodeHookCommand(".codex/hooks/post-typecheck.mjs")),
         hookCommand(nodeHookCommand(".codex/hooks/post-console-log-warn.mjs")),
@@ -2049,23 +2886,38 @@ export function buildCodexProjectHooksJson({
     },
   ];
   config.hooks.SubagentStart = [
+    ...(config.hooks.SubagentStart ?? []),
     {
-      matcher: "*",
+      // The governance rule set targets the nine meta-* governance agents.
+      // A catch-all matcher would inject it into every run-scoped worker
+      // subagent, which is pure token burn.
+      matcher: "meta-*",
       hooks: [hookCommand(nodeHookCommand(".codex/hooks/subagent-context.mjs"))],
     },
   ];
-  config.hooks.Stop = [
-    ...(config.hooks.Stop ?? []),
-    {
-      matcher: "*",
-      hooks: [
-        hookCommand(nodeHookCommand(".codex/hooks/stop-compaction.mjs")),
-        hookCommand(nodeHookCommand(".codex/hooks/stop-console-log-audit.mjs")),
-        hookCommand(nodeHookCommand(".codex/hooks/stop-completion-guard.mjs")),
-        hookCommand(nodeHookCommand(".codex/hooks/stop-spine-cleanup.mjs")),
-      ],
-    },
+  const baseStopHooks = (config.hooks.Stop ?? [])
+    .flatMap((entry) => entry.hooks ?? []);
+  const lifecycleCleanupHooks = baseStopHooks.filter((hook) =>
+    hook.command?.includes("stop-spine-cleanup.mjs"),
+  );
+  const orderedStopHooks = [
+    ...baseStopHooks.filter((hook) =>
+      !hook.command?.includes("stop-spine-cleanup.mjs"),
+    ),
+    hookCommand(nodeHookCommand(".codex/hooks/stop-compaction.mjs")),
+    hookCommand(nodeHookCommand(".codex/hooks/stop-console-log-audit.mjs")),
+    hookCommand(nodeHookCommand(".codex/hooks/stop-completion-guard.mjs")),
+    ...lifecycleCleanupHooks,
   ];
+  const seenStopCommands = new Set();
+  config.hooks.Stop = [{
+    matcher: "*",
+    hooks: orderedStopHooks.filter((hook) => {
+      if (!hook?.command || seenStopCommands.has(hook.command)) return false;
+      seenStopCommands.add(hook.command);
+      return true;
+    }),
+  }];
   return config;
 }
 
@@ -2075,37 +2927,51 @@ export function buildCursorProjectHooksJson({
   spineHookPath = ".cursor/hooks/activate-meta-theory-spine.mjs",
   enforceAgentDispatchHookPath = ".cursor/hooks/enforce-agent-dispatch.mjs",
   hookPromptAdapterPath = null,
+  planningContinuityHookPath = null,
   packageRoot = null,
+  // Global scope must pass an absolute directory. A relative command resolves
+  // against whatever directory the runtime happens to start in, so a global
+  // registration would point at another project's copy or at nothing.
+  hooksDir = ".cursor/hooks",
 } = {}) {
+  const hookScript = (fileName) =>
+    path.isAbsolute(hooksDir) ? path.join(hooksDir, fileName) : `${hooksDir}/${fileName}`;
   const config = buildCursorHooksJson({
     graphifyHookPath,
     memoryHookPath,
     spineHookPath,
     enforceAgentDispatchHookPath,
     hookPromptAdapterPath,
+    planningContinuityHookPath,
     packageRoot,
   });
   config.hooks.postToolUse = [
+    ...(config.hooks.postToolUse ?? []),
     {
+      command: nodeHookCommand(hookScript("post-format.mjs")),
       matcher: "Edit|Write",
-      hooks: [
-        { command: nodeHookCommand(".cursor/hooks/post-format.mjs") },
-        { command: nodeHookCommand(".cursor/hooks/post-typecheck.mjs") },
-        { command: nodeHookCommand(".cursor/hooks/post-console-log-warn.mjs") },
-      ],
+    },
+    {
+      command: nodeHookCommand(hookScript("post-typecheck.mjs")),
+      matcher: "Edit|Write",
+    },
+    {
+      command: nodeHookCommand(hookScript("post-console-log-warn.mjs")),
+      matcher: "Edit|Write",
     },
   ];
   config.hooks.subagentStart = [
+    ...(config.hooks.subagentStart ?? []),
     {
-      command: nodeHookCommand(".cursor/hooks/subagent-context.mjs"),
+      command: nodeHookCommand(hookScript("subagent-context.mjs")),
     },
   ];
   config.hooks.stop = [
     ...(config.hooks.stop ?? []),
-    { command: nodeHookCommand(".cursor/hooks/stop-compaction.mjs") },
-    { command: nodeHookCommand(".cursor/hooks/stop-console-log-audit.mjs") },
-    { command: nodeHookCommand(".cursor/hooks/stop-completion-guard.mjs") },
-    { command: nodeHookCommand(".cursor/hooks/stop-spine-cleanup.mjs") },
+    { command: nodeHookCommand(hookScript("stop-compaction.mjs")) },
+    { command: nodeHookCommand(hookScript("stop-console-log-audit.mjs")) },
+    { command: nodeHookCommand(hookScript("stop-completion-guard.mjs")) },
+    { command: nodeHookCommand(hookScript("stop-spine-cleanup.mjs")) },
   ];
   return config;
 }
@@ -2134,9 +3000,12 @@ async function syncRuntimeSkills(
         ...file.relativePath.split("/"),
       );
       const runtimeContent =
-        runtimeId === "codex" && file.relativePath === "SKILL.md"
+        ["codex", "gemini", "zcode"].includes(runtimeId) && file.relativePath === "SKILL.md"
           ? buildCodexSkillContent(applyRuntimePaths(file.content, runtimeId))
           : applyRuntimePaths(file.content, runtimeId);
+      // Codex and Gemini share this exact skill directory. Both writers must
+      // honor the same existing ownership before updating a user's copy.
+      if (["codex", ...NATIVE_PROJECTION_RUNTIME_IDS].includes(runtimeId)) await assertNativeProjectFileOwnership(targetPath, runtimeContent);
       if (
         (
           await writeGeneratedFile(
@@ -2151,6 +3020,75 @@ async function syncRuntimeSkills(
       }
     }
   }
+}
+
+async function assertNativeProjectFileOwnership(filePath, expectedContent) {
+  assertSafeRepoProjectionPath(filePath);
+  if (isRuntimeSedimentedProjectPath(filePath)) return;
+  const current = await fs.readFile(filePath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (current === null || current === expectedContent) return;
+  const entry = exactSyncOwnershipEntry(filePath);
+  if (!entry || !manifestFileEntryMatches(entry, filePath)) {
+    throw new Error(`Refusing to overwrite an unowned or edited native projection: ${filePath}`);
+  }
+}
+
+async function syncNativeProjectProjection(runtimeId, agents, canonicalSkills, changedFiles) {
+  const projection = resolveRuntimeProjection(runtimeId, "project");
+  const label = (filePath) => path.relative(repoRoot, filePath).replaceAll("\\", "/");
+  for (const agent of agents) {
+    const filePath = path.join(projection.agentsDir, `${agent.id}.md`);
+    const content = buildNativeRuntimeAgent(agent, runtimeId);
+    await assertNativeProjectFileOwnership(filePath, content);
+    if ((await writeGeneratedFile(filePath, content)).changed) changedFiles.push(label(filePath));
+  }
+  await syncRuntimeSkills(runtimeId, projection.skillsDir, projection.display.skillsDir, canonicalSkills, changedFiles);
+  const adapterPath = path.join(projection.hooksDir, "native-runtime-adapter.mjs");
+  if (runtimeId === "gemini") {
+    const adapter = await fs.readFile(path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "native-runtime-adapter.mjs"), "utf8");
+    await assertNativeProjectFileOwnership(adapterPath, adapter);
+    if ((await writeGeneratedFile(adapterPath, adapter)).changed) changedFiles.push(label(adapterPath));
+  }
+  const settingsPath = projection.settingsFile;
+  assertSafeRepoProjectionPath(settingsPath);
+  const original = await fs.readFile(settingsPath, "utf8").catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const purpose = `${runtimeId}-project-settings-merge`;
+  const previousJournal = projectManifestAtStart?.entries?.find((entry) =>
+    entry.path === settingsPath && entry.purpose === purpose && entry.kind === "json-fragment-merge")?.jsonMutationJournal ?? [];
+  let compatibleMcpServers = {};
+  if (runtimeId === "zcode") {
+    const compatibleRaw = await fs.readFile(path.join(repoRoot, ".agents", "mcp.json"), "utf8").catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (compatibleRaw) compatibleMcpServers = JSON.parse(compatibleRaw).mcpServers ?? {};
+  }
+  const plan = planNativeRuntimeSettings(original === null ? {} : JSON.parse(original), {
+    runtimeId, scope: "project", packageRoot: repoRoot, adapterPath, previousJournal, compatibleMcpServers,
+  });
+  if (plan.changed) {
+    changedFiles.push(label(settingsPath));
+    if (checkOnly) staleFiles.push({ path: settingsPath, category: CATEGORIES.G, action: original === null ? "create" : "update" });
+    else {
+      const transaction = executeSafeManagedFileTransaction({
+        trustedRoot: repoRoot, backupRoot: path.join(repoRoot, ".meta-kim/backups"),
+        operations: [{ kind: "write", relPath: label(settingsPath),
+          content: `${JSON.stringify(plan.config, null, 2)}\n`,
+          expectedOldHash: original === null ? null : createHash("sha256").update(original).digest("hex") }],
+        transactionLabel: `${runtimeId}-project-settings`,
+      });
+      if (!transaction.ok) throw new Error(`Native project config transaction failed: ${transaction.reason}`);
+    }
+  }
+  if (!checkOnly) recordSafe((rec) => rec.recordJsonFragmentMerge(settingsPath, plan.mutations, {
+    source: "sync-runtimes", purpose, category: CATEGORIES.G, runtimeTarget: runtimeId,
+  }));
 }
 
 function isRepoLocalPath(filePath) {
@@ -2171,10 +3109,9 @@ async function pruneNonProjectedRuntimeSkills(
     try {
       const stat = await fs.stat(targetPath);
       if (!stat.isDirectory()) continue;
-      if (!checkOnly) {
-        await fs.rm(targetPath, { recursive: true, force: true });
-      }
-      changedFiles.push(`${displaySkillsDir}/${skill.id}`);
+      await removeExactlyOwnedProjectionTree(
+        path.relative(repoRoot, targetPath), changedFiles, canonicalAgentsForGlobalOnly,
+      );
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
@@ -2188,7 +3125,19 @@ async function pruneNonProjectedRuntimeSkills(
 // project/global runtime projection. Files NOT on the whitelist
 // (i.e. user-authored files) are never touched.
 const CLAUDE_PROJECT_HOOK_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
+  "planning-continuity.mjs",
   "bash-readonly-whitelist.mjs",
   "block-dangerous-bash.mjs",
   "ecc-permission-cache-wrapper.mjs",
@@ -2199,7 +3148,6 @@ const CLAUDE_PROJECT_HOOK_FILES = new Set([
   "post-format.mjs",
   "post-typecheck.mjs",
   "post-console-log-warn.mjs",
-  "skip-reminder.mjs",
   "subagent-context.mjs",
   "stop-compaction.mjs",
   "stop-memory-save.mjs",
@@ -2207,13 +3155,22 @@ const CLAUDE_PROJECT_HOOK_FILES = new Set([
   "stop-completion-guard.mjs",
   "stop-save-progress.mjs",
   "stop-spine-cleanup.mjs",
-  "utils.mjs",
-  "spine-state.mjs",
 ]);
 
 // Codex uses an adapter pattern (.mjs script + .py wrapper). Project-level
 // files match the same basename as global hooks dir.
 const CODEX_PROJECT_HOOK_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
   "bash-readonly-whitelist.mjs",
   "codex_hook_adapter.py",
@@ -2237,31 +3194,49 @@ const CODEX_PROJECT_HOOK_FILES = new Set([
   "user-prompt-submit.sh",
   "permission_request.py",
   "resolve-plan-dir.sh",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
-  "utils.mjs",
 ]);
 
 const CODEX_ACTIVE_PROJECT_HOOK_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
+  "planning-continuity.mjs",
   "bash-readonly-whitelist.mjs",
   "enforce-agent-dispatch.mjs",
   "graphify-context.mjs",
+  "meta-kim-memory-save.mjs",
   "post-console-log-warn.mjs",
   "post-format.mjs",
   "post-typecheck.mjs",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
   "stop-compaction.mjs",
   "stop-completion-guard.mjs",
   "stop-console-log-audit.mjs",
   "stop-spine-cleanup.mjs",
   "subagent-context.mjs",
-  "utils.mjs",
 ]);
 
 // Cursor hook files (.ps1/.sh variants under ~/.cursor/hooks/).
 const CURSOR_PROJECT_HOOK_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
   "bash-readonly-whitelist.mjs",
   "enforce-agent-dispatch.mjs",
@@ -2278,12 +3253,20 @@ const CURSOR_PROJECT_HOOK_FILES = new Set([
   "stop.sh",
   "user-prompt-submit.ps1",
   "user-prompt-submit.sh",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
-  "utils.mjs",
 ]);
 
 const CURSOR_ACTIVE_PROJECT_HOOK_FILES = new Set([
+  "project-root.mjs",
+  "utils.mjs",
+  "skip-reminder.mjs",
+  "conversation-binding.mjs",
+  "spine-state-utils.mjs",
+  "spine-state-gates.mjs",
+  "spine-state.mjs",
+  "governed-task-reference.mjs",
+  "task-progress.mjs",
+  "governed-host-checkpoint.mjs",
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
   "bash-readonly-whitelist.mjs",
   "enforce-agent-dispatch.mjs",
@@ -2291,14 +3274,11 @@ const CURSOR_ACTIVE_PROJECT_HOOK_FILES = new Set([
   "post-console-log-warn.mjs",
   "post-format.mjs",
   "post-typecheck.mjs",
-  "skip-reminder.mjs",
-  "spine-state.mjs",
   "stop-compaction.mjs",
   "stop-completion-guard.mjs",
   "stop-console-log-audit.mjs",
   "stop-spine-cleanup.mjs",
   "subagent-context.mjs",
-  "utils.mjs",
 ]);
 
 const OPENCLAW_PROJECT_HOOK_FILES = new Set([
@@ -2315,8 +3295,9 @@ const PROJECT_HOOK_FILES_BY_PLATFORM = {
   openclaw: OPENCLAW_PROJECT_HOOK_FILES,
 };
 
-// Remove Meta_Kim-managed hook files from a project hooks dir. No backup
-// (caller's policy). Files NOT on the whitelist (user-authored) are kept.
+// Remove retired install-projection hooks only when manifest + current hash
+// prove exact ownership. Runtime-sedimented project copies and user files are
+// independent project assets and must survive install/global dependency sync.
 async function removeProjectMetaKimHooks(hooksDir, platformId, options = {}) {
   const whitelist = PROJECT_HOOK_FILES_BY_PLATFORM[platformId];
   if (!whitelist || !hooksDir) return [];
@@ -2334,13 +3315,9 @@ async function removeProjectMetaKimHooks(hooksDir, platformId, options = {}) {
     if (!whitelist.has(entry.name)) continue;
     if (keep?.has(entry.name)) continue;
     const target = path.join(hooksDir, entry.name);
-    if (checkOnly) {
-      removed.push(entry.name);
-      continue;
-    }
     try {
-      await fs.unlink(target);
-      removed.push(entry.name);
+      const result = await removeExactlyOwnedProjectionFile(target);
+      if (result.changed) removed.push(entry.name);
     } catch (error) {
       if (error.code !== "ENOENT") {
         console.warn(
@@ -2355,6 +3332,22 @@ async function removeProjectMetaKimHooks(hooksDir, platformId, options = {}) {
     );
   }
   return removed;
+}
+
+/** Build the Claude global settings template for the selected runtime home. */
+export async function buildGlobalClaudeSettingsHooksTemplate(runtimeHome) {
+  const hookPromptScript = path.join(runtimeHome, "hooks", "user-prompt-submit.js");
+  let hookPromptCommand = null;
+  try {
+    if ((await fs.stat(hookPromptScript)).isFile()) {
+      hookPromptCommand = hookCommandNode(hookPromptScript);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return buildMetaKimHooksTemplate(path.join(runtimeHome, "hooks", "meta-kim"), null, {
+    hookPromptCommand,
+  });
 }
 
 async function syncClaudeProjection(
@@ -2381,6 +3374,7 @@ async function syncClaudeProjection(
       claudeHooksProjectionDir,
       displayPaths.claudeHooks,
       changedFiles,
+      "claude",
     );
   }
 
@@ -2426,7 +3420,8 @@ async function syncClaudeProjection(
         (entry) =>
           entry.isFile() &&
           entry.name.endsWith(".mjs") &&
-          PROJECT_CLAUDE_HOOK_FILES.has(entry.name),
+          PROJECT_CLAUDE_HOOK_FILES.has(entry.name) &&
+          !SHARED_RUNTIME_HOOK_FILES.includes(entry.name),
       )
       .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -2447,10 +3442,7 @@ async function syncClaudeProjection(
       }
     }
 
-    const sharedClaudeHookDependencies = [
-      "activate-meta-theory-spine.mjs",
-      "skip-reminder.mjs",
-    ];
+    const sharedClaudeHookDependencies = SHARED_RUNTIME_HOOK_FILES;
     for (const hookName of sharedClaudeHookDependencies) {
       const hookContent = await tryReadCanonical(
         path.join(canonicalRuntimeAssetsDir, "shared", "hooks", hookName),
@@ -2511,12 +3503,9 @@ async function syncClaudeProjection(
         throw error;
       }
     }
-    const globalClaudeMetaKimHooksDir = path.join(
+    const template = await buildGlobalClaudeSettingsHooksTemplate(
       resolveRuntimeHomeDir("claude"),
-      "hooks",
-      "meta-kim",
     );
-    const template = buildMetaKimHooksTemplate(globalClaudeMetaKimHooksDir);
     const merged = mergeGlobalMetaKimHooksIntoSettings(base, template);
     finalSettingsContent = `${JSON.stringify(merged, null, 2)}\n`;
   }
@@ -2535,7 +3524,7 @@ async function syncClaudeProjection(
     // Only write meta-kim-runtime MCP config when the target contains the
     // server script; writing that command elsewhere breaks MCP startup.
     if (targetHasMetaRuntimeServer) {
-      const renderedMcpContent = renderMetaKimRuntimeMcp(mcpContent, repoRoot);
+      const renderedMcpContent = renderMetaKimRuntimeMcp(mcpContent, repoRoot, "claude");
       let existingMcpRaw = null;
       try {
         existingMcpRaw = await fs.readFile(claudeMcpProjectionPath, "utf8");
@@ -2568,6 +3557,40 @@ async function syncClaudeProjection(
   }
 }
 
+/** Bind maintenance to the official refresher's package, leaving raw sync overrides intact. */
+async function requireSourceMaintenancePackageRoot() {
+  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const [packageRoot, configuredRoot] = await Promise.all([
+    fs.realpath(moduleRoot),
+    fs.realpath(repoRoot),
+  ]);
+  const pathKey = (value) => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  if (pathKey(packageRoot) !== pathKey(configuredRoot)) {
+    throw new Error("Source pin maintenance requires the configured source root to match the executing package root; a different checkout cannot authorize this package's evidence writes.");
+  }
+  return packageRoot;
+}
+
+async function requireSourceMaintenanceCheckout(packageRoot) {
+  const marker = await fs.lstat(path.join(packageRoot, ".git")).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!marker || marker.isSymbolicLink() || !(marker.isFile() || marker.isDirectory())) {
+    throw new Error("Source pin maintenance requires a Meta_Kim source checkout; installed packages must not rewrite their evidence ledger.");
+  }
+}
+
+function maintainSourceEvidencePins(check = false) {
+  const code = refreshRuntimeEvidencePinsCli(check ? ["--check"] : []);
+  if (code !== 0) {
+    throw new Error(`Source runtime evidence ${check ? "check" : "preparation"} failed; run npm run meta:sync from the source checkout.`);
+  }
+}
+
 async function main() {
   // ── Help ────────────────────────────────────────────────────────
   if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
@@ -2576,11 +3599,16 @@ async function main() {
 Options:
   --scope <project|global|both>  Write projection to repo (default: project)
   --targets <ids>                 Comma-separated runtime IDs (claude,codex,openclaw,cursor)
+  --global-assets <types>         Profile-declared asset families to write in global scope
   --lang <code>                   Messages: en | zh-CN | ja-JP | ko-KR (aliases: zh, ja, ko)
   --check                        Show what would be synced without writing
+  --refresh-source-pins          Maintainer checkout: prepare source evidence before projection and check it afterward
   --reverse                      Reverse sync: runtime -> canonical (collect evolution signals)
   --dry-run                      Preview reverse sync changes without writing
-  --force                        Skip conflict warnings and overwrite canonical
+  --approval <file>              Exact Warden approval v0.2 for reverse-sync candidates
+  --candidate-output <file>      Write exact reverse-sync candidates plus an approval template
+  --apply                        Apply only exact approval-bound reverse-sync candidates
+  --force                        Include approved conflicts; never substitutes for approval
   --help, -h                     Show this help
 
 Scopes:
@@ -2593,24 +3621,60 @@ Examples:
   node sync-runtimes.mjs --scope global        # write to ~/.claude, ~/.codex, ~/.openclaw
   node sync-runtimes.mjs --scope global --targets claude  # Claude Code only, global
   node sync-runtimes.mjs --check                # preview changes
-  node sync-runtimes.mjs --reverse              # collect evolution signals from runtime
+  node sync-runtimes.mjs --reverse              # collect candidate-only evolution signals
   node sync-runtimes.mjs --reverse --dry-run    # preview reverse sync
-  node sync-runtimes.mjs --reverse --force      # force writeback without prompts
+  node sync-runtimes.mjs --reverse --force      # still candidate-only without approval
+  node sync-runtimes.mjs --reverse --candidate-output reverse-candidates.json
+  node sync-runtimes.mjs --reverse --approval approval.json --apply
 `);
     return;
   }
 
   const scope = parseScopeArg(cliArgs);
+  const sourceMaintenanceRoot = refreshSourcePins
+    ? await requireSourceMaintenancePackageRoot()
+    : null;
   const targetContext = await resolveTargetContext(cliArgs);
+  runtimeProfilesForSync = targetContext.profiles;
+  syncScopeForWritePlan = scope;
   const globalOnlyProjectSync =
     scope === "project" &&
-    targetContext.cliTargets.length === 0 &&
     targetContext.localOverrides.projectProjectionMode === "global_only";
   const selectedTargets = globalOnlyProjectSync ? [] : targetContext.activeTargets;
+  // `--targets` selects which runtime receives the project Hook closure. It
+  // must not change the independent global_only project scope decision above,
+  // nor re-enable durable agents/skills/commands for the selected runtime.
+  const globalOnlyExplicitHookTargets =
+    globalOnlyProjectSync && targetContext.cliTargets.length > 0
+      ? new Set(targetContext.activeTargets)
+      : null;
+  requestedGlobalAssetTypes = parseGlobalAssetTypesArg(
+    cliArgs,
+    runtimeProfilesForSync,
+    selectedTargets,
+  );
+  if (requestedGlobalAssetTypes !== null && syncScopeForWritePlan !== "global") {
+    throw new Error("--global-assets can only be used with --scope global");
+  }
+  if (refreshSourcePins && checkOnly && reverseMode && applyReverseWriteback) {
+    throw new Error("--check cannot apply reverse source maintenance; collect or preview candidates without --apply.");
+  }
+  if (refreshSourcePins && !checkOnly && (!reverseMode || (applyReverseWriteback && !dryRun))) {
+    await requireSourceMaintenanceCheckout(sourceMaintenanceRoot);
+  }
+  if (refreshSourcePins && !reverseMode) {
+    // Prepare once before any projection or downstream package check. A later
+    // source edit must fail the final read-only check, never be re-signed here.
+    maintainSourceEvidencePins(checkOnly);
+  }
+  globalProjectionRecordDescriptors = syncScopeForWritePlan === "global"
+    ? buildGlobalProjectionRecordDescriptors(selectedTargets)
+    : [];
   const dirs = resolveProjectionDirs(scope);
-  const agents = await loadAgents();
-  const teamDirectory = buildWorkspaceDirectory(agents);
-  const canonicalSkills = await loadCanonicalSkills();
+  let agents = await loadCanonicalAgents();
+  canonicalAgentsForGlobalOnly = agents;
+  let teamDirectory = buildWorkspaceDirectory(agents);
+  let canonicalSkills = await loadCanonicalSkills();
   const changedFiles = [];
 
   // Safety assertion: all writes must stay within allowedRoots
@@ -2625,76 +3689,113 @@ Examples:
     }
   }
 
-  // Open project install manifest recorder. Only record when writes actually
-  // hit the repo (not in --check mode, and only when scope includes project).
-  // Global-scope sync is recorded separately by sync-global-meta-theory.mjs.
-  if (!checkOnly && (scope === "project" || scope === "both")) {
+  // Every scope records its own actual projection writes into the shared
+  // ownership ledger. The recorder performs a lock-backed merge so this
+  // global writer preserves records emitted by sync-global-meta-theory.mjs.
+  if (!checkOnly && (scope === "project" || scope === "both" || scope === "global")) {
+    manifestScope = scope === "global" ? "global" : "project";
+    if (manifestScope === "project") {
+      projectManifestAtStart = readManifest(manifestPathFor("project", repoRoot));
+      runtimeSedimentedProjectPaths = await loadRuntimeSedimentedProjectPaths(repoRoot);
+    }
     manifestRecorder = openRecorder({
-      scope: "project",
-      repoRoot,
-      metaKimVersion: process.env.META_KIM_VERSION ?? null,
-      replaceSources: ["sync-runtimes"],
+      scope: manifestScope,
+      repoRoot: manifestScope === "project" ? repoRoot : undefined,
+      metaKimVersion:
+        process.env.META_KIM_VERSION ??
+        JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8")).version,
     });
+  } else if (scope === "project" || scope === "both") {
+    projectManifestAtStart = readManifest(manifestPathFor("project", repoRoot));
+    runtimeSedimentedProjectPaths = await loadRuntimeSedimentedProjectPaths(repoRoot);
   }
 
   // ── Reverse Mode: Runtime -> Canonical signal propagation ─────────────
   if (reverseMode) {
-    const signals = await executeReverseSync(dirs, selectedTargets);
+    if (reverseApprovalArgIndex >= 0 && !reverseApprovalPath) {
+      throw new Error("--approval requires a packet file");
+    }
+    if (reverseCandidateOutputArgIndex >= 0 && !reverseCandidateOutputPath) {
+      throw new Error("--candidate-output requires a file path");
+    }
+    const reverseResult = await executeReverseSync(dirs, selectedTargets);
 
     // After reverse sync, optionally run forward sync to propagate updates
-    // to other runtimes (unless --dry-run)
-    if (!dryRun && signals.length > 0) {
+    // only after an exact-bound canonical batch was actually applied.
+    if (!dryRun && reverseResult.applied) {
+      if (refreshSourcePins && !checkOnly) maintainSourceEvidencePins();
+      // Approved writeback changes the projection inputs; the snapshot loaded
+      // for candidate discovery must not overwrite that newly approved state.
+      agents = await loadCanonicalAgents();
+      canonicalAgentsForGlobalOnly = agents;
+      teamDirectory = buildWorkspaceDirectory(agents);
+      canonicalSkills = await loadCanonicalSkills();
       console.log("");
       console.log(t.reverseModePropagating);
       // Continue to forward sync below
     } else {
-      return signals;
+      return reverseResult.signals;
     }
   }
 
-  await syncCapabilityIndexMirrors(dirs, selectedTargets, changedFiles);
+  await syncCapabilityIndexMirrors(
+    dirs,
+    selectedTargets.filter((targetId) =>
+      shouldSyncRuntimeAsset(targetId, "capabilityIndex", scope),
+    ),
+    changedFiles,
+  );
 
-  // Root-cause fix for "meta:sync reports 0 changes and never projects hook
-  // updates to runtime mirrors": when `local.overrides.json` has
-  // `projectProjectionMode: "global_only"`, `selectedTargets` is forced to [],
-  // so the per-runtime `syncClaudeProjection` (which hosts the hook
-  // projection) is skipped, and `enforce-agent-dispatch.mjs` /
-  // `spine-state.mjs` (and any other canonical hook) silently drift out of
-  // sync until a manual `cp`. Canonical hooks are governance infrastructure
-  // (not user-level agent/skill/command), so they must be projected to all
-  // three runtime mirrors regardless of `selectedTargets` and
-  // `projectProjectionMode`. This block runs unconditionally (still gated by
-  // `scope !== "global"` so global-only users are not double-written).
-  if (scope !== "global") {
-    const canonicalHookFiles = (
-      await fs.readdir(canonicalClaudeHooksDir, { withFileTypes: true })
-    )
-      .filter(
-        (entry) =>
-          entry.isFile() &&
-          entry.name.endsWith(".mjs") &&
-          PROJECT_CLAUDE_HOOK_FILES.has(entry.name),
-      )
-      .map((entry) => entry.name);
-    const sharedHookDeps = [
-      "activate-meta-theory-spine.mjs",
-      "skip-reminder.mjs",
-    ];
-    for (const hookName of sharedHookDeps) {
-      if (await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", hookName),
-      )) canonicalHookFiles.push(hookName);
-    }
+  // `global_only` suppresses durable project agents/skills/commands, but the
+  // repo-local governance hook package still has to remain internally
+  // resolvable. Keep the hook-capable project mirrors paired with the same
+  // shared dependencies (especially activate-meta-theory-spine.mjs +
+  // project-root.mjs). An explicit runtime selection may narrow these Hook
+  // mirrors, but this remains deliberately narrower than selecting a runtime:
+  // it does not materialize agents, skills, commands, rules, or MCP config.
+  if (globalOnlyProjectSync) {
     const runtimeHookTargets = [
-      { hooksDir: dirs.claudeHooksProjectionDir, display: dirs.displayPaths.claudeHooks, runtime: "claude" },
-      { hooksDir: dirs.codexHooksDir, display: dirs.displayPaths.codexHooks, runtime: "codex" },
-      { hooksDir: dirs.cursorHooksDir, display: dirs.displayPaths.cursorHooks, runtime: "cursor" },
+      {
+        runtime: "claude",
+        hooksDir: dirs.claudeHooksProjectionDir,
+        display: dirs.displayPaths.claudeHooks,
+        activeFiles: new Set([
+          ...PROJECT_CLAUDE_HOOK_FILES,
+          ...SHARED_RUNTIME_HOOK_FILES,
+        ]),
+      },
+      {
+        runtime: "codex",
+        hooksDir: dirs.codexHooksDir,
+        display: dirs.displayPaths.codexHooks,
+        activeFiles: CODEX_ACTIVE_PROJECT_HOOK_FILES,
+      },
+      {
+        runtime: "cursor",
+        hooksDir: dirs.cursorHooksDir,
+        display: dirs.displayPaths.cursorHooks,
+        activeFiles: CURSOR_ACTIVE_PROJECT_HOOK_FILES,
+      },
     ];
+
     for (const target of runtimeHookTargets) {
-      for (const hookName of canonicalHookFiles) {
-        const hookContent = await tryReadCanonical(
-          path.join(canonicalClaudeHooksDir, hookName),
+      if (
+        globalOnlyExplicitHookTargets &&
+        !globalOnlyExplicitHookTargets.has(target.runtime)
+      ) {
+        continue;
+      }
+      for (const hookName of target.activeFiles) {
+        const hookSource = await canonicalGlobalHookSource(
+          hookName,
+          target.runtime,
         );
+        if (!hookSource) {
+          throw new Error(
+            `Missing canonical Hook source owner for ${target.runtime}:${hookName}`,
+          );
+        }
+        const hookContent = await tryReadCanonical(hookSource);
         if (
           hookContent &&
           (
@@ -2707,18 +3808,34 @@ Examples:
           changedFiles.push(`${target.display}/${hookName}`);
         }
       }
-      for (const hookName of REMOVED_PROJECT_CLAUDE_HOOK_FILES) {
-        if (
-          (await removeGeneratedPath(path.join(target.hooksDir, hookName)))
-            .changed
-        ) {
-          changedFiles.push(`${target.display}/${hookName}`);
-        }
+
+      const preservedFiles = new Set([
+        ...target.activeFiles,
+        ...PRESERVED_UNOWNED_LEGACY_PROJECT_HOOK_FILES,
+      ]);
+      const removedHooks = await removeProjectMetaKimHooks(
+        target.hooksDir,
+        target.runtime,
+        { keep: preservedFiles },
+      );
+      for (const hookName of removedHooks) {
+        changedFiles.push(`${target.display}/${hookName}`);
       }
     }
+
+    if (targetContext.activeTargets.includes("gemini")) {
+      const projection = resolveRuntimeProjection("gemini", "project");
+      const adapterPath = path.join(projection.hooksDir, "native-runtime-adapter.mjs");
+      const source = await fs.readFile(path.join(canonicalRuntimeAssetsDir, "shared/hooks/native-runtime-adapter.mjs"), "utf8");
+      if ((await writeGeneratedFile(adapterPath, source)).changed) changedFiles.push(path.relative(repoRoot, adapterPath));
+    }
+    await enforceGlobalOnlyProjectShape(changedFiles);
   }
 
-  if (selectedTargets.includes("claude")) {
+  if (
+    selectedTargets.includes("claude") &&
+    shouldRunRuntimeProjectionBranch("claude", scope)
+  ) {
     await syncClaudeProjection(
       dirs,
       agents,
@@ -2727,44 +3844,34 @@ Examples:
     );
   }
 
-  if (selectedTargets.includes("openclaw")) {
+  if (
+    selectedTargets.includes("openclaw") &&
+    shouldRunRuntimeProjectionBranch("openclaw", scope)
+  ) {
     const dp = dirs.displayPaths;
 
     for (const agent of agents) {
       const workspaceDir = dirs.openclawWorkspaceDir(agent.id);
       const heartbeatContent = await buildHeartbeat(agent);
-      const writes = await Promise.all([
-        writeGeneratedFile(
-          path.join(workspaceDir, "BOOT.md"),
-          buildBoot(agent),
-        ),
-        writeGeneratedFile(
-          path.join(workspaceDir, "BOOTSTRAP.md"),
-          buildBootstrap(agent),
-        ),
-        writeGeneratedFile(
-          path.join(workspaceDir, "IDENTITY.md"),
-          buildIdentity(agent),
-        ),
-        writeGeneratedFile(
-          path.join(workspaceDir, "MEMORY.md"),
-          buildMemory(agent),
-        ),
-        writeGeneratedFile(path.join(workspaceDir, "USER.md"), buildUser()),
-        writeGeneratedFile(
-          path.join(workspaceDir, "SOUL.md"),
-          buildSoul(agent),
-        ),
-        writeGeneratedFile(path.join(workspaceDir, "AGENTS.md"), teamDirectory),
-        writeGeneratedFile(
-          path.join(workspaceDir, "HEARTBEAT.md"),
-          heartbeatContent,
-        ),
-        writeGeneratedFile(
-          path.join(workspaceDir, "TOOLS.md"),
-          buildTools(agent, agents),
-        ),
+      const workspaceContent = new Map([
+        ["BOOT.md", buildBoot(agent)],
+        ["BOOTSTRAP.md", buildBootstrap(agent)],
+        ["IDENTITY.md", buildIdentity(agent)],
+        ["MEMORY.md", buildMemory(agent)],
+        ["USER.md", buildUser()],
+        ["SOUL.md", buildSoul(agent)],
+        ["AGENTS.md", teamDirectory],
+        ["HEARTBEAT.md", heartbeatContent],
+        ["TOOLS.md", buildTools(agent, agents)],
       ]);
+      const writes = await Promise.all(
+        OPENCLAW_WORKSPACE_FILE_NAMES.map((fileName) =>
+          writeGeneratedFile(
+            path.join(workspaceDir, fileName),
+            workspaceContent.get(fileName),
+          )
+        ),
+      );
 
       if (writes.some((result) => result.changed)) {
         changedFiles.push(dirs.openclawDisplayWorkspaceDir(agent.id));
@@ -2783,6 +3890,7 @@ Examples:
       const renderedTemplateRaw = renderMetaKimRuntimeMcp(
         JSON.stringify(templateConfig),
         repoRoot,
+        "openclaw",
       );
       templateConfig = JSON.parse(renderedTemplateRaw);
     }
@@ -2890,7 +3998,10 @@ Examples:
     );
   }
 
-  if (selectedTargets.includes("codex")) {
+  if (
+    selectedTargets.includes("codex") &&
+    shouldRunRuntimeProjectionBranch("codex", scope)
+  ) {
     const dp = dirs.displayPaths;
 
     if ((await removeGeneratedPath(dirs.codexLegacySkillFile)).changed) {
@@ -3013,6 +4124,36 @@ Examples:
       ) {
         changedFiles.push(`${dp.codexHooks}/graphify-context.mjs`);
       }
+      for (const hookName of [
+        "project-root.mjs",
+        "utils.mjs",
+        "skip-reminder.mjs",
+        "spine-state-utils.mjs",
+        "spine-state-gates.mjs",
+        "spine-state.mjs",
+        "governed-task-reference.mjs",
+        "task-progress.mjs",
+        "governed-host-checkpoint.mjs",
+        ...ENTRY_CLASSIFIER_HOOK_FILES,
+      ]) {
+        const sourcePath = await canonicalGlobalHookSource(hookName, "codex");
+        if (!sourcePath) {
+          throw new Error(
+            `Missing canonical Hook source for codex:${hookName}`,
+          );
+        }
+        const hookContent = await fs.readFile(sourcePath, "utf8");
+        if (
+          (
+            await writeGeneratedFile(
+              path.join(dirs.codexHooksDir, hookName),
+              hookContent,
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${dp.codexHooks}/${hookName}`);
+        }
+      }
       const spineHookContent = await tryReadCanonical(canonicalSharedSpineHookPath);
       if (
         spineHookContent &&
@@ -3057,63 +4198,25 @@ Examples:
       ) {
         changedFiles.push(`${dp.codexHooks}/bash-readonly-whitelist.mjs`);
       }
-      // Sync shared hook dependencies (utils.mjs, spine-state.mjs, skip-reminder.mjs)
-      const utilsHookContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "utils.mjs"),
-      );
-      if (
-        utilsHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "utils.mjs"),
-            utilsHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexHooks}/utils.mjs`);
-      }
-      const spineStateHookContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "spine-state.mjs"),
-      );
-      if (
-        spineStateHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "spine-state.mjs"),
-            spineStateHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexHooks}/spine-state.mjs`);
-      }
-      const skipReminderHookContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "skip-reminder.mjs"),
-      );
-      if (
-        skipReminderHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "skip-reminder.mjs"),
-            skipReminderHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexHooks}/skip-reminder.mjs`);
-      }
-      const codexMemoryHookContent =
-        scope === "global"
-          ? await tryReadCanonical(canonicalSharedMemorySaveHookPath)
-          : null;
-      if (
-        codexMemoryHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs"),
-            codexMemoryHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.codexHooks}/meta-kim-memory-save.mjs`);
+      for (const hookName of [
+        "meta-kim-memory-save.mjs",
+        "stop-spine-cleanup.mjs",
+      ]) {
+        const sourcePath = await canonicalGlobalHookSource(hookName, "codex");
+        if (!sourcePath) {
+          throw new Error(`Missing canonical Hook source for codex:${hookName}`);
+        }
+        const hookContent = await fs.readFile(sourcePath, "utf8");
+        if (
+          (
+            await writeGeneratedFile(
+              path.join(dirs.codexHooksDir, hookName),
+              hookContent,
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${dp.codexHooks}/${hookName}`);
+        }
       }
       if (scope === "global") {
         const codexHookPromptAdapterPath = path.join(
@@ -3134,7 +4237,6 @@ Examples:
       const staleCodexHooks = [
         "hookprompt-adapter.mjs",
         "planning-with-files-adapter.mjs",
-        ...(scope === "global" ? [] : ["meta-kim-memory-save.mjs"]),
       ];
       for (const staleHook of staleCodexHooks) {
         if (
@@ -3145,7 +4247,7 @@ Examples:
         }
       }
       if (scope === "global") {
-        await syncGlobalHookPackage(dirs.codexHooksDir, dp.codexHooks, changedFiles);
+        await syncGlobalHookPackage(dirs.codexHooksDir, dp.codexHooks, changedFiles, "codex");
       }
       const graphifyHookPath =
         scope === "global"
@@ -3162,11 +4264,19 @@ Examples:
       const codexMemoryHookPath =
         scope === "global"
           ? path.join(dirs.codexHooksDir, "meta-kim-memory-save.mjs")
-          : null;
+          : ".codex/hooks/meta-kim-memory-save.mjs";
+      const codexPlanningContinuityHookPath =
+        scope === "global"
+          ? path.join(dirs.codexHooksDir, "planning-continuity.mjs")
+          : ".codex/hooks/planning-continuity.mjs";
       const codexHookPromptAdapterPath =
         scope === "global"
           ? path.join(path.dirname(dirs.codexHooksDir), "hookprompt-adapter.mjs")
           : null;
+      const codexStopSpineCleanupHookPath =
+        scope === "global"
+          ? path.join(dirs.codexHooksDir, "stop-spine-cleanup.mjs")
+          : ".codex/hooks/stop-spine-cleanup.mjs";
       if (
         (
           await writeGeneratedJson(
@@ -3177,6 +4287,8 @@ Examples:
               spineHookPath,
               enforceAgentDispatchHookPath,
               hookPromptAdapterPath: codexHookPromptAdapterPath,
+              planningContinuityHookPath: codexPlanningContinuityHookPath,
+              stopSpineCleanupHookPath: codexStopSpineCleanupHookPath,
               packageRoot: repoRoot,
             }),
           )
@@ -3202,7 +4314,10 @@ Examples:
   }
 
   // ── Cursor sync ───────────────────────────────────────────────
-  if (selectedTargets.includes("cursor")) {
+  if (
+    selectedTargets.includes("cursor") &&
+    shouldRunRuntimeProjectionBranch("cursor", scope)
+  ) {
     const dp = dirs.displayPaths;
 
     // Agent projections (.cursor/agents/*.md)
@@ -3265,7 +4380,11 @@ Examples:
       changedFiles,
     );
 
-    if (dirs.cursorHooksDir && dirs.cursorHooksFile) {
+    if (
+      dirs.cursorHooksDir &&
+      dirs.cursorHooksFile &&
+      shouldSyncRuntimeAsset("cursor", "hooks", scope)
+    ) {
       // Global-hooks migration: clear legacy files directly under
       // ~/.cursor/hooks/ before writing the namespaced global package.
       if (scope === "global") {
@@ -3302,6 +4421,36 @@ Examples:
         ).changed
       ) {
         changedFiles.push(`${dp.cursorHooks}/graphify-context.mjs`);
+      }
+      for (const hookName of [
+        "project-root.mjs",
+        "utils.mjs",
+        "skip-reminder.mjs",
+        "spine-state-utils.mjs",
+        "spine-state-gates.mjs",
+        "spine-state.mjs",
+        "governed-task-reference.mjs",
+        "task-progress.mjs",
+        "governed-host-checkpoint.mjs",
+        ...ENTRY_CLASSIFIER_HOOK_FILES,
+      ]) {
+        const sourcePath = await canonicalGlobalHookSource(hookName, "cursor");
+        if (!sourcePath) {
+          throw new Error(
+            `Missing canonical Hook source for cursor:${hookName}`,
+          );
+        }
+        const hookContent = await fs.readFile(sourcePath, "utf8");
+        if (
+          (
+            await writeGeneratedFile(
+              path.join(dirs.cursorHooksDir, hookName),
+              hookContent,
+            )
+          ).changed
+        ) {
+          changedFiles.push(`${dp.cursorHooks}/${hookName}`);
+        }
       }
       const cursorSpineHookContent = await tryReadCanonical(
         canonicalSharedSpineHookPath,
@@ -3348,66 +4497,6 @@ Examples:
       ) {
         changedFiles.push(`${dp.cursorHooks}/bash-readonly-whitelist.mjs`);
       }
-      // Shared dependencies required by enforce-agent-dispatch.mjs: utils.mjs,
-      // spine-state.mjs and skip-reminder.mjs. Without these the
-      // dispatch gate cannot resolve its imports.
-      const cursorUtilsHookContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "utils.mjs"),
-      );
-      if (
-        cursorUtilsHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "utils.mjs"),
-            cursorUtilsHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorHooks}/utils.mjs`);
-      }
-      const cursorSpineStateHookContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "spine-state.mjs"),
-      );
-      if (
-        cursorSpineStateHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "spine-state.mjs"),
-            cursorSpineStateHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorHooks}/spine-state.mjs`);
-      }
-      const cursorSkipReminderHookContent = await tryReadCanonical(
-        path.join(canonicalRuntimeAssetsDir, "shared", "hooks", "skip-reminder.mjs"),
-      );
-      if (
-        cursorSkipReminderHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "skip-reminder.mjs"),
-            cursorSkipReminderHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorHooks}/skip-reminder.mjs`);
-      }
-      const cursorMemoryHookContent =
-        scope === "global"
-          ? await tryReadCanonical(canonicalSharedMemorySaveHookPath)
-          : null;
-      if (
-        cursorMemoryHookContent &&
-        (
-          await writeGeneratedFile(
-            path.join(dirs.cursorHooksDir, "meta-kim-memory-save.mjs"),
-            cursorMemoryHookContent,
-          )
-        ).changed
-      ) {
-        changedFiles.push(`${dp.cursorHooks}/meta-kim-memory-save.mjs`);
-      }
       if (scope === "global") {
         const cursorHookPromptAdapterPath = path.join(
           path.dirname(dirs.cursorHooksDir),
@@ -3438,7 +4527,7 @@ Examples:
         }
       }
       if (scope === "global") {
-        await syncGlobalHookPackage(dirs.cursorHooksDir, dp.cursorHooks, changedFiles);
+        await syncGlobalHookPackage(dirs.cursorHooksDir, dp.cursorHooks, changedFiles, "cursor");
       }
       const graphifyHookPath =
         scope === "global"
@@ -3460,6 +4549,8 @@ Examples:
         scope === "global"
           ? path.join(path.dirname(dirs.cursorHooksDir), "hookprompt-adapter.mjs")
           : null;
+      const cursorHooksDir =
+        scope === "global" ? dirs.cursorHooksDir : ".cursor/hooks";
       if (
         (
           await writeGeneratedJson(
@@ -3471,6 +4562,7 @@ Examples:
               enforceAgentDispatchHookPath,
               hookPromptAdapterPath: cursorHookPromptAdapterPath,
               packageRoot: repoRoot,
+              hooksDir: cursorHooksDir,
             }),
           )
         ).changed
@@ -3484,7 +4576,7 @@ Examples:
       const mcpContent = await tryReadCanonical(canonicalClaudeMcpPath);
       const cursorInRepoRoot = dirs.cursorMcpPath.includes(repoRoot);
       const renderedMcpContent = cursorInRepoRoot
-        ? renderMetaKimRuntimeMcp(mcpContent, repoRoot)
+        ? renderMetaKimRuntimeMcp(mcpContent, repoRoot, "cursor")
         : emptyMcpConfigContent();
       if (
         mcpContent &&
@@ -3493,6 +4585,12 @@ Examples:
       ) {
         changedFiles.push(dp.cursorMcp);
       }
+    }
+  }
+
+  if (scope === "project") {
+    for (const runtimeId of selectedTargets.filter((id) => NATIVE_PROJECTION_RUNTIME_IDS.includes(id))) {
+      await syncNativeProjectProjection(runtimeId, agents, canonicalSkills, changedFiles);
     }
   }
 
@@ -3566,6 +4664,13 @@ Examples:
   }
 
   if (checkOnly) {
+    if (selectedTargets.length === 0 && !globalOnlyProjectSync) {
+      console.log(
+        t.syncRuntimesCheckNoTargets ||
+          "[meta:sync] 未选定 runtime target — projectProjectionMode=global_only 且未传 --targets。\n本次未检查任何镜像，\"已是最新\"结论不成立。\n检查项目投影：npm run meta:check:runtimes -- --scope project --targets claude,codex\n检查全局镜像：npm run meta:check:runtimes -- --scope global",
+      );
+      return;
+    }
     console.log(t.syncRuntimesCheckOk);
     return;
   }
@@ -3848,11 +4953,19 @@ Examples:
   console.log(t.syncScopeLine(scope, selectedTargets.join(", ")));
 
   if (manifestRecorder) {
+    if (process.env.META_KIM_TEST_FAIL_SYNC_RUNTIMES_MANIFEST === "1") {
+      throw new Error(
+        "Global runtime sync is partial because install manifest persistence was intentionally failed",
+      );
+    }
     const result = await manifestRecorder.flush();
     if (result.ok) {
       console.log(`✓ ${t.syncInstallManifestOk(result.path, result.entries)}`);
+    } else {
+      throw new Error(`Install manifest update failed: ${result.error ?? "unknown error"}`);
     }
   }
+  if (refreshSourcePins && !checkOnly) maintainSourceEvidencePins(true);
 }
 
 if (

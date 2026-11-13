@@ -12,15 +12,20 @@
  *   --dry-run         print actions only
  *   --plugins-only    only run `claude plugin install` (no git clones)
  *   --skip-plugins    skip `claude plugin install` even if defaults apply
- *   --skills=id,...   install only these manifest skill ids (omit = all)
+ *   --defaults        install/update default-selected manifest skills
+ *   --all             install/update every non-reference manifest skill (explicit)
+ *   --skills=id,...   install/update only these manifest skill ids
+ *   --lang <code>     localize installer output (en, zh-CN, ja-JP, ko-KR)
+ *   --prefer-local-dependencies
+ *                     prefer local sibling dependency checkouts for testing
  *
  * Env (optional): META_KIM_CLAUDE_HOME, CLAUDE_HOME, META_KIM_CODEX_HOME,
  * CODEX_HOME, META_KIM_OPENCLAW_HOME, OPENCLAW_HOME, META_KIM_QODER_HOME,
- * QODER_HOME, META_KIM_SKILL_IDS
+ * QODER_HOME, META_KIM_SKILL_IDS, META_KIM_LOCAL_DEPENDENCY_ROOT
  */
 
 import { execFileSync, execSync, spawnSync, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,32 +49,48 @@ import {
 } from "./install-error-classifier.mjs";
 import {
   CATEGORIES,
+  directoryClosureSync,
   manifestPathFor,
+  openRecorder,
   readManifest,
 } from "./install-manifest.mjs";
 import {
   CODEX_REQUEST_USER_INPUT_FEATURE,
-  ensureCodexAppNativeControls,
-  mergeCodexConfigAddOnly,
+  reconcileCodexConfigAfterUpstreamInstall,
 } from "./codex-config-merge.mjs";
 import {
   detectManagedInstallConflict,
   detectLegacySubdirInstall,
   detectPluginBundleSkillResidue,
   sanitizeInstalledSkillTree,
+  validateSkillFrontmatter,
 } from "./install-skill-sanitizer.mjs";
 import { fileURLToPath } from "node:url";
+import { materializeManagedServiceSource, readManagedServiceSource } from "./managed-dependency-source.mjs";
+import { checkoutReviewedServiceSource, reusableManagedServiceSource } from "./managed-service-checkout.mjs";
 import {
   parseSkillsArg,
   resolveTargetContext,
   resolveRuntimeHomeDir,
 } from "./meta-kim-sync-config.mjs";
-import { t } from "./meta-kim-i18n.mjs";
+import { retirePlanningWithFiles } from "./retire-planning-with-files.mjs";
+import { retireAbsorbedDependencyCopies } from "../src/infrastructure/installer/retired-dependency-copies.mjs";
+import { installerAckLine } from "./installer-ack.mjs";
+import { createInstallerWriteBoundary, assertInstallerWritePath } from "./installer-write-boundary.mjs";
+import { inspectPlainAbsolutePath } from "./safe-managed-file-operations.mjs";
+import { LANG, t } from "./meta-kim-i18n.mjs";
+import { hookCommandNode, isNodeHookScriptCommand } from "./claude-settings-merge.mjs";
 import {
   buildCodexHooksJson,
   buildCursorHooksJson,
   buildHookPromptAdapterSource,
 } from "./runtime-hook-mapping.mjs";
+import {
+  MetaKimConfigError,
+  loadMetaKimConfig,
+} from "./meta-kim-config-loader.mjs";
+import { checkedPath, componentHash } from "./dependency-agent-discovery.mjs";
+import { upstreamCliTargetMode, upstreamCliArgsForTarget } from "./upstream-cli-install-plan.mjs";
 
 // ── ANSI colors (matching setup.mjs) ─────────────────────────────────
 
@@ -89,6 +110,59 @@ const AMBER_BRIGHT = "\x1b[38;2;200;160;80m";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+const MAX_ARCHIVE_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+// Dependency skill archives are source/document bundles. These limits leave
+// ample room for normal assets while failing closed on decompression bombs.
+const MAX_ARCHIVE_MEMBERS = 10_000;
+const MAX_ARCHIVE_MEMBER_UNCOMPRESSED_BYTES = 32 * 1024 * 1024;
+const MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
+
+function quoteCliArgForShell(value) {
+  const text = String(value);
+  if (text === "") return '""';
+  if (!/[^\w@%+=:,./\\-]/.test(text)) return text;
+  return `"${text.replace(/(["^&|<>])/g, "^$1")}"`;
+}
+
+function spawnCliWithShellOptionSync(
+  command,
+  commandArgs = [],
+  options = {},
+  useShell = shouldUseCliShell(os.platform()),
+) {
+  if (useShell) {
+    return spawnSync(
+      [command, ...commandArgs].map(quoteCliArgForShell).join(" "),
+      {
+        ...options,
+        shell: true,
+      },
+    );
+  }
+  return spawnSync(command, commandArgs, {
+    ...options,
+    shell: false,
+  });
+}
+
+function spawnCliSync(command, commandArgs = [], options = {}) {
+  return spawnCliWithShellOptionSync(
+    command,
+    commandArgs,
+    options,
+    shouldUseCliShell(os.platform()),
+  );
+}
+
+function buildGlobalCapabilityInventoryArgs(activeTargets = [], language = LANG) {
+  return [
+    "--lang",
+    language,
+    "--runtime-inventory-only",
+    "--targets",
+    activeTargets.join(","),
+  ];
+}
 
 function refreshGlobalCapabilityInventory(activeTargets = []) {
   if (dryRun) {
@@ -104,15 +178,13 @@ function refreshGlobalCapabilityInventory(activeTargets = []) {
     process.execPath,
     [
       path.join(repoRoot, "scripts", "discover-global-capabilities.mjs"),
-      "--runtime-inventory-only",
-      "--targets",
-      activeTargets.join(","),
+      ...buildGlobalCapabilityInventoryArgs(activeTargets),
     ],
     {
       cwd: repoRoot,
       stdio: "inherit",
       shell: false,
-      env: process.env,
+      env: { ...process.env, META_KIM_LANG: LANG },
     },
   );
   if (result.status === 0) {
@@ -142,17 +214,286 @@ function guideAlreadyHasGraphifySection(platform) {
   }
 }
 
+const cliArgs = process.argv.slice(2);
+// Node resolves linked entrypoints (including macOS /var -> /private/var),
+// while argv retains the caller's spelling. Compare the actual files so a
+// packed workspace reached through a link still runs the CLI.
+const directInvocation = (() => {
+  if (!process.argv[1] || process.argv[1] === "-") return false;
+  let entryPath;
+  try {
+    entryPath = realpathSync(process.argv[1]);
+  } catch (error) {
+    // An importing host may supply a virtual entrypoint. Other filesystem
+    // failures remain visible instead of hiding a real invocation error.
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+  return entryPath === realpathSync(fileURLToPath(import.meta.url));
+})();
+const INSTALLER_BOOLEAN_FLAGS = new Set([
+  "--defaults",
+  "--all",
+  "--update",
+  "--dry-run",
+  "--plugins-only",
+  "--skip-plugins",
+  "--no-plugins",
+  "--skip-inventory-refresh",
+  "--prefer-local-dependencies",
+  "--retire-absorbed",
+]);
+const INSTALLER_VALUE_FLAGS = new Set([
+  "--targets",
+  "--skills",
+  "--scope",
+  "--proxy",
+  "--log-file",
+  "--lang",
+]);
+const INSTALLER_LANGUAGE_VALUES = new Set([
+  "en",
+  "zh",
+  "zh-CN",
+  "ja",
+  "ja-JP",
+  "ko",
+  "ko-KR",
+]);
+
+function validateInstallerLanguage(value) {
+  if (!INSTALLER_LANGUAGE_VALUES.has(value)) {
+    throw new Error(
+      "--lang requires one of: en, zh, zh-CN, ja, ja-JP, ko, ko-KR",
+    );
+  }
+}
+
+function installerHelpText() {
+  return [
+    "Usage: node scripts/install-global-skills-all-runtimes.mjs [options]",
+    "",
+    "Options:",
+    "  --update                    update installed skills",
+    "  --defaults                  select the manifest's default dependencies",
+    "  --all                       explicitly select all non-reference manifest skills",
+    "  --targets <ids>             comma-separated runtime ids",
+    "  --skills <ids>              comma-separated skill ids",
+    "  --lang <code>               localize output (en, zh, zh-CN, ja, ja-JP, ko, ko-KR)",
+    "  --dry-run                   print actions without writing",
+    "  --plugins-only              install native plugin bundles only",
+    "  --skip-plugins, --no-plugins",
+    "  --skip-inventory-refresh",
+    "  --prefer-local-dependencies  use local sibling dependency checkouts when present",
+    "  --retire-absorbed            retire only unchanged manifest-owned absorbed skill copies",
+    "  --proxy <url>",
+    "  --log-file <path>",
+    "  -h, --help                  show this help without writing",
+  ].join("\n");
+}
+
+function validateInstallerArgs(argv) {
+  const hasAll = argv.includes("--all");
+  const hasDefaults = argv.includes("--defaults");
+  const hasSkills = argv.some(
+    (arg) => arg === "--skills" || arg.startsWith("--skills="),
+  );
+  const pluginsOnly = argv.includes("--plugins-only");
+  const help = argv.includes("--help") || argv.includes("-h");
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "-h" || arg === "--help") continue;
+    if (INSTALLER_BOOLEAN_FLAGS.has(arg)) continue;
+    const equalsIndex = arg.indexOf("=");
+    const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+    if (INSTALLER_VALUE_FLAGS.has(flag)) {
+      if (equalsIndex !== -1) {
+        const value = arg.slice(equalsIndex + 1);
+        if (!value && flag !== "--skills") {
+          throw new Error(`${flag} requires a value`);
+        }
+        if (flag === "--lang") validateInstallerLanguage(value);
+        continue;
+      }
+      const value = argv[index + 1];
+      if (
+        value === undefined ||
+        (value === "" && flag !== "--skills") ||
+        (flag === "--lang" ? value.startsWith("-") : value.startsWith("--"))
+      ) {
+        throw new Error(`${flag} requires a value`);
+      }
+      if (flag === "--lang") validateInstallerLanguage(value);
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown installer argument: ${arg}`);
+  }
+  if (!help && [hasAll, hasDefaults, hasSkills].filter(Boolean).length > 1) {
+    throw new Error("--all, --defaults and --skills are mutually exclusive");
+  }
+  if (!help && !pluginsOnly && !hasAll && !hasDefaults && !hasSkills) {
+    throw new Error(
+      "dependency install requires an explicit selection: use --defaults, --all or --skills <ids>",
+    );
+  }
+}
+
+async function recordManagedDependencyReceipts(homes, activeTargets) {
+  if (dryRun || pluginsOnly) return;
+  const packageVersion = JSON.parse(
+    readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+  ).version;
+  const recorder = openRecorder({
+    scope: "global",
+    metaKimVersion: packageVersion,
+  });
+  const recorded = new Set();
+  for (const runtimeId of activeTargets) {
+    const runtimeHome = homes[runtimeId];
+    if (!runtimeHome) continue;
+    for (const spec of SKILL_REPOS) {
+      if (!usesGenericSkillInstall(spec)) continue;
+      if (spec.targets && !spec.targets.includes(runtimeId)) continue;
+      const targetDirs = [resolveSkillTargetDir(runtimeHome, spec, runtimeId)];
+      if (runtimeId === "codex" && spec.id === "meta-skill-creator") {
+        targetDirs.push(path.join(runtimeHome, "skills", spec.id));
+      }
+      for (const targetDir of targetDirs) {
+        const key = managedDependencyTargetKey(targetDir);
+        if (recorded.has(key) || isPreservedServiceTarget(targetDir) || !(await pathExists(targetDir))) continue;
+        const previousEntry = globalManagedSkillPaths.find((entry) => {
+          if (managedDependencyTargetKey(entry.path) !== key) return false;
+          if (entry.purpose !== `${spec.id}-global-skill`) return false;
+          return true;
+        });
+        const currentClosure = directoryClosureSync(targetDir);
+        if (!shouldRecordManagedDependencyTarget({
+          wasWritten: managedDependencyTargetsWritten.has(key),
+          previousEntry,
+          currentClosure,
+        })) {
+          continue;
+        }
+        recorded.add(key);
+        recorder.recordDir(targetDir, {
+          source: "install-global-skills-all-runtimes",
+          purpose: `${spec.id}-global-skill`,
+          category: CATEGORIES.A,
+        });
+      }
+    }
+  }
+  const result = await recorder.flush();
+  if (!result.ok) {
+    throw new Error(`dependency ownership receipt flush failed: ${result.error}`);
+  }
+}
+
+if (directInvocation) {
+  validateInstallerArgs(cliArgs);
+  if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+    console.log(installerHelpText());
+    process.exit(0);
+  }
+}
+
+const preferLocalDependencies = cliArgs.includes("--prefer-local-dependencies");
+
+function localDependencyRoots() {
+  const roots = [];
+  if (process.env.META_KIM_LOCAL_DEPENDENCY_ROOT) {
+    roots.push(process.env.META_KIM_LOCAL_DEPENDENCY_ROOT);
+  }
+  roots.push(path.dirname(repoRoot));
+  return [...new Set(roots.map((root) => path.resolve(root)))];
+}
+
+function repoNameFromFullName(repoFullName) {
+  return String(repoFullName ?? "").split("/").filter(Boolean).at(-1) ?? null;
+}
+
+function resolveLocalDependencyRepo(repoFullName, subdir = null) {
+  if (!preferLocalDependencies) return null;
+  const repoName = repoNameFromFullName(repoFullName);
+  if (!repoName) return null;
+  for (const root of localDependencyRoots()) {
+    // An explicitly declared Kim Service checkout can have a worktree name.
+    // Bind it by its indexed component, never by an arbitrary existing folder.
+    if (repoName === "Kim_Service" && subdir && existsSync(path.join(root, ".git"))) {
+      const explicitDirectService = process.env.META_KIM_LOCAL_DEPENDENCY_ROOT
+        && path.resolve(root) === path.resolve(process.env.META_KIM_LOCAL_DEPENDENCY_ROOT)
+        && (path.basename(root) === repoName || existsSync(path.join(root, subdir, "capability.json")));
+      try {
+        const index = JSON.parse(readFileSync(path.join(root, "generated", "capabilities.json"), "utf8"));
+        const component = index.schemaVersion === 1 && index.components?.find((entry) => entry.path === subdir);
+        const contract = JSON.parse(readFileSync(path.join(root, subdir, "capability.json"), "utf8"));
+        if (component && contract.schemaVersion === 1 && contract.id === component.id
+          && contract.componentType === component.componentType) {
+          if (typeof contract.entrypoint !== "string" || contract.entrypoint.split(/[\\/]/u).some((part) => !part || part === "." || part === "..") || path.isAbsolute(contract.entrypoint)) {
+            throw new Error(`Declared local component entrypoint is invalid: ${subdir}`);
+          }
+          if (!existsSync(path.join(root, subdir, contract.entrypoint))) throw new Error(`Declared local component entrypoint is missing: ${subdir}`);
+          return root;
+        }
+        throw new Error(`Declared local component is invalid or missing: ${subdir}`);
+      } catch (error) {
+        if (error.message.startsWith("Declared local component")) throw error;
+        if (explicitDirectService && !existsSync(path.join(root, "generated", "capabilities.json"))) {
+          throw new Error("Declared local Kim_Service capability index is missing: generated/capabilities.json");
+        }
+        // An explicit direct checkout must not become an implicit network clone.
+        if (existsSync(path.join(root, "generated", "capabilities.json"))) throw new Error(`Declared local component is invalid or missing: ${subdir}`);
+      }
+    }
+    const candidate = path.join(root, repoName);
+    if (existsSync(path.join(candidate, ".git"))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 const updateMode = process.argv.includes("--update");
 const dryRun = process.argv.includes("--dry-run");
 const pluginsOnly = process.argv.includes("--plugins-only");
 const skipPlugins =
   process.argv.includes("--skip-plugins") ||
   process.argv.includes("--no-plugins");
-const cliArgs = process.argv.slice(2);
+const skipInventoryRefresh = process.argv.includes("--skip-inventory-refresh");
 const installFailures = [];
 const archiveFallbacks = [];
 const repairedInstallRoots = [];
 const sanitizedSkillIssues = [];
+const managedDependencyTargetsWritten = new Set();
+const preservedServiceTargets = new Set();
+
+function isPreservedServiceTarget(targetDir) {
+  return preservedServiceTargets.has(managedDependencyTargetKey(targetDir));
+}
+
+function managedDependencyTargetKey(targetDir) {
+  const resolved = path.resolve(targetDir);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function markManagedDependencyTargetWritten(targetDir) {
+  managedDependencyTargetsWritten.add(managedDependencyTargetKey(targetDir));
+}
+
+function shouldRecordManagedDependencyTarget({
+  wasWritten = false,
+  previousEntry = null,
+  currentClosure = null,
+} = {}) {
+  if (wasWritten) return true;
+  return Boolean(
+    previousEntry &&
+    currentClosure &&
+    currentClosure.sha256 === previousEntry.directoryClosureSha256 &&
+    currentClosure.entryCount === previousEntry.directoryClosureEntryCount,
+  );
+}
 
 // ── Log file tee ───────────────────────────────────────────────────────────
 
@@ -170,6 +511,18 @@ function parseLogFileArg(argv = process.argv.slice(2)) {
     }
   }
   return null;
+}
+
+function parseTargetsRequest(argv = process.argv.slice(2)) {
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--targets" && argv[i + 1] !== undefined) {
+      return argv[i + 1];
+    }
+    if (argv[i].startsWith("--targets=")) {
+      return argv[i].slice("--targets=".length);
+    }
+  }
+  return argv.includes("--all") ? "all" : "config-default";
 }
 
 /**
@@ -213,8 +566,6 @@ async function setupTeeStdout(logFilePath) {
 
   return logFilePath;
 }
-
-const logFileResolved = await setupTeeStdout(parseLogFileArg(cliArgs));
 
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -360,66 +711,38 @@ let useDirectConnection = false;
 /** User configured --proxy / META_KIM_GIT_PROXY: prefer that env for git (no misleading "direct failed" first). */
 const preferGitProxyFirst = Boolean(gitProxy);
 
-/**
- * Load skills manifest from shared config (single source of truth)
- * Same as setup.mjs - ensures consistency across all installation paths
- */
-function loadSkillsManifest() {
-  const manifestPath = path.join(repoRoot, "config", "skills.json");
+function loadInstallerConfig() {
+  let config;
   try {
-    const raw = readFileSync(manifestPath, "utf8");
-    const manifest = JSON.parse(raw);
-
-    // Allow env var override
-    const skillOwner =
-      process.env.META_KIM_SKILL_OWNER || manifest.skillOwner || "KimYx0207";
-
-    // Transform manifest to script’s format
-    const skillRepos = [];
-
-    for (const skill of manifest.skills) {
-      const repo = skill.repo.replace("${skillOwner}", skillOwner);
-      const fullUrl = `https://github.com/${repo}.git`;
-
-      const subdir = resolveManifestSkillSubdir(skill, os.platform());
-
-      skillRepos.push({
-        id: skill.id,
-        repo: fullUrl,
-        ...(subdir ? { subdir } : {}),
-        targets: skill.targets || ["claude", "codex", "openclaw"],
-        ...(skill.claudePlugin ? { claudePlugin: skill.claudePlugin } : {}),
-        ...(skill.codexPlugin ? { codexPlugin: skill.codexPlugin } : {}),
-        ...(skill.cursorPlugin ? { cursorPlugin: skill.cursorPlugin } : {}),
-        ...(skill.installRoot ? { installRoot: skill.installRoot } : {}),
-        ...(skill.pluginHookCompat ? { pluginHookCompat: true } : {}),
-        ...(skill.installMethod ? { installMethod: skill.installMethod } : {}),
-        ...(skill.upstreamPackage
-          ? { upstreamPackage: skill.upstreamPackage }
-          : {}),
-        ...(skill.upstreamProfile ? { upstreamProfile: skill.upstreamProfile } : {}),
-        ...(skill.legacyNames ? { legacyNames: skill.legacyNames } : {}),
-        ...(skill.hookSubdirs ? { hookSubdirs: skill.hookSubdirs } : {}),
-        ...(skill.hookConfigFiles
-          ? { hookConfigFiles: skill.hookConfigFiles }
-          : {}),
-        ...(skill.fallbackContentDir
-          ? { fallbackContentDir: skill.fallbackContentDir }
-          : {}),
-        ...(skill.hookExtraFiles
-          ? { hookExtraFiles: skill.hookExtraFiles }
-          : {}),
-        ...(skill.hookSettingsMerge
-          ? { hookSettingsMerge: skill.hookSettingsMerge }
-          : {}),
-      });
-    }
-
-    return { skillRepos };
-  } catch (err) {
-    console.warn(`${C.yellow}⚠${C.reset} ${t.failManifestLoad(err.message)}`);
-    return { skillRepos: [] };
+    config = loadMetaKimConfig({ repoRoot });
+  } catch (error) {
+    const prefix =
+      error instanceof MetaKimConfigError
+        ? `Meta_Kim configuration error [${error.code}]`
+        : "Meta_Kim configuration error";
+    console.error(`${prefix}: ${error.message}`);
+    process.exit(2);
   }
+
+  const dependencyRegistry = JSON.parse(readFileSync(path.join(repoRoot, "config", "capability-index", "dependency-project-registry.json"), "utf8"));
+  const selectedIds = installerSkillsFilter(config.skills.skills, cliArgs);
+  const skillRepos = config.skills.skills.map((skill) => {
+    const subdir = resolveManifestSkillSubdir(skill, os.platform());
+    const selected = selectedIds === null ? skill.installPolicy !== "explicit_reference_opt_in"
+      : selectedIds.some((id) => id.toLowerCase() === skill.id.toLowerCase());
+    const localRepoPath = selected ? resolveLocalDependencyRepo(skill.repository.fullName, subdir) : null;
+    const dependency = dependencyRegistry.projects?.find((entry) => entry.id === skill.id);
+    return {
+      ...skill,
+      repo: skill.repository.cloneUrl,
+      repoFullName: skill.repository.fullName,
+      historicalRepoUrls: (dependency?.source?.history ?? []).map((entry) => entry.uri?.replaceAll("${skillOwner}", config.skills.skillOwner)).filter(Boolean),
+      historicalSubdirs: (dependency?.source?.history ?? []).map((entry) => entry.subdir).filter(Boolean),
+      ...(localRepoPath ? { localRepoPath } : {}),
+      ...(subdir ? { subdir } : {}),
+    };
+  });
+  return { ...config, skillRepos };
 }
 
 function applySkillsIdFilter(skillRepos, filterIds) {
@@ -441,16 +764,42 @@ function applySkillsIdFilter(skillRepos, filterIds) {
   return { repos: picked, unknownIds };
 }
 
-const manifestLoad = loadSkillsManifest();
-let SKILL_REPOS = manifestLoad.skillRepos;
-const skillsArg = parseSkillsArg(cliArgs);
+const installerConfig = loadInstallerConfig();
+let SKILL_REPOS = installerConfig.skillRepos;
+function normalizeInstallerSkillsFilter(parsedSkills) {
+  return parsedSkills;
+}
+
+function installerSkillsFilter(skillRepos, argv) {
+  // An explicit default install cannot be broadened by a stale environment
+  // selection from another setup run. --all / --skills retain their prior rules.
+  if (argv.includes("--defaults")) {
+    return skillRepos.filter((skill) => skill.defaultSelected !== false && skill.installPolicy !== "explicit_reference_opt_in")
+      .map((skill) => skill.id);
+  }
+  return normalizeInstallerSkillsFilter(parseSkillsArg(argv));
+}
+
+const skillsArg = installerSkillsFilter(SKILL_REPOS, cliArgs);
 const skillsFilterActive = skillsArg !== null;
+if (skillsArg === null) {
+  SKILL_REPOS = SKILL_REPOS.filter(
+    (skill) => skill.installPolicy !== "explicit_reference_opt_in",
+  );
+}
 if (skillsArg !== null) {
   const { repos, unknownIds } = applySkillsIdFilter(SKILL_REPOS, skillsArg);
   for (const id of unknownIds) {
     console.warn(`${C.yellow}⚠${C.reset} ${t.skillsFilterUnknown(id)}`);
   }
   SKILL_REPOS = repos;
+  for (const skill of SKILL_REPOS) {
+    if (skill.installPolicy === "explicit_reference_opt_in") {
+      console.warn(
+        `${C.yellow}⚠${C.reset} ${skill.id} is a third-party reference and is outside Meta_Kim's first-party runtime dependency boundary.`,
+      );
+    }
+  }
   if (skillsArg.length > 0 && unknownIds.length === skillsArg.length) {
     console.warn(`${C.yellow}⚠${C.reset} ${t.skillsFilterNoMatches}`);
   } else if (SKILL_REPOS.length === 0) {
@@ -458,9 +807,25 @@ if (skillsArg !== null) {
   }
 }
 
-let CLAUDE_PLUGIN_SPECS = SKILL_REPOS.map((s) => s.claudePlugin).filter(
-  Boolean,
-);
+let CLAUDE_PLUGIN_SPECS = SKILL_REPOS.map((s) => s.claudePlugin).filter(Boolean);
+const logFileResolved = await setupTeeStdout(parseLogFileArg(cliArgs));
+
+if (directInvocation) {
+  console.log(
+    installerAckLine({
+      mode: updateMode ? "update" : "install",
+      targets: parseTargetsRequest(cliArgs),
+      skills: SKILL_REPOS.map((skill) => skill.id),
+      flags: [
+        dryRun ? "dry-run" : "",
+        pluginsOnly ? "plugins-only" : "",
+        skipPlugins ? "skip-plugins" : "",
+        skipInventoryRefresh ? "skip-inventory-refresh" : "",
+      ],
+      root: repoRoot,
+    }),
+  );
+}
 
 function loadGlobalManagedSkillPaths() {
   const manifest = readManifest(manifestPathFor("global"));
@@ -488,8 +853,13 @@ function resolveHomes() {
   };
 }
 
-function resolveCompatibilitySkillRoots(runtimeId, primarySkillsRoot) {
-  return [];
+function resolveCompatibilitySkillRoots(runtimeId, primarySkillsRoot, spec) {
+  if (runtimeId !== "codex" || spec?.id !== "meta-skill-creator") return [];
+  return [primarySkillsRoot];
+}
+
+function resolveOsUserHome(userHome = os.homedir()) {
+  return path.resolve(userHome);
 }
 
 /** Primary deploy segment under each runtime home: skills/ (default) or plugins/ (rare). */
@@ -500,7 +870,20 @@ function skillInstallRootSegment(spec) {
   return spec.installRoot === "plugins" ? "plugins" : "skills";
 }
 
-function resolveSkillTargetDir(runtimeHome, spec) {
+function resolveSkillTargetDir(
+  runtimeHome,
+  spec,
+  runtimeId = null,
+  userHome = os.homedir(),
+) {
+  if (runtimeId === "codex" && spec.id === "meta-skill-creator") {
+    return path.join(
+      resolveOsUserHome(userHome),
+      ".agents",
+      "skills",
+      spec.id,
+    );
+  }
   return path.join(runtimeHome, skillInstallRootSegment(spec), spec.id);
 }
 
@@ -512,7 +895,7 @@ function usesGenericSkillInstall(spec) {
   );
 }
 
-/** Legacy Codex ~/.agents mirror: skills/ vs plugins/ sibling layout. */
+/** Resolve a secondary compatibility target under a supplied skills root. */
 function resolveCompatSkillTargetDir(legacySkillsRoot, spec) {
   if (skillInstallRootSegment(spec) === "plugins") {
     return path.join(path.dirname(legacySkillsRoot), "plugins", spec.id);
@@ -520,12 +903,14 @@ function resolveCompatSkillTargetDir(legacySkillsRoot, spec) {
   return path.join(legacySkillsRoot, spec.id);
 }
 
+let activeInstallerWriteBoundary = null;
+
 function assertUnderHome(resolved) {
-  const home = path.resolve(os.homedir());
-  const abs = path.resolve(resolved);
-  if (abs !== home && !abs.startsWith(`${home}${path.sep}`)) {
-    throw new Error(`Refusing to write outside user home: ${abs}`);
-  }
+  assertInstallerWritePath(resolved, activeInstallerWriteBoundary ?? createInstallerWriteBoundary());
+}
+
+async function assertRealPathContained(userHome, targetPath, writeBoundary = createInstallerWriteBoundary({ userHome })) {
+  assertInstallerWritePath(targetPath, writeBoundary);
 }
 
 async function pathExists(p) {
@@ -561,6 +946,44 @@ function isWindowsLockError(error) {
 
 function delayMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Windows can report a short-lived EPERM/EBUSY/EACCES while Defender or an
+ * indexer inspects a freshly prepared sibling directory. Retry only the exact
+ * source/target rename owned by the active transaction; other platforms and
+ * other error classes keep their original single-attempt behavior.
+ */
+export async function renamePathWithWindowsRetry(
+  sourcePath,
+  targetPath,
+  {
+    platform = process.platform,
+    retries = 8,
+    retryDelayMs = 120,
+    rename = fs.rename,
+    wait = delayMs,
+  } = {},
+) {
+  const maxAttempts = platform === "win32" ? Math.max(1, retries) : 1;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await rename(sourcePath, targetPath);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (
+        platform !== "win32" ||
+        !isWindowsLockError(error) ||
+        attempt === maxAttempts
+      ) {
+        throw error;
+      }
+      await wait(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -604,13 +1027,19 @@ async function rmDirBestEffortLocked(dirPath) {
   }
 }
 
-async function replaceTargetDir(targetDir, stagedDir) {
+export async function replaceTargetDir(
+  targetDir,
+  stagedDir,
+  { renameOptions = {} } = {},
+) {
   const parentDir = path.dirname(targetDir);
   const targetExists = await pathExists(targetDir);
 
-  // No existing target — simple rename, always safe
+  // Even an absent target can be transiently locked on Windows while a newly
+  // prepared sibling directory is inspected. Keep this path atomic and retry
+  // the exact promotion instead of leaving a partial copy behind.
   if (!targetExists) {
-    await fs.rename(stagedDir, targetDir);
+    await renamePathWithWindowsRetry(stagedDir, targetDir, renameOptions);
     return;
   }
 
@@ -622,7 +1051,7 @@ async function replaceTargetDir(targetDir, stagedDir) {
   let oldMoved = false;
 
   try {
-    await fs.rename(targetDir, backupDir);
+    await renamePathWithWindowsRetry(targetDir, backupDir, renameOptions);
     oldMoved = true;
   } catch (error) {
     if (!isWindowsLockError(error)) throw error;
@@ -632,13 +1061,17 @@ async function replaceTargetDir(targetDir, stagedDir) {
 
   if (oldMoved) {
     try {
-      await fs.rename(stagedDir, targetDir);
+      await renamePathWithWindowsRetry(stagedDir, targetDir, renameOptions);
       await rmDirWithRetry(backupDir);
       return;
     } catch (error) {
       // Restore old target before falling back
       if (!(await pathExists(targetDir)) && (await pathExists(backupDir))) {
-        await fs.rename(backupDir, targetDir).catch(() => {});
+        await renamePathWithWindowsRetry(
+          backupDir,
+          targetDir,
+          renameOptions,
+        ).catch(() => {});
       }
       if (!isWindowsLockError(error)) throw error;
       // Fall through to copy fallback
@@ -664,6 +1097,44 @@ async function replaceTargetDir(targetDir, stagedDir) {
   if (oldMoved) {
     await rmDirWithRetry(backupDir);
   }
+}
+
+async function directoryContentEqual(leftDir, rightDir) {
+  let leftEntries;
+  let rightEntries;
+  try {
+    [leftEntries, rightEntries] = await Promise.all([
+      fs.readdir(leftDir, { withFileTypes: true }),
+      fs.readdir(rightDir, { withFileTypes: true }),
+    ]);
+  } catch {
+    return false;
+  }
+  const sortEntries = (entries) => [...entries].sort((a, b) => a.name.localeCompare(b.name));
+  const left = sortEntries(leftEntries);
+  const right = sortEntries(rightEntries);
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftEntry = left[index];
+    const rightEntry = right[index];
+    if (leftEntry.name !== rightEntry.name) return false;
+    const leftPath = path.join(leftDir, leftEntry.name);
+    const rightPath = path.join(rightDir, rightEntry.name);
+    if (leftEntry.isDirectory() && rightEntry.isDirectory()) {
+      if (!(await directoryContentEqual(leftPath, rightPath))) return false;
+      continue;
+    }
+    if (leftEntry.isFile() && rightEntry.isFile()) {
+      const [leftBytes, rightBytes] = await Promise.all([
+        fs.readFile(leftPath),
+        fs.readFile(rightPath),
+      ]);
+      if (!leftBytes.equals(rightBytes)) return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
 }
 
 const MAX_CONCURRENT_CLONES = 3;
@@ -801,6 +1272,7 @@ async function sanitizeCompatibilityRoots(runtimeId, primarySkillsRoot, spec) {
   const extraRoots = resolveCompatibilitySkillRoots(
     runtimeId,
     primarySkillsRoot,
+    spec,
   );
   for (const extraRoot of extraRoots) {
     const targetDir = resolveCompatSkillTargetDir(extraRoot, spec);
@@ -832,6 +1304,289 @@ async function sanitizeCompatibilityRoots(runtimeId, primarySkillsRoot, spec) {
       await sanitizeManagedSkillTarget(spec.id, targetDir);
     }
     await ensureHookLayoutAliases(path.dirname(extraRoot), spec);
+  }
+}
+
+async function validateMetaSkillCreatorPackage(rootDir) {
+  const rootStat = await fs.lstat(rootDir);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error(`Invalid meta-skill-creator package root: ${rootDir}`);
+  }
+  const skillPath = path.join(rootDir, "SKILL.md");
+  const skillStat = await fs.lstat(skillPath);
+  if (!skillStat.isFile() || skillStat.isSymbolicLink()) {
+    throw new Error("meta-skill-creator requires a regular SKILL.md");
+  }
+  const skillContent = await fs.readFile(skillPath, "utf8");
+  const frontmatter = validateSkillFrontmatter(skillContent);
+  if (!frontmatter.ok || !/^name:\s*meta-skill-creator\s*$/im.test(skillContent)) {
+    throw new Error(
+      `Invalid meta-skill-creator SKILL.md: ${frontmatter.message}`,
+    );
+  }
+
+  async function rejectLinks(currentDir) {
+    for (const entry of await fs.readdir(currentDir, { withFileTypes: true })) {
+      const entryPath = path.join(currentDir, entry.name);
+      const stat = await fs.lstat(entryPath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`meta-skill-creator package contains a link: ${entryPath}`);
+      }
+      if (stat.isDirectory()) await rejectLinks(entryPath);
+    }
+  }
+  await rejectLinks(rootDir);
+}
+
+async function transactionalReplaceMetaSkillTargets(
+  sourceDir,
+  targets,
+  {
+    userHome = os.homedir(),
+    writeBoundary = createInstallerWriteBoundary({ userHome }),
+    failCommitAfter = 0,
+    failRollbackTarget = null,
+    renameOptions = {},
+    preserveLegacyTargets = [],
+  } = {},
+) {
+  await validateMetaSkillCreatorPackage(sourceDir);
+  const legacyTargets = new Set(preserveLegacyTargets.map((target) => path.resolve(target)));
+  const guardedRenameOptions = {
+    ...renameOptions,
+    rename: async (source, target) => {
+      await assertRealPathContained(userHome, source, writeBoundary);
+      await assertRealPathContained(userHome, target, writeBoundary);
+      return (renameOptions.rename ?? fs.rename)(source, target);
+    },
+  };
+  for (const target of targets) {
+    await assertRealPathContained(userHome, target, writeBoundary);
+  }
+
+  const prepared = [];
+  const backups = [];
+  const installed = [];
+  let committed = false;
+  try {
+    // Prepare and validate every target before mutating either live root.
+    for (const target of targets) {
+      await assertRealPathContained(userHome, target, writeBoundary);
+      const staged = await createSiblingStagingDir(target, "transaction");
+      await assertRealPathContained(userHome, staged, writeBoundary);
+      await fs.cp(sourceDir, staged, { recursive: true, force: true });
+      await validateMetaSkillCreatorPackage(staged);
+      prepared.push({ target, staged });
+    }
+
+    for (const { target } of prepared) {
+      await assertRealPathContained(userHome, target, writeBoundary);
+      if (!(await pathExists(target))) continue;
+      const backup = legacyTargets.has(path.resolve(target))
+        ? await legacySkillBackupPath(target, userHome, writeBoundary)
+        : path.join(path.dirname(target), `${path.basename(target)}.transaction-backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+      await renamePathWithWindowsRetry(target, backup, guardedRenameOptions);
+      backups.push({ target, backup });
+    }
+
+    for (const item of prepared) {
+      await assertRealPathContained(userHome, item.target, writeBoundary);
+      await renamePathWithWindowsRetry(
+        item.staged,
+        item.target,
+        guardedRenameOptions,
+      );
+      installed.push(item.target);
+      if (failCommitAfter > 0 && installed.length === failCommitAfter) {
+        throw new Error(`Injected commit failure after target ${failCommitAfter}`);
+      }
+    }
+    for (const target of installed) {
+      await validateMetaSkillCreatorPackage(target);
+    }
+    committed = true;
+  } catch (error) {
+    const recoveryErrors = [];
+    if (!committed) {
+      for (const target of installed.reverse()) {
+        try {
+          await assertRealPathContained(userHome, target, writeBoundary);
+          await fs.rm(target, { recursive: true, force: true });
+          if (await pathExists(target)) {
+            throw new Error(`new target still exists after rollback removal: ${target}`);
+          }
+        } catch (recoveryError) {
+          recoveryErrors.push(
+            new Error(`failed to remove new target ${target}: ${recoveryError.message}`),
+          );
+        }
+      }
+      for (const { target, backup } of backups.reverse()) {
+        try {
+          await assertRealPathContained(userHome, target, writeBoundary);
+          await assertRealPathContained(userHome, backup, writeBoundary);
+          if (failRollbackTarget && path.resolve(target) === path.resolve(failRollbackTarget)) {
+            throw new Error("Injected rollback restore failure");
+          }
+          if (!(await pathExists(backup))) {
+            throw new Error(`recovery backup is missing: ${backup}`);
+          }
+          if (await pathExists(target)) {
+            throw new Error(`live target blocks recovery: ${target}`);
+          }
+          await renamePathWithWindowsRetry(
+            backup,
+            target,
+            guardedRenameOptions,
+          );
+          if (!(await pathExists(target)) || (await pathExists(backup))) {
+            throw new Error(`recovery verification failed: ${backup} -> ${target}`);
+          }
+          if (!legacyTargets.has(path.resolve(target))) await validateMetaSkillCreatorPackage(target);
+        } catch (recoveryError) {
+          recoveryErrors.push(
+            new Error(
+              `failed to restore ${target} from recovery backup ${backup}: ${recoveryError.message}`,
+            ),
+          );
+        }
+      }
+    }
+    if (recoveryErrors.length > 0) {
+      const recoveryPaths = backups
+        .filter(({ backup }) => existsSync(backup))
+        .map(({ backup }) => backup);
+      throw new AggregateError(
+        [error, ...recoveryErrors],
+        `meta-skill-creator transaction failed and recovery was incomplete; recovery backups: ${recoveryPaths.join(", ") || "none"}; recovery errors: ${recoveryErrors.map((item) => item.message).join(" | ")}`,
+      );
+    }
+    throw error;
+  } finally {
+    for (const { staged } of prepared) {
+      if (await pathExists(staged)) {
+        await assertRealPathContained(userHome, staged, writeBoundary);
+        await fs.rm(staged, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  }
+  for (const { target, backup } of backups) {
+    await assertRealPathContained(userHome, backup, writeBoundary);
+    if (legacyTargets.has(path.resolve(target))) {
+      console.log(`meta-skill-creator: preserved legacy repository at ${backup}`);
+      continue;
+    }
+    await rmDirBestEffortLocked(backup);
+  }
+  for (const target of targets) markManagedDependencyTargetWritten(target);
+}
+
+function testMetaSkillSourceDir() {
+  if (
+    process.env.META_KIM_ALLOW_TEST_FIXTURES === "1" &&
+    process.env.META_KIM_TEST_META_SKILL_SOURCE_DIR
+  ) {
+    return path.resolve(process.env.META_KIM_TEST_META_SKILL_SOURCE_DIR);
+  }
+  return null;
+}
+
+function testMetaSkillTransactionFaults(targets) {
+  if (process.env.META_KIM_ALLOW_TEST_FIXTURES !== "1") return {};
+  const failCommitAfter = Number.parseInt(
+    process.env.META_KIM_TEST_FAIL_COMMIT_AFTER ?? "0",
+    10,
+  );
+  const rollbackIndex = Number.parseInt(
+    process.env.META_KIM_TEST_FAIL_ROLLBACK_TARGET_INDEX ?? "-1",
+    10,
+  );
+  return {
+    failCommitAfter: Number.isFinite(failCommitAfter) ? failCommitAfter : 0,
+    failRollbackTarget:
+      rollbackIndex >= 0 && rollbackIndex < targets.length
+        ? targets[rollbackIndex]
+        : null,
+  };
+}
+
+async function installMetaSkillCreatorAcrossRuntimes(
+  runtimeHomes,
+  activeTargets,
+  spec,
+  { sourceDir = testMetaSkillSourceDir(), userHome = os.homedir() } = {},
+) {
+  const writeBoundary = activeInstallerWriteBoundary ?? createInstallerWriteBoundary({
+    userHome, runtimeHomes: activeTargets.map((id) => runtimeHomes[id]).filter(Boolean),
+  });
+  const targets = [];
+  if (activeTargets.includes("claude") && spec.targets?.includes("claude")) {
+    targets.push(path.join(runtimeHomes.claude, "skills", spec.id));
+  }
+  if (activeTargets.includes("codex") && spec.targets?.includes("codex")) {
+    targets.push(
+      resolveSkillTargetDir(runtimeHomes.codex, spec, "codex", userHome),
+      path.join(runtimeHomes.codex, "skills", spec.id),
+    );
+  }
+  // A collision belongs to this target only, including either Codex mirror.
+  // The remaining targets still participate in the same atomic transaction.
+  for (let index = targets.length - 1; index >= 0; index -= 1) {
+    if (isPreservedServiceTarget(targets[index])) targets.splice(index, 1);
+  }
+  if (targets.length === 0) return;
+  const preserveLegacyTargets = [];
+  for (const target of targets) {
+    await assertRealPathContained(userHome, target, writeBoundary);
+    const knownLegacy = await isKnownLegacySkillRoot(spec, target);
+    if (knownLegacy) preserveLegacyTargets.push(target);
+    if (repoNameFromFullName(spec.repoFullName) === "Kim_Service" && await pathExists(target)
+      && !(await isEmptyDir(target)) && !knownLegacy && !(await isOwnedServiceSkillRoot(spec, target))) {
+      throw new Error(`Existing ${spec.id} directory has no matching unchanged ownership receipt; preserved without replacement: ${target}`);
+    }
+  }
+  if (dryRun) {
+    for (const target of targets) {
+      console.log(t.dryRun(`install ${spec.id}: ${target}`));
+    }
+    return;
+  }
+
+  const sourceStage = await createSiblingStagingDir(targets[0], "source");
+  try {
+    await assertRealPathContained(userHome, sourceStage, writeBoundary);
+    if (!sourceDir && !updateMode) {
+      for (const target of targets) {
+        if (!preserveLegacyTargets.includes(target) && await isReusableSkillRoot(spec, target)) {
+          await validateMetaSkillCreatorPackage(target);
+          sourceDir = target;
+          break;
+        }
+      }
+    }
+    if (sourceDir) {
+      await fs.cp(sourceDir, sourceStage, { recursive: true, force: true });
+    } else if (spec.localRepoPath) {
+      await stageSkillFromLocalRepo(spec.id, sourceStage, spec.localRepoPath, spec.subdir);
+    } else if (spec.subdir) {
+      await installGitSkillFromSubdir(
+        spec.id,
+        sourceStage,
+        spec.repo,
+        spec.subdir,
+      );
+    } else {
+      await installGitSkill(spec.id, sourceStage, spec.repo);
+    }
+    await validateMetaSkillCreatorPackage(sourceStage);
+    await transactionalReplaceMetaSkillTargets(sourceStage, targets, {
+      userHome,
+      writeBoundary,
+      preserveLegacyTargets,
+      ...testMetaSkillTransactionFaults(targets),
+    });
+  } finally {
+    await fs.rm(sourceStage, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -1162,33 +1917,203 @@ function recordInstallFailure(details) {
   installFailures.push(details);
 }
 
-async function extractArchiveInto(targetDir, archivePath, subdirPath) {
+function resolveArchiveLimit(value, fallback, name) {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  return resolved;
+}
+
+function validateArchiveMembers(archivePath, limits = {}) {
+  const python = detectPython310();
+  if (!python) {
+    throw new Error(
+      "Archive fallback requires Python 3.10+ to validate members before extraction",
+    );
+  }
+  const maxMembers = resolveArchiveLimit(
+    limits.maxMembers,
+    MAX_ARCHIVE_MEMBERS,
+    "maxMembers",
+  );
+  const maxMemberBytes = resolveArchiveLimit(
+    limits.maxMemberBytes,
+    MAX_ARCHIVE_MEMBER_UNCOMPRESSED_BYTES,
+    "maxMemberBytes",
+  );
+  const maxTotalBytes = resolveArchiveLimit(
+    limits.maxTotalBytes,
+    MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
+    "maxTotalBytes",
+  );
+  const validator = [
+    "import re, sys, tarfile",
+    "archive = sys.argv[1]",
+    "max_members, max_member_bytes, max_total_bytes = map(int, sys.argv[2:5])",
+    "def safe_parts(value, label):",
+    "    text = value.replace('\\\\', '/')",
+    "    if not text or text.startswith('/') or text.startswith('//') or re.match(r'^[A-Za-z]:', text):",
+    "        raise RuntimeError(f'unsafe {label}: {value!r}')",
+    "    parts = []",
+    "    for part in text.split('/'):",
+    "        if part in ('', '.'):",
+    "            continue",
+    "        if part == '..':",
+    "            raise RuntimeError(f'unsafe {label}: {value!r}')",
+    "        parts.append(part)",
+    "    if not parts:",
+    "        raise RuntimeError(f'unsafe {label}: {value!r}')",
+    "    return parts",
+    "member_count = 0",
+    "total_size = 0",
+    "with tarfile.open(archive, 'r:gz') as tf:",
+    "    for member in tf:",
+    "        member_count += 1",
+    "        if member_count > max_members:",
+    "            raise RuntimeError(f'archive member count exceeds limit: {member_count} > {max_members}')",
+    "        member_size = max(0, int(member.size or 0))",
+    "        if member_size > max_member_bytes:",
+    "            raise RuntimeError(f'archive member exceeds uncompressed size limit: {member.name!r} ({member_size} > {max_member_bytes})')",
+    "        total_size += member_size",
+    "        if total_size > max_total_bytes:",
+    "            raise RuntimeError(f'archive total uncompressed size exceeds limit: {total_size} > {max_total_bytes}')",
+    "        safe_parts(member.name, 'archive member path')",
+    "        if member.issym() or member.islnk():",
+    "            safe_parts(member.linkname, 'archive link target')",
+    "            raise RuntimeError('archive links are not allowed')",
+    "        if not (member.isdir() or member.isreg()):",
+    "            raise RuntimeError(f'unsupported archive member type: {member.name!r}')",
+    "if member_count == 0:",
+    "    raise RuntimeError('archive contains no members')",
+  ].join("\n");
+  execFileSync(
+    python.command,
+    [
+      ...python.args,
+      "-c",
+      validator,
+      archivePath,
+      String(maxMembers),
+      String(maxMemberBytes),
+      String(maxTotalBytes),
+    ],
+    { stdio: "pipe" },
+  );
+}
+
+async function readResponseBodyBounded(
+  response,
+  maxBytes = MAX_ARCHIVE_DOWNLOAD_BYTES,
+) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(
+      `Archive download exceeds ${maxBytes} byte limit (content-length ${declaredLength})`,
+    );
+  }
+  if (!response.body) {
+    throw new Error("Archive fallback response has no body");
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("archive size limit exceeded").catch(() => {});
+        throw new Error(`Archive download exceeds ${maxBytes} byte limit`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
+async function replaceArchiveTargetAtomically(targetDir, stagedDir) {
+  const parentDir = path.dirname(targetDir);
+  const backupDir = path.join(
+    parentDir,
+    `${path.basename(targetDir)}.archive-backup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  let movedExisting = false;
+  await fs.mkdir(parentDir, { recursive: true });
+  if (await pathExists(targetDir)) {
+    await renamePathWithWindowsRetry(targetDir, backupDir);
+    movedExisting = true;
+  }
+  try {
+    await renamePathWithWindowsRetry(stagedDir, targetDir);
+  } catch (error) {
+    if (movedExisting && !(await pathExists(targetDir))) {
+      await renamePathWithWindowsRetry(backupDir, targetDir).catch(() => {});
+    }
+    throw error;
+  }
+  if (movedExisting) {
+    await rmDirBestEffortLocked(backupDir);
+  }
+}
+
+async function extractArchiveInto(
+  targetDir,
+  archivePath,
+  subdirPath,
+  sourceMetadata = null,
+) {
   const extractDir = await fs.mkdtemp(
     path.join(os.tmpdir(), "meta-kim-archive-"),
   );
+  const stagedTargetDir = await createSiblingStagingDir(targetDir, "archive");
   try {
     if (dryRun) {
       console.log(t.dryRun(`tar -xzf ${archivePath} -C ${extractDir}`));
     } else {
+      // Validate every member before native tar can create any filesystem entry.
+      // Links are rejected entirely because an otherwise in-root link can still
+      // be used as a write-through pivot by a later archive member.
+      validateArchiveMembers(archivePath);
       // Use relative archive name + cwd to avoid Windows tar
       // misinterpreting "C:\path" as a remote host (colon syntax).
-      execFileSync(
-        "tar",
-        ["-xzf", path.basename(archivePath), "-C", extractDir],
-        {
-          cwd: path.dirname(archivePath),
-          stdio: "pipe",
-        },
-      );
+      try {
+        execFileSync(
+          "tar",
+          ["-xzf", path.basename(archivePath), "-C", extractDir],
+          {
+            cwd: path.dirname(archivePath),
+            stdio: "pipe",
+          },
+        );
+      } catch (nativeTarError) {
+        const python = detectPython310();
+        if (!python) throw nativeTarError;
+        const safeExtract = [
+          "import sys, tarfile",
+          "archive, target = sys.argv[1], sys.argv[2]",
+          "with tarfile.open(archive, 'r:gz') as tf:",
+          "    tf.extractall(target)",
+        ].join("\n");
+        execFileSync(
+          python.command,
+          [...python.args, "-c", safeExtract, archivePath, extractDir],
+          { stdio: "pipe" },
+        );
+      }
     }
 
     const entries = await fs.readdir(extractDir, { withFileTypes: true });
-    const rootEntry = entries.find((entry) => entry.isDirectory());
-    if (!rootEntry) {
+    if (entries.length !== 1 || !entries[0].isDirectory()) {
       throw new Error(
-        `Archive extraction produced no root directory: ${archivePath}`,
+        `Archive extraction must produce exactly one root directory: ${archivePath}`,
       );
     }
+    const rootEntry = entries[0];
 
     const rootDir = path.join(extractDir, rootEntry.name);
     const sourceDir = subdirPath
@@ -1198,10 +2123,21 @@ async function extractArchiveInto(targetDir, archivePath, subdirPath) {
       throw new Error(`Archive fallback missing subdir: ${sourceDir}`);
     }
 
-    await fs.mkdir(path.dirname(targetDir), { recursive: true });
-    await fs.cp(sourceDir, targetDir, { recursive: true, force: true });
+    await fs.cp(sourceDir, stagedTargetDir, { recursive: true, force: true });
+    if (sourceMetadata) {
+      await fs.writeFile(
+        path.join(stagedTargetDir, ".meta-kim-source.json"),
+        `${JSON.stringify({ ...sourceMetadata, rootName: rootEntry.name }, null, 2)}\n`,
+        "utf8",
+      );
+    }
+    await replaceArchiveTargetAtomically(targetDir, stagedTargetDir);
+    return { rootName: rootEntry.name };
   } finally {
     await fs.rm(extractDir, { recursive: true, force: true });
+    if (await pathExists(stagedTargetDir)) {
+      await rmDirBestEffortLocked(stagedTargetDir);
+    }
   }
 }
 
@@ -1239,9 +2175,14 @@ async function installViaArchiveFallback({
     `meta-kim-${Date.now()}-${path.basename(targetDir)}.tar.gz`,
   );
   try {
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = await readResponseBodyBounded(response);
     await fs.writeFile(archivePath, buffer);
-    await extractArchiveInto(targetDir, archivePath, subdirPath);
+    await extractArchiveInto(targetDir, archivePath, subdirPath, {
+        source: "github_archive_fallback",
+        requestedUrl: archiveUrl,
+        resolvedUrl: response.url,
+    });
+    markManagedDependencyTargetWritten(targetDir);
     archiveFallbacks.push({ skillId, targetDir: displayTargetDir, category });
     console.warn(
       `${C.yellow}⚠${C.reset} ${t.warnArchiveFallback(skillId, category)}`,
@@ -1396,6 +2337,7 @@ async function installGitSkill(skillId, targetDir, repoUrl) {
             cwd: targetDir,
             skillLabel: `pull ${skillId}`,
           });
+          markManagedDependencyTargetWritten(targetDir);
           console.log(`${C.green}✓${C.reset} ${t.okUpdated(targetDir)}`);
         } catch {
           console.warn(`${C.yellow}⚠${C.reset} ${t.warnPullFailed(targetDir)}`);
@@ -1421,6 +2363,7 @@ async function installGitSkill(skillId, targetDir, repoUrl) {
               !(await isEmptyDir(stagedDir))
             ) {
               await replaceTargetDir(targetDir, stagedDir);
+              markManagedDependencyTargetWritten(targetDir);
               console.log(`${C.green}✓${C.reset} ${t.okUpdated(targetDir)}`);
             } else if (installFailures.length === failureCountBeforeFallback) {
               recordInstallFailure({
@@ -1465,6 +2408,7 @@ async function installGitSkill(skillId, targetDir, repoUrl) {
       runGit(["clone", "--depth", "1", repoUrl, targetDir], {
         skillLabel: `clone ${skillId}`,
       });
+      markManagedDependencyTargetWritten(targetDir);
       console.log(`${C.green}✓${C.reset} ${t.okCloned(targetDir)}`);
     } catch (error) {
       await handleGitFailure({
@@ -1578,6 +2522,7 @@ async function installGitSkillFromSubdir(
     !(await isEmptyDir(stagedTargetDir))
   ) {
     await replaceTargetDir(targetDir, stagedTargetDir);
+    markManagedDependencyTargetWritten(targetDir);
     console.log(
       `${C.green}✓${C.reset} ${t.okBasename(path.basename(targetDir), targetDir)}`,
     );
@@ -1589,25 +2534,12 @@ async function installGitSkillFromSubdir(
   await sanitizeManagedSkillTarget(skillId, targetDir);
 }
 
-async function installSkillCreator(targetBaseSkills) {
-  const id = "skill-creator";
-  const targetDir = path.join(targetBaseSkills, id);
-  await installGitSkillFromSubdir(
-    id,
-    targetDir,
-    "https://github.com/anthropics/skills.git",
-    "skills/skill-creator",
-  );
-}
-
 async function deployRuntimeHookSupport(spec, runtimeHome, runtimeId, skillsRoot) {
   await sanitizeCompatibilityRoots(runtimeId, skillsRoot, spec);
   await ensureHookLayoutAliases(runtimeHome, spec);
   await deployHookSubdirs(spec, runtimeHome, runtimeId);
   await deployHookConfigFiles(spec, runtimeHome, runtimeId);
   await deployHookExtraFiles(spec, runtimeHome, runtimeId);
-  await patchPlanningWithFilesPhaseCounters(spec, runtimeHome, runtimeId);
-  await patchCodexPlanningHooksForPlatform(spec, runtimeHome, runtimeId);
   await patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId);
   await mergeHookSettings(spec, runtimeHome, runtimeId);
 }
@@ -1632,13 +2564,23 @@ async function installAllSkillsForRuntime(label, runtimeHome, runtimeId) {
   for (const spec of SKILL_REPOS) {
     if (!usesGenericSkillInstall(spec))
       continue; // plugin bundles handled by installPluginBundlesForNonClaudeRuntimes
+    if (spec.id === "meta-skill-creator") continue;
     if (spec.targets && !spec.targets.includes(runtimeId)) {
       continue;
     }
     emitHeader();
-    const targetDir = resolveSkillTargetDir(runtimeHome, spec);
+    const targetDir = resolveSkillTargetDir(runtimeHome, spec, runtimeId);
+    if (isPreservedServiceTarget(targetDir)) continue;
     await cleanupLegacySkillNames(runtimeHome, spec);
-    if (spec.subdir) {
+    if (repoNameFromFullName(spec.repoFullName) === "Kim_Service") {
+      await stageAndDeployServiceSkill(spec, targetDir);
+    } else if (spec.localRepoPath) {
+      const staged = await createSiblingStagingDir(targetDir);
+      try {
+        await stageSkillFromLocalRepo(spec.id, staged, spec.localRepoPath, spec.subdir);
+        await deployStagedSkill(staged, targetDir, spec.id, spec.subdir, spec);
+      } finally { await rmDirBestEffortLocked(staged); }
+    } else if (spec.subdir) {
       await installGitSkillFromSubdir(
         spec.id,
         targetDir,
@@ -1650,13 +2592,6 @@ async function installAllSkillsForRuntime(label, runtimeHome, runtimeId) {
     }
     await deployRuntimeHookSupport(spec, runtimeHome, runtimeId, skillsRoot);
     await cleanupDisabledSkillResidue(runtimeHome, spec.id);
-  }
-  const hasManifestSkillCreator = SKILL_REPOS.some(
-    (spec) => spec.id === "skill-creator",
-  );
-  if (!skillsFilterActive && !hasManifestSkillCreator) {
-    emitHeader();
-    await installSkillCreator(skillsRoot);
   }
 
   if (!hasOutput) {
@@ -1729,38 +2664,6 @@ async function cleanupNativePluginSkillFallback(runtimeHome, runtimeId, spec) {
   }
 }
 
-const ECC_HOME_INSTALL_TARGETS = new Set(["codex", "opencode", "qwen"]);
-const ECC_PROJECT_INSTALL_TARGETS = new Set([
-  "cursor",
-  "zed",
-  "gemini",
-  "codebuddy",
-  "antigravity",
-  "joycode",
-]);
-
-function upstreamCliTargetMode(runtimeId) {
-  if (ECC_HOME_INSTALL_TARGETS.has(runtimeId)) return "home";
-  if (ECC_PROJECT_INSTALL_TARGETS.has(runtimeId)) return "project";
-  return null;
-}
-
-function upstreamCliArgsForTarget(spec, runtimeId) {
-  const pkg = spec.upstreamPackage || `${spec.id}@latest`;
-  const profile = spec.upstreamProfile || "core";
-  return [
-    "--yes",
-    "--package",
-    pkg,
-    "ecc",
-    "install",
-    "--profile",
-    profile,
-    "--target",
-    runtimeId,
-  ];
-}
-
 function formatNpxCommand(args) {
   return `npx ${args.join(" ")}`;
 }
@@ -1819,14 +2722,17 @@ async function backupCodexGlobalAgentsBeforeUpstream(snapshot) {
 }
 
 async function restoreCodexConfigAfterUpstream(snapshot, runtimeHome) {
-  if (!snapshot || snapshot.text === null) return false;
+  if (!snapshot) return false;
   const upstreamText = (await pathExists(snapshot.configPath))
     ? await fs.readFile(snapshot.configPath, "utf8")
     : "";
-  const merged = mergeCodexConfigAddOnly(snapshot.text, upstreamText);
-  const next = ensureCodexAppNativeControls(merged, {
+  const next = reconcileCodexConfigAfterUpstreamInstall(
+    snapshot.text,
+    upstreamText,
+    {
     codexHome: runtimeHome,
-  });
+    },
+  );
   if (upstreamText === next) return false;
   await fs.writeFile(snapshot.configPath, next, "utf8");
   console.log(
@@ -1944,10 +2850,9 @@ async function installUpstreamCliSpecs(runtimeHomes, activeTargets) {
       );
       await backupCodexConfigBeforeUpstream(codexConfigSnapshot);
       await backupCodexGlobalAgentsBeforeUpstream(codexGlobalAgentsSnapshot);
-      const result = spawnSync("npx", args, {
+      const result = spawnCliSync("npx", args, {
         cwd: os.homedir(),
         encoding: "utf8",
-        shell: shouldUseCliShell(os.platform()),
         stdio: "inherit",
       });
       await restoreCodexConfigAfterUpstream(codexConfigSnapshot, runtimeHome);
@@ -1985,7 +2890,7 @@ async function ensureCodexChoiceSurfaceAfterInstall(runtimeHomes, activeTargets)
     ? await fs.readFile(configPath, "utf8")
     : "";
 
-  const next = ensureCodexAppNativeControls(previous, {
+  const next = reconcileCodexConfigAfterUpstreamInstall(previous, "", {
     codexHome: runtimeHomes.codex,
   });
 
@@ -2025,9 +2930,8 @@ function printNativePluginInstallHint(runtimeId, pluginId) {
 }
 
 function codexPluginInstalled(pluginId, marketplaceId = "openai-curated") {
-  const result = spawnSync("codex", ["plugin", "list"], {
+  const result = spawnCliSync("codex", ["plugin", "list"], {
     encoding: "utf8",
-    shell: shouldUseCliShell(os.platform()),
   });
   if (result.status !== 0) return false;
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -2046,9 +2950,8 @@ function installCodexNativePlugin(pluginId) {
     return true;
   }
 
-  const versionProbe = spawnSync("codex", ["--version"], {
+  const versionProbe = spawnCliSync("codex", ["--version"], {
     encoding: "utf8",
-    shell: shouldUseCliShell(os.platform()),
   });
   if (versionProbe.status !== 0) {
     printNativePluginInstallHint("codex", pluginId);
@@ -2062,17 +2965,15 @@ function installCodexNativePlugin(pluginId) {
     return true;
   }
 
-  spawnSync("codex", ["plugin", "marketplace", "upgrade", marketplaceId], {
+  spawnCliSync("codex", ["plugin", "marketplace", "upgrade", marketplaceId], {
     encoding: "utf8",
-    shell: shouldUseCliShell(os.platform()),
     stdio: "pipe",
   });
-  const result = spawnSync(
+  const result = spawnCliSync(
     "codex",
     ["plugin", "add", `${pluginId}@${marketplaceId}`],
     {
       encoding: "utf8",
-      shell: shouldUseCliShell(os.platform()),
       stdio: "pipe",
     },
   );
@@ -2279,8 +3180,6 @@ async function installPluginBundlesForNonClaudeRuntimes(
       await deployHookSubdirs(spec, runtimeHome, runtimeId);
       await deployHookConfigFiles(spec, runtimeHome, runtimeId);
       await deployHookExtraFiles(spec, runtimeHome, runtimeId);
-      await patchPlanningWithFilesPhaseCounters(spec, runtimeHome, runtimeId);
-      await patchCodexPlanningHooksForPlatform(spec, runtimeHome, runtimeId);
       await patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId);
       await mergeHookSettings(spec, runtimeHome, runtimeId);
     }
@@ -2296,13 +3195,14 @@ async function installClaudePlugins() {
   // Auto-register plugin marketplaces if not already present.
   // This is needed on fresh Mac/Linux installs where marketplaces are not
   // pre-registered (unlike Windows which has them installed by default).
-  // Registry: marketplace-id -> GitHub repo URL (marketplace.json's "name" field
-  // becomes the marketplace-id used in "plugin@marketplace" spec).
-  const MARKETPLACE_URLS = {
-    ecc: "https://github.com/affaan-m/ECC",
-    "superpowers-marketplace":
-      "https://github.com/obra/superpowers-marketplace",
-  };
+  // Registry is derived from config/skills.json. A plugin with no declared
+  // marketplace/version source is rejected by the shared config preflight.
+  const MARKETPLACE_URLS = Object.fromEntries(
+    SKILL_REPOS.filter((skill) => skill.claudePlugin).map((skill) => [
+      skill.marketplace.id,
+      skill.marketplace.repository.cloneUrl,
+    ]),
+  );
 
   if (dryRun) {
     const neededMarketplaces = new Set(
@@ -2332,7 +3232,7 @@ async function installClaudePlugins() {
   // standalone .exe.  We try direct spawn first (skips .cmd), then
   // shell spawn (finds .cmd).  Whichever works is reused below.
   const isWin = os.platform() === "win32";
-  const useShell = shouldUseCliShell(isWin);
+  const useShell = shouldUseCliShell(os.platform());
 
   let claudeShellOpt = false;
   let claudeFound = false;
@@ -2346,9 +3246,8 @@ async function installClaudePlugins() {
 
   // Strategy 2: shell spawn (finds .cmd wrappers for npm installs)
   if (!claudeFound && useShell) {
-    const viaShell = spawnSync("claude", ["--version"], {
+    const viaShell = spawnCliSync("claude", ["--version"], {
       encoding: "utf8",
-      shell: true,
     });
     if (viaShell.status === 0) {
       claudeShellOpt = true;
@@ -2372,10 +3271,11 @@ async function installClaudePlugins() {
     console.log(`\n${C.dim}  ${t.checkingPluginMarketplaces}${C.reset}`);
 
     // Probe currently-registered marketplaces
-    const mktListOut = spawnSync(
+    const mktListOut = spawnCliWithShellOptionSync(
       "claude",
       ["plugin", "marketplace", "list", "--json"],
-      { encoding: "utf8", shell: claudeShellOpt },
+      { encoding: "utf8" },
+      claudeShellOpt,
     );
     let registeredMarketplaces = new Set();
     if (mktListOut.status === 0 && mktListOut.stdout) {
@@ -2403,10 +3303,11 @@ async function installClaudePlugins() {
       console.log(
         `${C.cyan}→${C.reset} ${C.dim}Registering marketplace "${mktId}" from ${url}${C.reset}`,
       );
-      const addOut = spawnSync(
+      const addOut = spawnCliWithShellOptionSync(
         "claude",
         ["plugin", "marketplace", "add", url],
-        { encoding: "utf8", shell: claudeShellOpt },
+        { encoding: "utf8" },
+        claudeShellOpt,
       );
       if (addOut.status === 0) {
         console.log(
@@ -2429,10 +3330,11 @@ async function installClaudePlugins() {
       console.log(
         `${C.cyan}→${C.reset} ${C.dim}Refreshing marketplace "${mktId}"${C.reset}`,
       );
-      const updateOut = spawnSync(
+      const updateOut = spawnCliWithShellOptionSync(
         "claude",
         ["plugin", "marketplace", "update", mktId],
-        { encoding: "utf8", shell: claudeShellOpt },
+        { encoding: "utf8" },
+        claudeShellOpt,
       );
       if (updateOut.status === 0) {
         console.log(
@@ -2509,10 +3411,12 @@ async function installClaudePlugins() {
   }
 
   // Probe currently-active plugins via CLI (for bare-name dedup in non-update mode)
-  const listOut = spawnSync("claude", ["plugins", "list", "--json"], {
-    encoding: "utf8",
-    shell: claudeShellOpt,
-  });
+  const listOut = spawnCliWithShellOptionSync(
+    "claude",
+    ["plugins", "list", "--json"],
+    { encoding: "utf8" },
+    claudeShellOpt,
+  );
   let installedNames = new Set();
   if (listOut.status === 0 && listOut.stdout) {
     try {
@@ -2533,9 +3437,14 @@ async function installClaudePlugins() {
    * Returns version string or null if unreachable/unparseable.
    * Version source: .claude-plugin/marketplace.json → plugins[].version
    */
-  async function fetchLatestPluginVersion(repoFull) {
-    // repoFull format: "owner/repo"
-    const url = `https://api.github.com/repos/${repoFull}/contents/.claude-plugin%2Fmarketplace.json`;
+  async function fetchLatestPluginVersion(versionSource) {
+    const repoFull = versionSource.repository.fullName;
+    const encodedManifestPath = versionSource.manifestPath
+      .split("/")
+      .filter(Boolean)
+      .map(encodeURIComponent)
+      .join("/");
+    const url = `${versionSource.apiBase}/repos/${repoFull}/contents/${encodedManifestPath}`;
     try {
       const res = await fetch(url, {
         headers: {
@@ -2549,7 +3458,9 @@ async function installClaudePlugins() {
       const m = JSON.parse(content);
       // marketplace.json format: { plugins: [{ name, version, ... }] }
       if (m.plugins && Array.isArray(m.plugins)) {
-        const found = m.plugins.find((p) => p.name);
+        const found = m.plugins.find(
+          (plugin) => plugin.name === versionSource.pluginName,
+        );
         return found?.version ?? null;
       }
       // Fallback: top-level version (some older formats)
@@ -2561,17 +3472,9 @@ async function installClaudePlugins() {
 
   for (const spec of CLAUDE_PLUGIN_SPECS) {
     const bareName = spec.split("@")[0];
-    // Parse repo from spec: "owner/repo"
-    // spec format is "bareName@marketplace" — resolve repo from skills.json manifest
-    const pluginRepoMap = {
-      superpowers: "obra/superpowers",
-      ecc: "affaan-m/ECC",
-      "code-simplifier": "claude-plugins-official/code-simplifier",
-      "rust-analyzer-lsp": "claude-plugins-official/rust-analyzer-lsp",
-      "claude-md-management": "claude-plugins-official/claude-md-management",
-      "pyright-lsp": "claude-plugins-official/pyright-lsp",
-    };
-    const repoFull = pluginRepoMap[bareName] ?? `${bareName}/${bareName}`;
+    const repoSpec = SKILL_REPOS.find((skill) => skill.claudePlugin === spec);
+    const versionSource = repoSpec.versionSource;
+    const repoFull = versionSource.repository.fullName;
     // Look up by full spec ("bareName@marketplace"), not bare name.
     // installed_plugins.json can carry stale cross-marketplace entries for the
     // same bare name (e.g. both "superpowers@claude-plugins-official" and
@@ -2592,7 +3495,7 @@ async function installClaudePlugins() {
       }
     } else {
       // Update mode: fetch latest from GitHub and compare
-      const latestVersion = await fetchLatestPluginVersion(repoFull);
+      const latestVersion = await fetchLatestPluginVersion(versionSource);
       if (latestVersion) {
         if (localVersion === latestVersion) {
           console.log(
@@ -2629,10 +3532,12 @@ async function installClaudePlugins() {
           : t.installingPlugin(spec)
       }`,
     );
-    const p = spawnSync("claude", ["plugin", pluginCommand, spec], {
-      stdio: "inherit",
-      shell: claudeShellOpt,
-    });
+    const p = spawnCliWithShellOptionSync(
+      "claude",
+      ["plugin", pluginCommand, spec],
+      { stdio: "inherit" },
+      claudeShellOpt,
+    );
     if (p.status !== 0) {
       console.warn(
         `${C.yellow}⚠${C.reset} ${t.warnPluginFailed(spec, p.status)}`,
@@ -2738,8 +3643,8 @@ async function cleanupLegacyGlobalArtifacts(homes) {
   }
 
   // Pattern 2: stale meta-kim install artifact inside Claude home
-  const metaKimLegacy = path.join(homes.claude, "meta-kim");
-  if (await pathExists(metaKimLegacy)) {
+  const metaKimLegacy = homes.claude ? path.join(homes.claude, "meta-kim") : null;
+  if (metaKimLegacy && await pathExists(metaKimLegacy)) {
     console.warn(`${C.yellow}⚠${C.reset} ${t.warnRemovingObsoleteDir}`);
     console.warn(
       `${C.dim}  ${metaKimLegacy}${C.reset} — ${t.warnPre2Artifact}`,
@@ -2900,48 +3805,34 @@ async function cleanupClaudeNativePluginSkillResidue(homes, activeTargets) {
 
 // ── Two-phase install helpers ─────────────────────────────────
 
-/**
- * Remove legacy-named skill directories/symlinks before installing the current skill.
- * For example, when "find-skills" was renamed to "findskill", this removes the old
- * "find-skills" directory or symlink so both do not coexist.
- *
- * @param {string} runtimeHome - The runtime home directory (e.g. ~/.claude)
- * @param {object} spec - The skill spec from the manifest (must have .id, may have .legacyNames)
- */
 async function cleanupLegacySkillNames(runtimeHome, spec) {
   const legacyNames = spec.legacyNames;
-  if (!legacyNames || legacyNames.length === 0) {
-    return;
-  }
-
+  if (!legacyNames || legacyNames.length === 0) return;
   const installSegment = skillInstallRootSegment(spec);
-
   for (const legacyName of legacyNames) {
     const legacyDir = path.join(runtimeHome, installSegment, legacyName);
-    if (!(await pathExists(legacyDir))) {
+    let stat;
+    try { stat = await fs.lstat(legacyDir); }
+    catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    // Names, valid frontmatter and symlink destinations are not ownership.
+    // Preserve linked, unknown and modified aliases, including dangling links.
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !hasUnchangedSkillReceipt(spec, legacyDir)) {
+      console.warn(`${C.yellow}⚠${C.reset} ${spec.id}: skipped legacy \"${legacyName}\" (preserved, unowned or modified): ${legacyDir}`);
       continue;
     }
-
+    await assertRealPathContained(os.homedir(), legacyDir, activeInstallerWriteBoundary);
     if (dryRun) {
       console.log(t.dryRun(`remove legacy skill dir: ${legacyDir}`));
       continue;
     }
-
     try {
-      const stat = await fs.lstat(legacyDir);
-      if (stat.isSymbolicLink()) {
-        await fs.unlink(legacyDir);
-      } else {
-        await rmDirWithRetry(legacyDir);
-      }
+      await rmDirWithRetry(legacyDir);
       console.log(
         `${C.green}✓${C.reset} ${t.warnLegacyNameRemoved(spec.id, legacyName, legacyDir)}`,
       );
     } catch (error) {
       if (isWindowsLockError(error)) {
-        console.warn(
-          `${C.yellow}⚠${C.reset} ${t.warnStagingLocked(legacyDir)}`,
-        );
+        console.warn(`${C.yellow}⚠${C.reset} ${t.warnStagingLocked(legacyDir)}`);
         continue;
       }
       console.warn(
@@ -3086,6 +3977,7 @@ async function stageSkillClone(
     (await pathExists(preExistingPath)) &&
     !(await isEmptyDir(preExistingPath))
   ) {
+    await fs.cp(preExistingPath, stagedPath, { recursive: true, force: true, filter: (file) => path.basename(file) !== ".git" });
     return true;
   }
 
@@ -3107,6 +3999,50 @@ async function stageSkillClone(
     await handleGitFailure({ skillId, targetDir: stagedPath, repoUrl, error });
     return (await pathExists(stagedPath)) && !(await isEmptyDir(stagedPath));
   }
+}
+
+async function stageSkillFromLocalRepo(
+  skillId,
+  stagedPath,
+  localRepoPath,
+  subdirPath = null,
+  preExistingPath,
+  skipIfExisting,
+) {
+  if (
+    skipIfExisting &&
+    preExistingPath &&
+    (await pathExists(preExistingPath)) &&
+    !(await isEmptyDir(preExistingPath))
+  ) {
+    await fs.cp(preExistingPath, stagedPath, { recursive: true, force: true, filter: (file) => path.basename(file) !== ".git" });
+    return true;
+  }
+
+  if ((await pathExists(stagedPath)) && !(await isEmptyDir(stagedPath))) {
+    return true;
+  }
+
+  const sourcePath = subdirPath
+    ? path.join(localRepoPath, ...subdirPath.split("/").filter(Boolean))
+    : localRepoPath;
+
+  if (dryRun) {
+    console.log(
+      t.dryRun(`stage local ${sourcePath} -> ${stagedPath}`),
+    );
+    return true;
+  }
+
+  if (!(await pathExists(sourcePath))) {
+    throw new Error(`Local dependency source missing for ${skillId}: ${sourcePath}`);
+  }
+  await assertPlainComponentRoot(localRepoPath);
+  if (subdirPath) await checkedPath(localRepoPath, subdirPath, true);
+  await componentHash(sourcePath);
+  await fs.mkdir(path.dirname(stagedPath), { recursive: true });
+  await fs.cp(sourcePath, stagedPath, { recursive: true, force: true });
+  return true;
 }
 
 /**
@@ -3132,6 +4068,7 @@ async function stageSkillFromSubdir(
     (await pathExists(preExistingPath)) &&
     !(await isEmptyDir(preExistingPath))
   ) {
+    await fs.cp(preExistingPath, stagedPath, { recursive: true, force: true, filter: (file) => path.basename(file) !== ".git" });
     return true;
   }
 
@@ -3218,24 +4155,195 @@ async function stageSkillFromSubdir(
  * Deploy a staged skill to a runtime's skills directory.
  * Handles existing targets, repair, and sanitization.
  */
-async function deployStagedSkill(stagedPath, targetDir, skillId, subdirPath) {
+async function assertPlainComponentRoot(root, { installed = false } = {}) {
+  const stat = await fs.lstat(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Component root must be a plain directory");
+  if (installed) {
+    // A bound whole runtime home may redirect; inner component paths may not.
+    await assertRealPathContained(os.homedir(), root, activeInstallerWriteBoundary);
+    return;
+  }
+  if (!inspectPlainAbsolutePath(root, { kind: "directory" })) throw new Error("Component root cannot traverse a symlink or junction");
+}
+
+async function isReusableSkillRoot(spec, root, { installed = true } = {}) {
+  try {
+    await assertPlainComponentRoot(root, { installed });
+    const relative = spec.id === "hookprompt"
+      ? `.claude/hooks/${spec.hookSettingsMerge?.claude?.hookFile ?? "missing"}` : "SKILL.md";
+    const entrypoint = await checkedPath(root, relative);
+    await componentHash(root);
+    if (spec.id === "hookprompt") return true;
+    const content = await fs.readFile(entrypoint, "utf8");
+    if (!validateSkillFrontmatter(content).ok) return false;
+    if (repoNameFromFullName(spec.repoFullName) !== "Kim_Service") return true;
+    const name = content.match(/^name:\s*["']?([^\r\n"']+)["']?\s*$/mu)?.[1]?.trim();
+    return [spec.id, path.posix.basename(spec.subdir ?? spec.id), ...(spec.id === "kim-decision" ? ["Kim"] : [])].includes(name);
+  } catch (error) { if (["ENOENT", "ENOTDIR"].includes(error.code)) return false; throw error; }
+}
+
+async function isOwnedServiceSkillRoot(spec, root) {
+  if (!(await isReusableSkillRoot(spec, root))) return false;
+  if (repoNameFromFullName(spec.repoFullName) !== "Kim_Service") return true;
+  return hasUnchangedSkillReceipt(spec, root);
+}
+
+function hasUnchangedSkillReceipt(spec, root) {
+  // Matching names and valid frontmatter prove structure, never ownership.
+  // Also reject drift: files added beside a managed entrypoint are not ours
+  // to silently delete during a whole-directory replacement.
+  const key = managedDependencyTargetKey(root);
+  const receipt = globalManagedSkillPaths.find((entry) =>
+    managedDependencyTargetKey(entry.path) === key &&
+    entry.source === "install-global-skills-all-runtimes" &&
+    entry.purpose === `${spec.id}-global-skill` &&
+    [undefined, null, "install_projection"].includes(entry.ownershipClass));
+  return shouldRecordManagedDependencyTarget({
+    previousEntry: receipt,
+    currentClosure: directoryClosureSync(root),
+  });
+}
+
+async function preflightServiceSkillTargets(homes, activeTargets) {
+  if (pluginsOnly) return;
+  const checked = new Set();
+  for (const spec of SKILL_REPOS) {
+    if (!usesGenericSkillInstall(spec) || repoNameFromFullName(spec.repoFullName) !== "Kim_Service") continue;
+    for (const runtimeId of activeTargets) {
+      if (!homes[runtimeId] || (spec.targets && !spec.targets.includes(runtimeId))) continue;
+      const targets = [resolveSkillTargetDir(homes[runtimeId], spec, runtimeId)];
+      if (runtimeId === "codex" && spec.id === "meta-skill-creator") {
+        targets.push(path.join(homes[runtimeId], "skills", spec.id));
+      }
+      for (const target of targets) {
+        const key = managedDependencyTargetKey(target);
+        if (checked.has(key)) continue;
+        checked.add(key);
+        await assertRealPathContained(os.homedir(), target, activeInstallerWriteBoundary);
+        if (await pathExists(target) && !(await isEmptyDir(target))
+          && !(await isKnownLegacySkillRoot(spec, target)) && !(await isOwnedServiceSkillRoot(spec, target))) {
+          preservedServiceTargets.add(key);
+          console.warn(`${C.yellow}⚠${C.reset} ${spec.id}: skipped (preserved, unowned or modified); no matching unchanged ownership receipt; preserved without replacement: ${target}`);
+        }
+      }
+    }
+  }
+}
+
+async function isKnownLegacySkillRoot(spec, root) {
+  if (repoNameFromFullName(spec.repoFullName) !== "Kim_Service") return false;
+  let config;
+  try { await assertPlainComponentRoot(root, { installed: true }); config = await fs.readFile(await checkedPath(root, ".git/config"), "utf8"); }
+  catch (error) { if (["ENOENT", "ENOTDIR"].includes(error.code)) return false; throw error; }
+  const origin = config.match(/\[remote "origin"\]([^\[]*)/u)?.[1]?.match(/^\s*url\s*=\s*(.+)$/mu)?.[1]?.trim();
+  const normalize = (value) => String(value ?? "").replace(/^https:\/\/github\.com\//iu, "").replace(/\.git$/iu, "").toLowerCase();
+  if (!origin || ![spec.repo, ...(spec.historicalRepoUrls ?? [])].some((url) => normalize(url) === normalize(origin))) return false;
+  if (await isReusableSkillRoot(spec, root)) return true;
+  const subdirs = [spec.subdir, ...(spec.historicalSubdirs ?? []), ...(spec.id === "findskill" ? ["windows", "original"] : [])].filter(Boolean);
+  for (const subdir of subdirs) if (await isReusableSkillRoot(spec, path.join(root, subdir))) return true;
+  return false;
+}
+
+async function validateServiceStage(spec, stagedPath) {
+  const stat = await fs.lstat(stagedPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Staged component root must be a plain directory");
+  // Staging ancestors can include a permitted whole runtime-home redirect.
+  const physical = await fs.realpath(stagedPath);
+  if (!(await isReusableSkillRoot(spec, physical, { installed: false }))) {
+    throw new Error(`Staged ${spec.id} component has no valid matching entrypoint`);
+  }
+  const prefix = `${spec.subdir}/`;
+  for (const [runtime, subdirs] of Object.entries(spec.hookSubdirs ?? {})) {
+    if (spec.targets && !spec.targets.includes(runtime)) continue;
+    for (const relative of subdirs) {
+      if (!relative.startsWith(prefix)) throw new Error(`Hook source is outside ${spec.id} component`);
+      await checkedPath(physical, relative.slice(prefix.length), true);
+    }
+  }
+  for (const entries of Object.values(spec.hookExtraFiles ?? {})) {
+    for (const entry of entries) {
+      if (!entry.src.startsWith(prefix)) throw new Error(`Hook attachment is outside ${spec.id} component`);
+      await checkedPath(physical, entry.src.slice(prefix.length));
+    }
+  }
+}
+
+async function prepareManagedServiceSource(activeTargets) {
+  if (dryRun || pluginsOnly) return;
+  const selected = SKILL_REPOS.filter(spec => repoNameFromFullName(spec.repoFullName) === "Kim_Service"
+    && activeTargets.some(runtime => !spec.targets || spec.targets.includes(runtime)));
+  if (!selected.length) return;
+  const declared = selected.find(spec => spec.localRepoPath)?.localRepoPath;
+  const installed = !declared && !updateMode ? readManagedServiceSource() : null;
+  let root = reusableManagedServiceSource(installed, selected[0].repoFullName);
+  if (!root) {
+    const temporary = declared ? null : await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-service-source-"));
+    try {
+      const sourceRevision = temporary ? await checkoutReviewedServiceSource({ directory: temporary,
+        repositoryUrl: selected[0].repo, repository: selected[0].repoFullName, runGit: runGitAsync }) : null;
+      root = await materializeManagedServiceSource({ sourceRoot: declared ?? temporary,
+        metaKimVersion: JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")).version, sourceRevision });
+    } finally {
+      if (temporary) await fs.rm(temporary, { recursive: true, force: true });
+    }
+  }
+  for (const spec of selected) spec.localRepoPath = root;
+}
+
+async function stageAndDeployServiceSkill(spec, targetDir) {
+  const targetExists = await pathExists(targetDir) && !(await isEmptyDir(targetDir));
+  const knownLegacy = targetExists && await isKnownLegacySkillRoot(spec, targetDir);
+  const reusable = targetExists && await isOwnedServiceSkillRoot(spec, targetDir);
+  if (targetExists && !knownLegacy && !reusable) {
+    throw new Error(`Existing ${spec.id} directory has no matching unchanged ownership receipt; preserved without replacement: ${targetDir}`);
+  }
+  if (dryRun) {
+    console.log(t.dryRun(`install ${spec.id} component -> ${targetDir}`));
+    return;
+  }
+  const staged = await createSiblingStagingDir(targetDir);
+  try {
+    const existing = reusable && !knownLegacy ? targetDir : null;
+    if (spec.localRepoPath) {
+      await stageSkillFromLocalRepo(spec.id, staged, spec.localRepoPath, spec.subdir, existing, !updateMode);
+    } else {
+      await stageSkillFromSubdir(spec.id, staged, spec.repo, spec.subdir, existing, !updateMode);
+    }
+    await deployStagedSkill(staged, targetDir, spec.id, spec.subdir, spec);
+  } finally {
+    await rmDirBestEffortLocked(staged);
+  }
+}
+
+async function legacySkillBackupPath(targetDir, userHome = os.homedir(), writeBoundary = activeInstallerWriteBoundary) {
+  // Keep full historical roots outside all runtime skills/plugin scan roots,
+  // but on the same runtime filesystem so rename remains atomic.
+  const backupRoot = path.join(path.dirname(path.dirname(targetDir)), ".meta-kim", "legacy-dependency-backups");
+  await assertRealPathContained(userHome, backupRoot, writeBoundary);
+  await fs.mkdir(backupRoot, { recursive: true });
+  const backup = path.join(backupRoot, `${path.basename(targetDir)}.legacy-preserved-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  await assertRealPathContained(userHome, backup, writeBoundary);
+  return backup;
+}
+
+async function deployStagedSkill(stagedPath, targetDir, skillId, subdirPath, spec = { id: skillId }) {
   assertUnderHome(targetDir);
 
   if (!(await pathExists(stagedPath)) || (await isEmptyDir(stagedPath))) {
     return false;
   }
+  if (repoNameFromFullName(spec.repoFullName) === "Kim_Service") await validateServiceStage(spec, stagedPath);
 
-  await repairManagedSkillTarget({
-    skillId,
-    targetDir,
-    subdirPath,
-    allowDelete: true,
-  });
-
+  const knownLegacy = await isKnownLegacySkillRoot(spec, targetDir);
   const targetExists = await pathExists(targetDir);
   const targetEmpty = targetExists && (await isEmptyDir(targetDir));
+  if (targetExists && !targetEmpty && repoNameFromFullName(spec.repoFullName) === "Kim_Service"
+    && !knownLegacy && !(await isOwnedServiceSkillRoot(spec, targetDir))) {
+    throw new Error(`Existing ${skillId} directory has no matching unchanged ownership receipt; preserved without replacement: ${targetDir}`);
+  }
+  if (!knownLegacy) await repairManagedSkillTarget({ skillId, targetDir, subdirPath, allowDelete: true });
 
-  if (targetExists && !targetEmpty && !updateMode) {
+  if (targetExists && !targetEmpty && !updateMode && !knownLegacy) {
     console.log(
       `${C.yellow}⊘${C.reset} ${C.dim}${t.skipExists(targetDir)}${C.reset}`,
     );
@@ -3243,15 +4351,35 @@ async function deployStagedSkill(stagedPath, targetDir, skillId, subdirPath) {
     return true;
   }
 
+  if (targetExists && !targetEmpty && await directoryContentEqual(stagedPath, targetDir)) {
+    console.log(
+      `${C.yellow}⊘${C.reset} ${C.dim}${t.skipExists(targetDir)}${C.reset}`,
+    );
+    return true;
+  }
+
   const stagedCopy = await createSiblingStagingDir(targetDir);
+  let legacyBackup = null;
   try {
     await fs.cp(stagedPath, stagedCopy, { recursive: true, force: true });
     if ((await pathExists(stagedCopy)) && !(await isEmptyDir(stagedCopy))) {
+      if (knownLegacy) {
+        legacyBackup = await legacySkillBackupPath(targetDir);
+        assertUnderHome(legacyBackup);
+        await assertRealPathContained(os.homedir(), targetDir, activeInstallerWriteBoundary);
+        await assertRealPathContained(os.homedir(), legacyBackup, activeInstallerWriteBoundary);
+        await renamePathWithWindowsRetry(targetDir, legacyBackup);
+        console.log(`${skillId}: preserved legacy repository at ${legacyBackup}`);
+      }
       await replaceTargetDir(targetDir, stagedCopy);
+      markManagedDependencyTargetWritten(targetDir);
       console.log(
         `${C.green}✓${C.reset} ${t.okBasename(path.basename(targetDir), targetDir)}`,
       );
     }
+  } catch (error) {
+    if (legacyBackup && !(await pathExists(targetDir))) await renamePathWithWindowsRetry(legacyBackup, targetDir);
+    throw error;
   } finally {
     await rmDirBestEffortLocked(stagedCopy);
   }
@@ -3285,11 +4413,13 @@ async function installSkillsToMultipleRuntimes(
         (id) => !spec.targets || spec.targets.includes(id),
       );
       if (applicableRuntimes.length === 0) continue;
-      // Check the first runtime as the canonical "already installed" source.
-      const firstRuntimeHome = homes[applicableRuntimes[0]];
-      const candidate = resolveSkillTargetDir(firstRuntimeHome, spec);
-      if ((await pathExists(candidate)) && !(await isEmptyDir(candidate))) {
-        alreadyExists.set(spec.id, candidate);
+      for (const runtimeId of applicableRuntimes) {
+        const candidate = resolveSkillTargetDir(homes[runtimeId], spec, runtimeId);
+        if (isPreservedServiceTarget(candidate)) continue;
+        if (await isOwnedServiceSkillRoot(spec, candidate) && !(await isKnownLegacySkillRoot(spec, candidate))) {
+          alreadyExists.set(spec.id, candidate);
+          break;
+        }
       }
     }
 
@@ -3297,17 +4427,35 @@ async function installSkillsToMultipleRuntimes(
 
     const limitClone = createConcurrencyLimiter(MAX_CONCURRENT_CLONES);
 
-    const stagePromises = SKILL_REPOS.filter((spec) => {
+    const stageSpecs = SKILL_REPOS.filter((spec) => {
       if (!usesGenericSkillInstall(spec)) return false;
+      if (spec.id === "meta-skill-creator") return false;
       const needs = targetRuntimeIds.filter(
-        (id) => !spec.targets || spec.targets.includes(id),
+        (id) => (!spec.targets || spec.targets.includes(id)) &&
+          !isPreservedServiceTarget(resolveSkillTargetDir(homes[id], spec, id)),
       );
       return needs.length > 0;
-    }).map((spec) =>
+    });
+    const stagePromises = stageSpecs.map((spec) =>
       limitClone(async () => {
         const stagedPath = path.join(stagingRoot, spec.id);
         const preExistingPath = alreadyExists.get(spec.id);
-        const success = spec.subdir
+        const fixtureSource =
+          spec.id === "meta-skill-creator" ? testMetaSkillSourceDir() : null;
+        if (fixtureSource) {
+          await fs.cp(fixtureSource, stagedPath, { recursive: true, force: true });
+          return { id: spec.id, success: true, stagedPath };
+        }
+        const success = spec.localRepoPath
+          ? await stageSkillFromLocalRepo(
+              spec.id,
+              stagedPath,
+              spec.localRepoPath,
+              spec.subdir,
+              preExistingPath,
+              !updateMode,
+            )
+          : spec.subdir
           ? await stageSkillFromSubdir(
               spec.id,
               stagedPath,
@@ -3329,9 +4477,11 @@ async function installSkillsToMultipleRuntimes(
 
     const stagedSkills = new Map();
     const stageResults = await Promise.allSettled(stagePromises);
-    for (const result of stageResults) {
+    for (const [index, result] of stageResults.entries()) {
       if (result.status === "fulfilled") {
         stagedSkills.set(result.value.id, result.value);
+      } else if (stageSpecs[index].localRepoPath) {
+        throw result.reason;
       }
     }
 
@@ -3370,15 +4520,15 @@ async function installSkillsToMultipleRuntimes(
       for (const spec of SKILL_REPOS) {
         if (!usesGenericSkillInstall(spec))
           continue; // plugin bundles handled separately
+        if (spec.id === "meta-skill-creator") continue;
         if (spec.targets && !spec.targets.includes(runtimeId)) {
           continue;
         }
 
         const staged = stagedSkills.get(spec.id);
-        const targetDir = resolveSkillTargetDir(runtimeHome, spec);
-
+        const targetDir = resolveSkillTargetDir(runtimeHome, spec, runtimeId);
+        if (isPreservedServiceTarget(targetDir)) { emitHeader(); continue; }
         await cleanupLegacySkillNames(runtimeHome, spec);
-
         // staged?.success can be true even when stagedPath is empty (skip-clone
         // when skill already exists at first runtime). In that case fall through
         // to direct install so "already exists" output is printed.
@@ -3394,11 +4544,14 @@ async function installSkillsToMultipleRuntimes(
             targetDir,
             spec.id,
             spec.subdir,
+            spec,
           );
         } else {
           // Staging skipped or failed: fall back to direct per-runtime install
           emitHeader();
-          if (spec.subdir) {
+          if (repoNameFromFullName(spec.repoFullName) === "Kim_Service") {
+            await stageAndDeployServiceSkill(spec, targetDir);
+          } else if (spec.subdir) {
             await installGitSkillFromSubdir(
               spec.id,
               targetDir,
@@ -3412,15 +4565,6 @@ async function installSkillsToMultipleRuntimes(
 
         await deployRuntimeHookSupport(spec, runtimeHome, runtimeId, skillsRoot);
         await cleanupDisabledSkillResidue(runtimeHome, spec.id);
-      }
-
-      // skill-creator fallback (if not in manifest)
-      const hasManifestSkillCreator = SKILL_REPOS.some(
-        (s) => s.id === "skill-creator",
-      );
-      if (!skillsFilterActive && !hasManifestSkillCreator) {
-        emitHeader();
-        await installSkillCreator(skillsRoot);
       }
 
       if (!hasOutput) {
@@ -3437,6 +4581,18 @@ async function installSkillsToMultipleRuntimes(
 async function main() {
   const { activeTargets } = await resolveTargetContext(cliArgs);
   const homes = resolveHomes();
+  activeInstallerWriteBoundary = createInstallerWriteBoundary({
+    userHome: os.homedir(),
+    runtimeHomes: activeTargets.map((id) => homes[id]).filter(Boolean),
+  });
+
+  for (const runtimeId of activeTargets) {
+    if (homes[runtimeId]) {
+      for (const relative of ["", "skills", "plugins"]) {
+        assertInstallerWritePath(path.join(homes[runtimeId], relative), activeInstallerWriteBoundary);
+      }
+    }
+  }
 
   if (strippedLoopbackProxyEnv.length > 0) {
     console.warn(
@@ -3444,9 +4600,61 @@ async function main() {
     );
   }
 
-  // Clean up known legacy artifacts before any install operations
-  await cleanupLegacyGlobalArtifacts(homes);
-  await cleanupStaleStagingDirs(homes);
+  // Report every ownership collision before deployment and preserve only those
+  // targets, so unrelated selected skills and runtimes can still update.
+  // Per-target checks remain in the write paths to detect later changes.
+  await preflightServiceSkillTargets(homes, activeTargets);
+  await prepareManagedServiceSource(activeTargets);
+
+  // Whole-runtime maintenance is not part of a selected dependency update.
+  // Even owned retirement and old staging cleanup can touch another task.
+  let retiredPlanning = { preserved: [] };
+  if (!skillsFilterActive || cliArgs.includes("--defaults") || cliArgs.includes("--retire-absorbed")) {
+    const retired = await retireAbsorbedDependencyCopies({
+      repoRoot, homes, targets: activeTargets, dryRun,
+      writeBoundary: activeInstallerWriteBoundary,
+    });
+    for (const entry of retired.removed) console.log(`Retired absorbed dependency: ${entry.id} (${entry.runtime})`);
+    for (const entry of retired.planned) console.log(`[dry-run] Retire absorbed dependency: ${entry.id} (${entry.runtime})`);
+    for (const entry of retired.preserved) console.warn(`Preserved ${entry.id} (${entry.runtime}): ${entry.reason}`);
+  }
+  if (!skillsFilterActive) {
+    const selectedHomes = Object.fromEntries(
+      activeTargets.filter((id) => homes[id]).map((id) => [id, homes[id]]),
+    );
+    await cleanupLegacyGlobalArtifacts(selectedHomes);
+    retiredPlanning = await retirePlanningWithFiles({
+      homes: selectedHomes,
+      writeBoundary: activeInstallerWriteBoundary,
+      targets: activeTargets.filter((runtime) =>
+        ["claude", "codex", "cursor", "openclaw"].includes(runtime),
+      ),
+      dryRun,
+    });
+    if (retiredPlanning.preserved.length > 0) {
+      // Retirement owns only proven legacy artifacts. Unowned historical files
+      // still require manual review, but must not veto unrelated selected skills.
+      // Keep retirePlanningWithFiles atomic and fail closed for unsafe paths/I/O.
+      console.warn(
+        t.planningRetirementPreserved(
+          retiredPlanning.preserved.length,
+          retiredPlanning.preserved.map((entry) => `${entry.path} (${entry.reason})`),
+        ),
+      );
+    }
+    await cleanupStaleStagingDirs(selectedHomes);
+  }
+
+  const metaSkillCreatorSpec = SKILL_REPOS.find(
+    (spec) => spec.id === "meta-skill-creator" && usesGenericSkillInstall(spec),
+  );
+  if (!pluginsOnly && metaSkillCreatorSpec) {
+    await installMetaSkillCreatorAcrossRuntimes(
+      homes,
+      activeTargets,
+      metaSkillCreatorSpec,
+    );
+  }
 
   if (!pluginsOnly) {
     const runtimeLabels = {
@@ -3462,6 +4670,7 @@ async function main() {
         SKILL_REPOS.some(
           (spec) =>
             usesGenericSkillInstall(spec) &&
+            spec.id !== "meta-skill-creator" &&
             (!spec.targets || spec.targets.includes(id)),
         ),
     );
@@ -3488,11 +4697,17 @@ async function main() {
   }
   await installUpstreamCliSpecs(homes, activeTargets);
   await installPluginBundlesForNonClaudeRuntimes(homes, activeTargets);
-  await ensureCodexChoiceSurfaceAfterInstall(homes, activeTargets);
-  refreshGlobalCapabilityInventory(activeTargets);
+  // A selected dependency owns its own configuration transaction. Generic
+  // runtime reconciliation belongs to a full install, never an unrelated
+  // --skills update (for example, refreshing only HookPrompt).
+  if (!skillsFilterActive) {
+    await ensureCodexChoiceSurfaceAfterInstall(homes, activeTargets);
+  }
+  await recordManagedDependencyReceipts(homes, activeTargets);
+  if (!skipInventoryRefresh) refreshGlobalCapabilityInventory(activeTargets);
 
   // Optional: graphify (code knowledge graph)
-  if (!pluginsOnly) {
+  if (!pluginsOnly && process.env.META_KIM_SKIP_OPTIONAL_TOOLS !== "1") {
     console.log(`\n${C.bold}${AMBER}${t.pythonToolsOptionalHeader}${C.reset}`);
 
     // Detect Python: prefer already-activated venv (VIRTUAL_ENV), fall back to probe.
@@ -3686,9 +4901,11 @@ async function main() {
 
   // Sweep stale .disabled/ entries (covers skills deployed outside the manifest,
   // e.g. meta-theory via sync:runtimes)
-  for (const rid of activeTargets) {
-    if (homes[rid]) {
-      await sweepStaleDisabledDirs(homes[rid]);
+  if (!skillsFilterActive) {
+    for (const rid of activeTargets) {
+      if (homes[rid]) {
+        await sweepStaleDisabledDirs(homes[rid]);
+      }
     }
   }
 
@@ -3696,6 +4913,13 @@ async function main() {
   console.log(t.noteCodexOpenclaw);
   console.log(t.activeTargets(activeTargets));
   console.log(t.metaKimRoot(repoRoot));
+  if (retiredPlanning.preserved.length > 0) {
+    // Keep the outstanding manual action visible after long installer output.
+    console.warn(t.planningRetirementPreserved(
+      retiredPlanning.preserved.length,
+      retiredPlanning.preserved.map((entry) => `${entry.path} (${entry.reason})`),
+    ));
+  }
 
   // // Print log file path if logging was active
   // if (logFileResolved) {
@@ -3705,6 +4929,18 @@ async function main() {
 
 // ========== Hook Co-Deployment ==========
 
+async function localHookSource(spec, runtimeHome, runtimeId, relative, directory = false) {
+  if (spec.localRepoPath) {
+    await assertPlainComponentRoot(spec.localRepoPath);
+    return checkedPath(spec.localRepoPath, relative, directory);
+  }
+  const installed = resolveSkillTargetDir(runtimeHome, spec, runtimeId);
+  if (!(await isReusableSkillRoot(spec, installed))) return null;
+  const prefix = spec.subdir ? `${spec.subdir}/` : "";
+  const componentRelative = prefix && relative.startsWith(prefix) ? relative.slice(prefix.length) : relative;
+  return checkedPath(installed, componentRelative, directory);
+}
+
 async function deployHookSubdirs(spec, runtimeHome, runtimeId) {
   const hookSubdirs = spec.hookSubdirs;
   if (!hookSubdirs || !hookSubdirs[runtimeId]) return;
@@ -3713,6 +4949,7 @@ async function deployHookSubdirs(spec, runtimeHome, runtimeId) {
   if (!Array.isArray(subdirs) || subdirs.length === 0) return;
 
   const hooksDir = path.join(runtimeHome, "hooks");
+  assertUnderHome(hooksDir);
   if (!dryRun) {
     await fs.mkdir(hooksDir, { recursive: true });
   }
@@ -3724,6 +4961,11 @@ async function deployHookSubdirs(spec, runtimeHome, runtimeId) {
           `git sparse-checkout ${spec.repo}:${hookSubdir} -> ${hooksDir}`,
         ),
       );
+      continue;
+    }
+    const localSource = await localHookSource(spec, runtimeHome, runtimeId, hookSubdir, true);
+    if (localSource) {
+      await fs.cp(localSource, hooksDir, { recursive: true, force: true });
       continue;
     }
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-hook-"));
@@ -3780,6 +5022,12 @@ async function deployHookConfigFiles(spec, runtimeHome, runtimeId) {
     return;
   }
 
+  const localSource = await localHookSource(spec, runtimeHome, runtimeId, configFile);
+  if (localSource) {
+    await fs.copyFile(localSource, path.join(runtimeHome, path.basename(configFile)));
+    return;
+  }
+
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-hcfg-"));
   try {
     await runGitAsync(
@@ -3802,15 +5050,7 @@ async function deployHookConfigFiles(spec, runtimeHome, runtimeId) {
     const srcPath = path.join(tmp, ...configFile.split("/").filter(Boolean));
     if (await pathExists(srcPath)) {
       const destPath = path.join(runtimeHome, path.basename(configFile));
-      if (
-        spec.id === "planning-with-files" &&
-        path.basename(configFile) === "hooks.json" &&
-        ["codex", "cursor"].includes(runtimeId)
-      ) {
-        await mergePlanningHookConfigFile(srcPath, destPath);
-      } else {
-        await fs.copyFile(srcPath, destPath);
-      }
+      await fs.copyFile(srcPath, destPath);
       console.log(
         `${C.green}✓${C.reset} ${spec.id} ${path.basename(configFile)} -> ${runtimeHome} ${C.dim}(from ${configFile})${C.reset}`,
       );
@@ -3820,713 +5060,6 @@ async function deployHookConfigFiles(spec, runtimeHome, runtimeId) {
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
-}
-
-function normalizeHookCommand(command) {
-  return String(command ?? "").replace(/\\/g, "/").trim();
-}
-
-function hookCommandAlreadyRegistered(existingBlocks, generatedHook) {
-  const generatedCommand = normalizeHookCommand(generatedHook?.command);
-  if (!generatedCommand) {
-    return false;
-  }
-  return existingBlocks.some((block) =>
-    (block.hooks ?? [block]).some(
-      (hook) => normalizeHookCommand(hook?.command) === generatedCommand,
-    ),
-  );
-}
-
-function appendMissingHookBlock(existingBlocks, generatedBlock) {
-  const generatedHooks = generatedBlock.hooks ?? [generatedBlock];
-  const missingHooks = generatedHooks.filter(
-    (hook) => !hookCommandAlreadyRegistered(existingBlocks, hook),
-  );
-  if (missingHooks.length === 0) {
-    return existingBlocks;
-  }
-  if (generatedBlock.hooks && existingBlocks.length > 0) {
-    const targetIndex = existingBlocks.findIndex(
-      (block) => (block.matcher ?? "") === (generatedBlock.matcher ?? ""),
-    );
-    const index = targetIndex >= 0 ? targetIndex : 0;
-    const targetBlock = existingBlocks[index];
-    const targetHooks = targetBlock.hooks ?? [targetBlock];
-    existingBlocks[index] = {
-      ...targetBlock,
-      hooks: [...targetHooks, ...missingHooks],
-    };
-    return existingBlocks;
-  }
-  return [...existingBlocks, ...missingHooks];
-}
-
-function mergePlanningHooksJson(existing, generated) {
-  const next = { ...(generated ?? {}), ...(existing ?? {}) };
-  next.hooks = { ...((generated ?? {}).hooks ?? {}), ...((existing ?? {}).hooks ?? {}) };
-  for (const [event, generatedBlocks] of Object.entries((generated ?? {}).hooks ?? {})) {
-    const existingBlocks = Array.isArray(next.hooks[event])
-      ? [...next.hooks[event]]
-      : [];
-    const blocks = Array.isArray(generatedBlocks) ? generatedBlocks : [generatedBlocks];
-    next.hooks[event] = blocks.reduce(appendMissingHookBlock, existingBlocks);
-  }
-  return next;
-}
-
-async function mergePlanningHookConfigFile(srcPath, destPath) {
-  let generated = {};
-  let existing = {};
-  try {
-    generated = JSON.parse(await fs.readFile(srcPath, "utf8"));
-  } catch {
-    await fs.copyFile(srcPath, destPath);
-    return;
-  }
-  if (await pathExists(destPath)) {
-    try {
-      existing = JSON.parse(await fs.readFile(destPath, "utf8"));
-    } catch {
-      existing = {};
-    }
-  }
-  const merged = mergePlanningHooksJson(existing, generated);
-  await fs.writeFile(destPath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
-}
-
-function codexPlanningHookCommand(runtimeHome, scriptName) {
-  const nodePath = process.execPath;
-  const scriptPath = path.join(runtimeHome, "hooks", scriptName);
-  const runnerPath = path.join(runtimeHome, "hooks", "codex_hook_runner.mjs");
-  const shellToken = (value) =>
-    /[\s"]/u.test(value) ? JSON.stringify(value) : value;
-  return `${shellToken(nodePath)} ${shellToken(runnerPath)} ${shellToken(scriptPath)}`;
-}
-
-function buildCodexPlanningHooksJson(runtimeHome) {
-  return {
-    hooks: {
-      SessionStart: [
-        {
-          matcher: "startup|resume",
-          hooks: [
-            {
-              type: "command",
-              command: codexPlanningHookCommand(runtimeHome, "session_start.py"),
-              statusMessage: "Loading planning context",
-            },
-          ],
-        },
-      ],
-      UserPromptSubmit: [
-        {
-          hooks: [
-            {
-              type: "command",
-              command: codexPlanningHookCommand(
-                runtimeHome,
-                "user_prompt_submit.py",
-              ),
-            },
-          ],
-        },
-      ],
-      PreToolUse: [
-        {
-          matcher: "Bash",
-          hooks: [
-            {
-              type: "command",
-              command: codexPlanningHookCommand(runtimeHome, "pre_tool_use.py"),
-              statusMessage: "Checking plan before Bash",
-            },
-          ],
-        },
-      ],
-      PostToolUse: [
-        {
-          matcher: "Bash",
-          hooks: [
-            {
-              type: "command",
-              command: codexPlanningHookCommand(runtimeHome, "post_tool_use.py"),
-              statusMessage: "Reviewing Bash against plan",
-            },
-          ],
-        },
-      ],
-      Stop: [
-        {
-          hooks: [
-            {
-              type: "command",
-              command: codexPlanningHookCommand(runtimeHome, "stop.py"),
-              timeout: 30,
-            },
-          ],
-        },
-      ],
-    },
-  };
-}
-
-function hookCommandContains(block, marker) {
-  return (block.hooks ?? [block]).some((hook) =>
-    String(hook.command ?? "").includes(marker),
-  );
-}
-
-function mergeCodexPlanningHooksJson(existing, generated) {
-  const next = { ...(existing ?? {}), hooks: { ...((existing ?? {}).hooks ?? {}) } };
-  for (const [event, generatedBlocks] of Object.entries(generated.hooks ?? {})) {
-    const existingBlocks = Array.isArray(next.hooks[event])
-      ? [...next.hooks[event]]
-      : [];
-    for (const generatedBlock of generatedBlocks) {
-      const generatedHooks = generatedBlock.hooks ?? [generatedBlock];
-      const missingHooks = generatedHooks.filter((hook) => {
-        const marker = path.basename(String(hook.command ?? ""));
-        return marker && !existingBlocks.some((block) => hookCommandContains(block, marker));
-      });
-      if (missingHooks.length === 0) {
-        continue;
-      }
-
-      const matcher = generatedBlock.matcher;
-      const targetIndex = existingBlocks.findIndex((block) =>
-        matcher ? block.matcher === matcher : !block.matcher,
-      );
-      if (targetIndex >= 0) {
-        const target = existingBlocks[targetIndex];
-        existingBlocks[targetIndex] = {
-          ...target,
-          hooks: [...(target.hooks ?? []), ...missingHooks],
-        };
-      } else {
-        existingBlocks.push({
-          ...generatedBlock,
-          hooks: missingHooks,
-        });
-      }
-    }
-    next.hooks[event] = existingBlocks;
-  }
-  return next;
-}
-
-function buildCodexPlanningHookAdapterPy() {
-  return [
-    "#!/usr/bin/env python3",
-    "from __future__ import annotations",
-    "",
-    "import json",
-    "import re",
-    "import shutil",
-    "import subprocess",
-    "import sys",
-    "from pathlib import Path",
-    "from typing import Any",
-    "",
-    "",
-    "HOOK_DIR = Path(__file__).resolve().parent",
-    "",
-    "",
-    "def load_payload() -> dict[str, Any]:",
-    "    raw = sys.stdin.read().strip()",
-    "    if not raw:",
-    "        return {}",
-    "    try:",
-    "        payload = json.loads(raw)",
-    "    except json.JSONDecodeError:",
-    "        return {}",
-    "    return payload if isinstance(payload, dict) else {}",
-    "",
-    "",
-    "def cwd_from_payload(payload: dict[str, Any]) -> Path:",
-    '    cwd = payload.get("cwd")',
-    "    if isinstance(cwd, str) and cwd:",
-    "        return Path(cwd)",
-    "    return Path.cwd()",
-    "",
-    "",
-    "def emit_json(payload: dict[str, Any]) -> None:",
-    "    if not payload:",
-    "        return",
-    "    json.dump(payload, sys.stdout, ensure_ascii=False)",
-    '    sys.stdout.write("\\n")',
-    "",
-    "",
-    "def parse_json(text: str) -> dict[str, Any]:",
-    "    if not text.strip():",
-    "        return {}",
-    "    try:",
-    "        payload = json.loads(text)",
-    "    except json.JSONDecodeError:",
-    "        return {}",
-    "    return payload if isinstance(payload, dict) else {}",
-    "",
-    "",
-    "def _read_lines(path: Path) -> list[str]:",
-    "    try:",
-    '        return path.read_text(encoding="utf-8", errors="replace").splitlines()',
-    "    except OSError:",
-    "        return []",
-    "",
-    "",
-    "def _head(path: Path, count: int) -> str:",
-    '    return "\\n".join(_read_lines(path)[:count])',
-    "",
-    "",
-    "def _tail(path: Path, count: int) -> str:",
-    '    return "\\n".join(_read_lines(path)[-count:])',
-    "",
-    "",
-    "def _count_statuses(plan_file: Path) -> tuple[int, int, int, int]:",
-    "    lines = _read_lines(plan_file)",
-    '    total = sum(1 for line in lines if re.match(r"^#{2,3}\\s+Phase\\b", line))',
-    '    complete_primary = sum(1 for line in lines if "**Status:** complete" in line)',
-    '    in_progress_primary = sum(1 for line in lines if "**Status:** in_progress" in line)',
-    '    pending_primary = sum(1 for line in lines if "**Status:** pending" in line)',
-    '    complete_inline = sum(1 for line in lines if "[complete]" in line)',
-    '    in_progress_inline = sum(1 for line in lines if "[in_progress]" in line)',
-    '    pending_inline = sum(1 for line in lines if "[pending]" in line)',
-    "    complete = max(complete_primary, complete_inline)",
-    "    in_progress = max(in_progress_primary, in_progress_inline)",
-    "    pending = max(pending_primary, pending_inline)",
-    "    return total, complete, in_progress, pending",
-    "",
-    "",
-    "def _native_user_prompt_submit(cwd: Path) -> tuple[str, str]:",
-    '    plan_file = cwd / "task_plan.md"',
-    "    if not plan_file.is_file():",
-    '        return "", ""',
-    "    parts = [",
-    '        "[planning-with-files] ACTIVE PLAN -- current state:",',
-    "        _head(plan_file, 50),",
-    '        "",',
-    '        "=== recent progress ===",',
-    '        _tail(cwd / "progress.md", 20),',
-    '        "",',
-    '        "[planning-with-files] Read findings.md for research context. Continue from the current phase.",',
-    "    ]",
-    '    return "\\n".join(parts).strip(), ""',
-    "",
-    "",
-    "def _native_session_start(cwd: Path) -> tuple[str, str]:",
-    '    skill_script = HOOK_DIR.parent / "skills" / "planning-with-files" / "scripts" / "session-catchup.py"',
-    "    if skill_script.is_file():",
-    "        subprocess.run(",
-    "            [sys.executable, str(skill_script), str(cwd)],",
-    "            cwd=str(cwd),",
-    "            text=True,",
-    "            capture_output=True,",
-    "            check=False,",
-    "        )",
-    '    return _native_user_prompt_submit(cwd)',
-    "",
-    "",
-    "def _native_pre_tool_use(cwd: Path) -> tuple[str, str]:",
-    '    plan_file = cwd / "task_plan.md"',
-    '    stderr = _head(plan_file, 30) if plan_file.is_file() else ""',
-    '    return json.dumps({"decision": "allow"}), stderr',
-    "",
-    "",
-    "def _native_post_tool_use(cwd: Path) -> tuple[str, str]:",
-    '    if (cwd / "task_plan.md").is_file():',
-    '        return "[planning-with-files] Update progress.md with what you just did. If a phase is now complete, update task_plan.md status.", ""',
-    '    return "", ""',
-    "",
-    "",
-    "def _native_stop(cwd: Path) -> tuple[str, str]:",
-    '    plan_file = cwd / "task_plan.md"',
-    "    if not plan_file.is_file():",
-    '        return "", ""',
-    "    total, complete, _in_progress, _pending = _count_statuses(plan_file)",
-    "    if total <= 0:",
-    '        return "", ""',
-    "    if complete == total and total > 0:",
-    '        message = f"[planning-with-files] ALL PHASES COMPLETE ({complete}/{total}). If the user has additional work, add new phases to task_plan.md before starting."',
-    "    else:",
-    '        message = f"[planning-with-files] Task incomplete ({complete}/{total} phases done). Update progress.md, then read task_plan.md and continue working on the remaining phases."',
-    '    return json.dumps({"followup_message": message}, ensure_ascii=False), ""',
-    "",
-    "",
-    "def _run_native_script(script_name: str, cwd: Path) -> tuple[str, str]:",
-    '    if script_name == "session-start.sh":',
-    "        return _native_session_start(cwd)",
-    '    if script_name == "user-prompt-submit.sh":',
-    "        return _native_user_prompt_submit(cwd)",
-    '    if script_name == "pre-tool-use.sh":',
-    "        return _native_pre_tool_use(cwd)",
-    '    if script_name == "post-tool-use.sh":',
-    "        return _native_post_tool_use(cwd)",
-    '    if script_name == "stop.sh":',
-    "        return _native_stop(cwd)",
-    '    return "", ""',
-    "",
-    "",
-    "def run_shell_script(script_name: str, cwd: Path) -> tuple[str, str]:",
-    '    sh_bin = shutil.which("sh")',
-    "    script_path = HOOK_DIR / script_name",
-    "    if sh_bin and script_path.is_file():",
-    "        result = subprocess.run(",
-    "            [sh_bin, str(script_path)],",
-    "            cwd=str(cwd),",
-    "            text=True,",
-    "            capture_output=True,",
-    "            check=False,",
-    "        )",
-    "        return result.stdout.strip(), result.stderr.strip()",
-    "    return _run_native_script(script_name, cwd)",
-    "",
-    "",
-    "def main_guard(func) -> int:",
-    "    try:",
-    "        func()",
-    "    except Exception as exc:  # pragma: no cover",
-    '        print(f"[planning-with-files hook] {exc}", file=sys.stderr)',
-    "        return 0",
-    "    return 0",
-    "",
-  ].join("\n");
-}
-
-function buildCodexHookRunnerMjs() {
-  return [
-    'import { spawnSync } from "node:child_process";',
-    'import { existsSync, readFileSync } from "node:fs";',
-    'import os from "node:os";',
-    'import path from "node:path";',
-    'import process from "node:process";',
-    "",
-    "const scriptPath = process.argv[2];",
-    "",
-    "function pathEntries() {",
-    "  return String(process.env.PATH || process.env.Path || process.env.path || '')",
-    "    .split(path.delimiter)",
-    "    .filter(Boolean);",
-    "}",
-    "",
-    "function isWindowsApps(filePath) {",
-    "  return filePath.toLowerCase().includes('microsoft\\\\windowsapps');",
-    "}",
-    "",
-    "function commandWorks(command, args = []) {",
-    "  const result = spawnSync(command, [...args, '--version'], {",
-    "    encoding: 'utf8',",
-    "    windowsHide: true,",
-    "    timeout: 5000,",
-    "  });",
-    "  return result.status === 0;",
-    "}",
-    "",
-    "function pythonCandidates() {",
-    "  const candidates = [];",
-    "  for (const envKey of ['META_KIM_PYTHON', 'PYTHON', 'PYTHON3']) {",
-    "    const value = process.env[envKey];",
-    "    if (value) candidates.push({ command: value, args: [] });",
-    "  }",
-    "",
-    "  if (os.platform() === 'win32') {",
-    "    for (const dir of pathEntries()) {",
-    "      for (const name of ['python.exe', 'python3.exe']) {",
-    "        const filePath = path.join(dir, name);",
-    "        if (!existsSync(filePath) || isWindowsApps(filePath)) continue;",
-    "        candidates.push({ command: filePath, args: [] });",
-    "      }",
-    "    }",
-    "    for (const filePath of [",
-    "      'D:\\\\ProgramData\\\\anaconda3\\\\python.exe',",
-    "      'C:\\\\ProgramData\\\\anaconda3\\\\python.exe',",
-    "      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'python.exe'),",
-    "      path.join(os.homedir(), '.openclaw', 'skills', 'Python313', 'Python313', 'python.exe'),",
-    "    ]) {",
-    "      if (existsSync(filePath)) candidates.push({ command: filePath, args: [] });",
-    "    }",
-    "    candidates.push({ command: 'py', args: ['-3'] });",
-    "  }",
-    "",
-    "  candidates.push({ command: 'python3', args: [] });",
-    "  candidates.push({ command: 'python', args: [] });",
-    "",
-    "  const seen = new Set();",
-    "  return candidates.filter((candidate) => {",
-    "    const key = `${candidate.command}\\0${candidate.args.join('\\0')}`;",
-    "    if (seen.has(key)) return false;",
-    "    seen.add(key);",
-    "    return true;",
-    "  });",
-    "}",
-    "",
-    "function findPython() {",
-    "  for (const candidate of pythonCandidates()) {",
-    "    if (commandWorks(candidate.command, candidate.args)) return candidate;",
-    "  }",
-    "  return null;",
-    "}",
-    "",
-    "function main() {",
-    "  if (!scriptPath) return 0;",
-    "  const python = findPython();",
-    "  if (!python) return 0;",
-    "  let input = '';",
-    "  try {",
-    "    input = readFileSync(0, 'utf8');",
-    "  } catch {",
-    "    input = '';",
-    "  }",
-    "  const result = spawnSync(",
-    "    python.command,",
-    "    [...python.args, scriptPath],",
-    "    {",
-    "      input,",
-    "      encoding: 'utf8',",
-    "      env: {",
-    "        ...process.env,",
-    "        PYTHONIOENCODING: 'utf-8',",
-    "        PYTHONUTF8: '1',",
-    "      },",
-    "      windowsHide: true,",
-    "      timeout: 30000,",
-    "    },",
-    "  );",
-    "  if (result.stdout) process.stdout.write(result.stdout);",
-    "  return 0;",
-    "}",
-    "",
-    "process.exitCode = main();",
-    "",
-  ].join("\n");
-}
-
-function buildCodexWrapperPy(scriptName) {
-  return [
-    "#!/usr/bin/env python3",
-    "from __future__ import annotations",
-    "",
-    "import codex_hook_adapter as adapter",
-    "",
-    "",
-    "def main() -> None:",
-    "    payload = adapter.load_payload()",
-    "    root = adapter.cwd_from_payload(payload)",
-    `    stdout, _ = adapter.run_shell_script("${scriptName}", root)`,
-    "    if stdout:",
-    '        adapter.emit_json({"systemMessage": stdout})',
-    "",
-    "",
-    'if __name__ == "__main__":',
-    "    raise SystemExit(adapter.main_guard(main))",
-    "",
-  ].join("\n");
-}
-
-function buildCodexPreToolUseWrapperPy() {
-  return [
-    "#!/usr/bin/env python3",
-    "from __future__ import annotations",
-    "",
-    "import codex_hook_adapter as adapter",
-    "",
-    "",
-    "def main() -> None:",
-    "    payload = adapter.load_payload()",
-    "    root = adapter.cwd_from_payload(payload)",
-    '    stdout, stderr = adapter.run_shell_script("pre-tool-use.sh", root)',
-    "",
-    "    result = adapter.parse_json(stdout)",
-    '    decision = result.get("decision")',
-    '    if decision and decision != "allow":',
-    "        adapter.emit_json(result)",
-    "        return",
-    "",
-    "    if stderr:",
-    '        adapter.emit_json({"systemMessage": stderr})',
-    "",
-    "",
-    'if __name__ == "__main__":',
-    "    raise SystemExit(adapter.main_guard(main))",
-    "",
-  ].join("\n");
-}
-
-function buildCodexStopWrapperPy() {
-  return [
-    "#!/usr/bin/env python3",
-    "from __future__ import annotations",
-    "",
-    "import codex_hook_adapter as adapter",
-    "",
-    "",
-    "def main() -> None:",
-    "    payload = adapter.load_payload()",
-    "    root = adapter.cwd_from_payload(payload)",
-    '    stdout, _ = adapter.run_shell_script("stop.sh", root)',
-    "    result = adapter.parse_json(stdout)",
-    "",
-    '    decision = result.get("decision")',
-    '    if decision and decision != "allow":',
-    "        adapter.emit_json(result)",
-    "        return",
-    "",
-    '    message = result.get("followup_message")',
-    "    if not isinstance(message, str) or not message:",
-    "        return",
-    "",
-    '    if "(0/0" in message:',
-    "        return",
-    "",
-    '    adapter.emit_json({"systemMessage": message})',
-    "",
-    "",
-    'if __name__ == "__main__":',
-    "    raise SystemExit(adapter.main_guard(main))",
-    "",
-  ].join("\n");
-}
-
-async function patchTextFileIfExists(filePath, replacements) {
-  if (!(await pathExists(filePath))) {
-    return false;
-  }
-  let content = await fs.readFile(filePath, "utf8");
-  const original = content;
-  for (const [from, to] of replacements) {
-    content = content.replace(from, to);
-  }
-  if (content === original) {
-    return false;
-  }
-  await fs.writeFile(filePath, content, "utf8");
-  return true;
-}
-
-async function patchPlanningWithFilesPhaseCounters(spec, runtimeHome, runtimeId) {
-  if (spec.id !== "planning-with-files" || dryRun) {
-    return;
-  }
-
-  const shReplacements = [
-    [
-      'TOTAL=$(grep -c "### Phase" "$PLAN_FILE" || true)',
-      'TOTAL=$(grep -Ec "^#{2,3}[[:space:]]+Phase\\b" "$PLAN_FILE" || true)',
-    ],
-  ];
-  const ps1Replacements = [
-    [
-      '$TOTAL = ([regex]::Matches($content, "### Phase")).Count',
-      '$TOTAL = ([regex]::Matches($content, "(?m)^#{2,3}\\s+Phase\\b")).Count',
-    ],
-  ];
-  const candidates = [
-    [path.join(runtimeHome, "hooks", "stop.sh"), shReplacements],
-    [path.join(runtimeHome, "hooks", "stop.ps1"), ps1Replacements],
-    [
-      path.join(
-        runtimeHome,
-        "skills",
-        "planning-with-files",
-        "scripts",
-        "check-complete.sh",
-      ),
-      shReplacements,
-    ],
-    [
-      path.join(
-        runtimeHome,
-        "skills",
-        "planning-with-files",
-        "scripts",
-        "check-complete.ps1",
-      ),
-      ps1Replacements,
-    ],
-  ];
-
-  let patched = 0;
-  for (const [filePath, replacements] of candidates) {
-    if (await patchTextFileIfExists(filePath, replacements)) {
-      patched += 1;
-    }
-  }
-  if (patched > 0) {
-    console.log(
-      `${C.green}✓${C.reset} ${spec.id} phase counters patched for ${runtimeId} (${patched} file${patched === 1 ? "" : "s"})`,
-    );
-  }
-}
-
-async function patchCodexPlanningHooksForPlatform(spec, runtimeHome, runtimeId) {
-  if (
-    runtimeId !== "codex" ||
-    spec.id !== "planning-with-files" ||
-    dryRun
-  ) {
-    return;
-  }
-
-  const hooksDir = path.join(runtimeHome, "hooks");
-  if (!(await pathExists(hooksDir))) {
-    return;
-  }
-
-  const hooksJsonPath = path.join(runtimeHome, "hooks.json");
-  let existingHooksJson = {};
-  if (await pathExists(hooksJsonPath)) {
-    try {
-      existingHooksJson = JSON.parse(await fs.readFile(hooksJsonPath, "utf8"));
-    } catch {
-      existingHooksJson = {};
-    }
-  }
-  const mergedHooksJson = mergeCodexPlanningHooksJson(
-    existingHooksJson,
-    buildCodexPlanningHooksJson(runtimeHome),
-  );
-  await fs.writeFile(
-    hooksJsonPath,
-    `${JSON.stringify(mergedHooksJson, null, 2)}\n`,
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "codex_hook_adapter.py"),
-    buildCodexPlanningHookAdapterPy(),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "codex_hook_runner.mjs"),
-    buildCodexHookRunnerMjs(),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "session_start.py"),
-    buildCodexWrapperPy("session-start.sh"),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "user_prompt_submit.py"),
-    buildCodexWrapperPy("user-prompt-submit.sh"),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "pre_tool_use.py"),
-    buildCodexPreToolUseWrapperPy(),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "post_tool_use.py"),
-    buildCodexWrapperPy("post-tool-use.sh"),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(hooksDir, "stop.py"),
-    buildCodexStopWrapperPy(),
-    "utf8",
-  );
-  console.log(
-    `${C.green}✓${C.reset} ${spec.id} Codex hooks patched for ${os.platform()}`,
-  );
 }
 
 async function patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId) {
@@ -4568,6 +5101,7 @@ async function patchCodexHookPromptForPlatform(spec, runtimeHome, runtimeId) {
         (await pathExists(spineHookPath)) ? spineHookPath : "activate-meta-theory-spine.mjs",
     }),
     hookPromptAdapterPath,
+    planningContinuityHookPath: null,
   });
 
   const next = { ...existing, hooks: { ...(existing.hooks ?? {}) } };
@@ -4633,6 +5167,15 @@ async function deployHookExtraFiles(spec, runtimeHome, runtimeId) {
       continue;
     }
 
+    const localSource = await localHookSource(spec, runtimeHome, runtimeId, entry.src);
+    if (localSource) {
+      const destPath = path.join(runtimeHome, entry.dest);
+      assertUnderHome(destPath);
+      await fs.mkdir(path.dirname(destPath), { recursive: true });
+      await fs.copyFile(localSource, destPath);
+      continue;
+    }
+
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-hextra-"));
     try {
       const parentDir = path.dirname(entry.src).replace(/\\/g, "/");
@@ -4670,7 +5213,7 @@ async function deployHookExtraFiles(spec, runtimeHome, runtimeId) {
 
 // ========== Hook Settings Merge ==========
 
-async function mergeHookSettings(spec, runtimeHome, runtimeId) {
+export async function mergeHookSettings(spec, runtimeHome, runtimeId) {
   const hookSettingsMerge = spec.hookSettingsMerge;
   if (!hookSettingsMerge || !hookSettingsMerge[runtimeId]) return;
 
@@ -4679,6 +5222,9 @@ async function mergeHookSettings(spec, runtimeHome, runtimeId) {
 
   const settingsPath = path.join(runtimeHome, "settings.json");
   const hookScriptPath = path.join(runtimeHome, "hooks", cfg.hookFile);
+  const writeBoundary = activeInstallerWriteBoundary ?? createInstallerWriteBoundary({ runtimeHomes: [runtimeHome] });
+  await assertRealPathContained(os.homedir(), settingsPath, writeBoundary);
+  await assertRealPathContained(os.homedir(), hookScriptPath, writeBoundary);
 
   if (dryRun) {
     console.log(
@@ -4701,36 +5247,58 @@ async function mergeHookSettings(spec, runtimeHome, runtimeId) {
   if (!settings.hooks) settings.hooks = {};
   const existingEntries = settings.hooks[cfg.event] || [];
 
-  const normalizedPath = hookScriptPath.replace(/\\/g, "/");
-  const alreadyRegistered = existingEntries.some((group) =>
-    (group.hooks || []).some((h) => {
-      const cmd = (h.command || "").replace(/\\/g, "/");
-      return cmd.includes(cfg.hookFile);
-    }),
-  );
-
-  if (alreadyRegistered) return;
-
-  const newEntry = {
-    hooks: [
-      {
+  const managedHooks = existingEntries.flatMap((group) => group.hooks || [])
+    .filter((hook) => hook.type === "command" && isNodeHookScriptCommand(hook.command, hookScriptPath));
+  if (managedHooks.length > 0) {
+    let changed = false;
+    for (const hook of managedHooks) {
+      if (cfg.timeout !== undefined && hook.timeout !== cfg.timeout) {
+        hook.timeout = cfg.timeout;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+  } else {
+    existingEntries.push({
+      hooks: [{
         type: "command",
-        command: `node "${hookScriptPath.replace(/\\/g, "\\\\")}"`,
-        ...(cfg.timeout ? { timeout: cfg.timeout } : {}),
-      },
-    ],
-  };
-
-  existingEntries.push(newEntry);
+        command: hookCommandNode(hookScriptPath),
+        ...(cfg.timeout !== undefined ? { timeout: cfg.timeout } : {}),
+      }],
+    });
+  }
   settings.hooks[cfg.event] = existingEntries;
 
   await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf8");
   console.log(
-    `${C.green}✓${C.reset} ${spec.id} hook registered: ${cfg.event} -> ${cfg.hookFile}`,
+    `${C.green}✓${C.reset} ${spec.id} hook ${managedHooks.length ? "refreshed" : "registered"}: ${cfg.event} -> ${cfg.hookFile}`,
   );
 }
 
-main().catch((err) => {
-  console.error(err.message || err);
-  process.exitCode = 1;
-});
+export {
+  MAX_ARCHIVE_DOWNLOAD_BYTES,
+  MAX_ARCHIVE_MEMBERS,
+  MAX_ARCHIVE_MEMBER_UNCOMPRESSED_BYTES,
+  MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
+  extractArchiveInto,
+  readResponseBodyBounded,
+  validateArchiveMembers,
+  buildGlobalCapabilityInventoryArgs,
+  assertRealPathContained,
+  normalizeInstallerSkillsFilter,
+  resolveCompatibilitySkillRoots,
+  directoryContentEqual,
+  resolveOsUserHome,
+  resolveSkillTargetDir,
+  shouldRecordManagedDependencyTarget,
+  transactionalReplaceMetaSkillTargets,
+  validateInstallerArgs,
+  validateMetaSkillCreatorPackage,
+};
+
+if (directInvocation) {
+  main().catch((err) => {
+    console.error(err.message || err);
+    process.exitCode = 1;
+  });
+}

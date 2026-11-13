@@ -4,7 +4,7 @@ Claude Code is one runtime projection of Meta_Kim. It is important, but it is no
 
 ## Fast Read
 
-If you only keep six rules in mind:
+Keep these rules in mind:
 
 - `meta-warden` is the public front door; the other meta agents are backstage specialists.
 - `canonical/agents/`, `canonical/skills/meta-theory/`, `canonical/runtime-assets/`, `config/contracts/`, and `config/capability-index/` are the durable sources of truth.
@@ -12,6 +12,7 @@ If you only keep six rules in mind:
 - When `meta-theory` is active, the main Claude thread dispatches; it does not execute complex work directly.
 - Critical, Fetch, Thinking, and Review must make the run executable before mutation; hooks are final safeguards, not the primary design path.
 - Capability-first dispatch is **mechanically enforced** in Claude Code via the `enforce-agent-dispatch.mjs` PreToolUse hook (deny payload). Codex and Cursor v1.7+ use the same projected hook; OpenClaw remains declarative. The current matrix lives in `AGENTS.md` under Mechanical Enforcement.
+- Gemini CLI and ZCode have optional native projections of the same canonical sources. Their installation, update and structural checks are implemented; live host acceptance remains separately unverified.
 - User-visible run-scoped worker labels may be coarse English role-family names such as `frontend`, `backend`, or `test`, but Meta_Kim does not project those execution labels as durable agents. Durable governance files stay with the nine `meta-*` owners.
 
 ## What This Repository Is
@@ -20,7 +21,7 @@ Meta_Kim is not Claude-only logic.
 
 It is:
 
-**a cross-runtime intent-amplification system projected into Claude Code, Codex, OpenClaw, and Cursor, with `canonical/` as the neutral source layer.**
+**a cross-runtime intent-amplification system projected into Claude Code, Codex, OpenClaw, Cursor, Gemini CLI, and ZCode, with `canonical/` as the neutral source layer.**
 
 In Meta_Kim, `meta` means the smallest governable unit that supports intent amplification. A valid meta unit:
 
@@ -67,10 +68,37 @@ Treat these as generated or runtime-local unless the task explicitly targets Cla
 Other runtime mirrors are also projections of the same canonical layer:
 
 - `.codex/`
+- `.agents/skills/` shared by Codex and Gemini CLI
 - `.cursor/`
+- `.gemini/` native agents, settings and adapter; project skills use `.agents/skills/`
+- `.zcode/` native agents, skills and project MCP; current ZCode ignores project hooks
 - `openclaw/`
 
 When trees disagree, update the canonical source and run sync. Do not maintain parallel prompt forks.
+
+Open-source boundary: `.claude/`, `.codex/`, `.agents/`, `.cursor/`, `.gemini/`, `.zcode/`, `openclaw/`, `.mcp.json`, and `codex/` are generated/local outputs, excluded from GitHub source and package files. Canonical agents, skills and runtime assets remain the distributable source.
+
+Gemini settings use `.gemini/settings.json` / `~/.gemini/settings.json` with native hooks and `mcpServers`. ZCode project MCP uses `.zcode/config.json`; global MCP and opt-in hooks use `~/.zcode/cli/config.json` with `mcp.servers` and `hooks.events`. Native hooks are translated by `native-runtime-adapter.mjs`; never copy Claude hook registrations as ZCode-native configuration. Preserve user settings and account/provider data. `AGENTS.md` and the `runtime-gemini.md` / `runtime-zcode.md` references contain the exact paths, ownership and host acceptance boundaries.
+
+## Install Scope And Runtime Sedimentation
+
+Install scope and governed runtime sedimentation are separate contracts:
+
+- `setup.mjs` install/update offers an interactive `global` or `project` choice and accepts `--scope global|project` for non-interactive use. In `global_only`, install sync keeps only the dependency-closed Claude/Codex/Cursor project Hook entry package and does not materialize durable project agents, skills, commands, capability indexes, MCP entries, Codex config examples, or OpenClaw project projections.
+- Distribution scope does not erase existing project topology. A normal `global` install/update automatically refreshes only current, explicit, or saved directories with a valid project-bootstrap manifest, using the configured project merge/delta strategy. No valid project state means no project copy and no extra confirmation. Cleanup is a separate explicit operation and never runs as a normal global install/update side effect.
+- Under `project_bootstrap_merge_delta`, bootstrap-manifest-owned generated projections are backed up inside the transaction and replaced with the current package version; shared JSON and managed text blocks merge instead. Unknown user files and `runtime_sedimented_project_copy` capabilities are outside that replacement boundary and remain preserved.
+- If a governed run proves a current-project Agent, Skill, or Command must be created or iterated, write or copy it into the runtime-native project directory. Record that asset as `runtime_sedimented_project_copy`; later global dependency or install projection updates must preserve it.
+- A global search hit that already fits and needs no iteration stays global: use `use_global_directly` and do not copy it into the project. Only project-specific iteration uses `copy_to_project_for_modification`; a real project gap uses `create_project_local_capability`.
+
+For Gemini CLI, `global_only` retains at most an inert project adapter, removing owned project configuration and durable projections. ZCode adds no project hook registration. Both reuse the existing ownership journal, immutable execution package and transactional bootstrap lifecycle; they do not create a second installer or stage runner. An enrolled native project keeps its shared execution package alive during global uninstall.
+
+The install manifest records install-generated files as `install_projection`, retains records for runtimes not selected during the current update, and stores exact hash plus size. The separate `.meta-kim/state/default/project-capabilities.json` manifest owns `runtime_sedimented_project_copy` / `preserve_project_copy` Agent, Skill, and Command paths. Project bootstrap plan, write, stale cleanup, and explicit cleanup all read that ownership before mutation. Unknown and runtime-sedimented files are preserved; drift in bootstrap-manifest-owned generated projections follows the configured merge/delta replacement-and-backup policy. Manifest recording or flush failure cannot be presented as successful install/update.
+
+Treat canonical source, install projection, runtime-sedimented project copies, and local/user configuration as different ownership classes. For merged configuration, remove only Meta_Kim-owned fragments; never infer whole-file ownership from its location.
+
+Install/update release claims require real packed-product evidence: pack the npm artifact, install that artifact into an isolated location, then run the packed CLI install and update paths. Repository-source execution alone is not packed CLI truth.
+
+Do not use arbitrary line counts as architecture gates. Verify CLI entrypoint responsibility, dependency direction, module boundaries, and behavior. `setup.mjs` remains a façade; new domain behavior belongs in focused modules with focused tests.
 
 ## Meta-Theory Dispatch Is Mandatory
 
@@ -93,7 +121,7 @@ Hard rules:
 3. Fetch gathers evidence and capability facts that change route, risk, owner, scope, acceptance, or verification.
 4. Thinking chooses owners, lanes, dependencies, work orders, review owner, verification owner, and rollback path before mutation.
 5. Review checks Critical, Fetch, and Thinking readiness before output polish; it is not a late rescue stage for missing design.
-6. The PreToolUse hook `enforce-agent-dispatch.mjs` can block execution tools when spine state is active and no agent has been dispatched.
+6. The PreToolUse hook checks governed Agent dispatches and scoped task failures. Ordinary local commands and edits are available without a separate dispatch ceremony; read-only diagnosis remains available when a task fuse opens.
 7. If a hook blocks you, follow the dispatch protocol and return to the responsible stage. Do not work around it.
 8. A "simple task" is not an excuse to bypass governance when the task touches multiple files, multiple capabilities, or cross-runtime behavior.
 
@@ -142,10 +170,10 @@ Behavior:
 
 - **Active stages**: `execution`, `review`, `meta_review`, `verification`, `evolution`. The hook denies any `Agent` dispatch in these stages unless `fetchRecord.capabilitySearchPerformed === true` is present in spine state.
 - **Exempt stages**: `critical`, `fetch`, `thinking`. Discovery happens here, so the gate does not fire.
-- **Override env var**: `META_KIM_CAPABILITY_GATE`. Values: `progressive`, `block`, `warn` (stderr warning only), `off` (gate disabled). Default: `progressive` (warn for the grace window, then block); `block` restores immediate deny. Use `warn` or `off` only for debugging — production runs should keep `progressive` (or `block` for strict environments).
+- **Override env var**: `META_KIM_CAPABILITY_GATE`. Values: `progressive`, `block`, `warn` (stderr warning only), `off` (gate disabled). Default: `progressive` (advisory role notices, no calendar-based escalation); `block` explicitly enforces that advisory gate. Recorded ineffective results drive the task-scoped fuse, while a reviewed correction opens a bounded recovery trial. Read-only diagnosis and independent tasks continue. Legacy `*_GRACE_DAYS` values are ignored.
 - **Other env vars**: `META_KIM_HOOK_RUNTIME` (one of `claude` / `codex` / `cursor`) selects the deny payload schema when the same hook is projected to a different runtime.
 
-The same hook script is now projected to Codex (`.codex/hooks/`) and Cursor v1.7+ (`.cursor/hooks/`) via `sync-runtimes.mjs`. `AGENTS.md` is the current source for the four-runtime mechanical-deny matrix and OpenClaw's declarative-only gap.
+The same hook script is now projected to Codex (`.codex/hooks/`) and Cursor v1.7+ (`.cursor/hooks/`) via `sync-runtimes.mjs`. `AGENTS.md` is the current source for the cross-runtime mechanical-deny matrix, OpenClaw's declarative-only gap, and Gemini CLI/ZCode adapter boundaries. Native projection tests do not prove real host invocation or promote `projection_implemented` to `live_verified`.
 
 Hook enforcement is a final safety boundary after Critical, Fetch, Thinking, and Review have done their work. Repeated hook blocks mean the upstream design or packet state is incomplete; return to the earliest broken stage instead of retrying the same action.
 
@@ -185,6 +213,8 @@ Keep three names separate:
 Rules:
 
 - `roleDisplayName` is a run-scoped task-packet label, not a durable agent identity and not a projection file.
+- Cross-runtime handoffs use one `ownerBindingMode`: Codex may use `native_custom_agent` only for a validated Codex TOML owner selected through a schema-confirmed `agent_type`; otherwise it uses `run_scoped_owner_contract`. A runtime alias or task label never substitutes for `ownerAgent`.
+- User-visible status keeps Agent, Skill, Command, MCP, runtime-tool, and Hook provider/source, selected state, actual state, and next action; it does not reduce the handoff to an Agent-only sentence.
 - Do not expose random personal nicknames as the primary agent name.
 - Prefer short role names over long task sentences.
 - Do not put concrete work items into `roleDisplayName`; when the same role has parallel shards, keep the same coarse role name and put shard scope in `roleInstanceId` / `shardScope`.
@@ -230,7 +260,7 @@ These packets are not UI decoration. They are how the system avoids pretending u
 
 ## Planning Files
 
-When `planning-with-files` is installed and the task is not a pure query, create persistent planning state during Thinking:
+When the task is not a pure query, use Meta_Kim's first-party `planning-continuity` runtime to create or resume persistent planning state during Thinking:
 
 - `task_plan.md`
 - `findings.md`
@@ -281,13 +311,15 @@ They cover:
 - optional premature-completion guard
 - spine-state cleanup
 
-Shared hook dependencies such as `bash-readonly-whitelist.mjs`, `spine-state.mjs`, `hook-i18n.mjs`, `skip-reminder.mjs`, and `utils.mjs` are copied as support files. They are not direct `.claude/settings.json` hook commands.
+Shared hook dependencies such as `project-root.mjs`, `bash-readonly-whitelist.mjs`, `spine-state.mjs`, `hook-i18n.mjs`, `skip-reminder.mjs`, and `utils.mjs` are copied as support files. They are not direct `.claude/settings.json` hook commands. `activate-meta-theory-spine.mjs` and `project-root.mjs` are one runtime dependency set and must always be projected together.
+
+The activation hook never treats a bare cwd as a project. It prefers a valid `CLAUDE_PROJECT_DIR`, then walks up from cwd for `.git` or `.meta-kim/state/default/project-bootstrap.json`, and only uses an absolute marker-backed runtime payload root when cwd is not already a recognized project. The resolved root is passed explicitly to post-copy; if no legitimate root exists, both spine-state and post-copy projection skip without writing.
 
 Hook behavior differs across runtimes. Do not assume Claude's `SubagentStart`-style behavior exists in Codex, OpenClaw, or Cursor unless the runtime adapter explicitly verifies it.
 
 ## Third-Party Meta Skills
 
-Packs such as `findskill`, `gstack`, `superpowers`, `planning-with-files`, and `cli-anything` are installed by `node setup.mjs` and supporting dependency commands.
+Packs such as `findskill`, `gstack`, `superpowers`, and `cli-anything` remain installable through `node setup.mjs` and supporting dependency commands. The absorbed `planning-with-files` dependency is retired from install and execution routes; normal planning continuity is provided only by Meta_Kim's first-party runtime.
 
 Repository policy:
 
@@ -321,11 +353,11 @@ Graphify installation and runtime wiring are handled by setup and helper scripts
 
 After changing canonical prompts, skills, hooks, contracts, or runtime-facing docs:
 
-1. `npm run meta:sync`
-2. `npm run discover:global`
+1. `npm run discover:global`
+2. `npm run meta:sync`
 3. `npm run meta:check`
 4. `npm run meta:check:global`
-5. `npm run meta:verify:all` before release or after larger changes
+5. Follow the canonical verification tiers in `AGENTS.md` under **Maintenance Loop** and **Release Modes**. The low-risk smoke path and standard full release path have distinct scopes; runtime, install, Hook, dependency, package and security changes require the standard full path.
 
 Use supporting commands as needed:
 
@@ -347,7 +379,7 @@ Use supporting commands as needed:
 - `npm run meta:sync:global`
 - `npm run prompt:next-iteration`
 
-`npm run meta:verify:all` runs runtime sync checks, project validation, graphify health, global sync checks, smoke-level runtime acceptance, setup tests, and meta-theory tests.
+`AGENTS.md` owns the release policy. `npm run meta:verify:all` begins with packed-product install/update acceptance, including original native-host observation prerequisites, before the standard verification stages. A missing prerequisite leaves subsequent stages unrun; separate diagnostic passes do not fill them in. Optional `meta:verify:live-certified` adds external attestation as described by that same policy.
 
 ## Install And Packaging Notes
 

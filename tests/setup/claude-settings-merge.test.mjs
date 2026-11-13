@@ -1,12 +1,28 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   buildMetaKimHooksTemplate,
   hookCommandNode,
   mergeGlobalMetaKimHooksIntoSettings,
+  mergeHookMatcherBlocks,
   mergeRepoClaudeSettings,
 } from "../../scripts/claude-settings-merge.mjs";
+
+const REPO_ROOT = new URL("../../", import.meta.url);
+
+function matcherTools(matcher) {
+  return new Set(String(matcher ?? "").split("|").filter(Boolean));
+}
+
+function findEnforcementBlock(settings) {
+  return settings.hooks.PreToolUse.find((block) =>
+    (block.hooks ?? []).some((hook) =>
+      String(hook.command ?? "").includes("enforce-agent-dispatch.mjs"),
+    ),
+  );
+}
 
 describe("Claude settings hook command rendering", () => {
   test("normalizes Windows paths to slash form before writing shell commands", () => {
@@ -23,6 +39,14 @@ describe("Claude settings hook command rendering", () => {
     const command = template.PreToolUse[0].hooks[0].command;
 
     assert.equal(command, 'node "C:/Users/Example/.claude/hooks/meta-kim/block-dangerous-bash.mjs"');
+    assert.equal(
+      template.PreToolUse[1].matcher,
+      "Write|Edit|Bash|Agent|Task|TaskCreate|TaskUpdate|TodoWrite|TaskStop|EnterPlanMode|ExitPlanMode|MultiEdit|NotebookEdit",
+    );
+    assert.equal(
+      template.PreToolUse[1].hooks[0].command,
+      'node "C:/Users/Example/.claude/hooks/meta-kim/enforce-agent-dispatch.mjs" "--runtime" "claude"',
+    );
     const commands = Object.values(template)
       .flatMap((blocks) => blocks.flatMap((block) => block.hooks ?? []))
       .map((hook) => hook.command);
@@ -42,6 +66,118 @@ describe("Claude settings hook command rendering", () => {
       commands.some((entry) => entry.includes("stop-compaction.mjs")),
       true,
     );
+    for (const event of ["PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop", "Stop"]) {
+      assert.match(
+        JSON.stringify(template[event]),
+        /activate-meta-theory-spine\.mjs/u,
+        `${event} must feed exact worker lifecycle evidence into the active run`,
+      );
+    }
+    assert.ok(commands.some((entry) => entry.includes('"--runtime" "claude"')));
+  });
+
+  test("Claude enforcement matchers cover the queryBypass control-plane deny contract", () => {
+    const template = buildMetaKimHooksTemplate(
+      "C:\\Users\\Example\\.claude\\hooks\\meta-kim",
+    );
+    const canonicalSettings = JSON.parse(
+      readFileSync(
+        new URL("canonical/runtime-assets/claude/settings.json", REPO_ROOT),
+        "utf8",
+      ),
+    );
+    const runtimeControlContract = JSON.parse(
+      readFileSync(
+        new URL("config/contracts/stage-runtime-control-contract.json", REPO_ROOT),
+        "utf8",
+      ),
+    );
+
+    const templateBlock = findEnforcementBlock({ hooks: template });
+    const canonicalBlock = findEnforcementBlock(canonicalSettings);
+    assert.ok(templateBlock, "global merge template must register the enforcement hook");
+    assert.ok(canonicalBlock, "canonical Claude settings must register the enforcement hook");
+    assert.equal(
+      canonicalBlock.matcher,
+      templateBlock.matcher,
+      "project and global Claude projections must expose the same enforcement surface",
+    );
+
+    const registeredTools = matcherTools(templateBlock.matcher);
+    const denyTools =
+      runtimeControlContract.fetchPolicy.queryBypassControlPlanePolicy.denyTools;
+    assert.deepEqual(denyTools, [
+      "TaskCreate",
+      "TaskUpdate",
+      "TodoWrite",
+      "TaskStop",
+      "EnterPlanMode",
+      "ExitPlanMode",
+    ]);
+    assert.deepEqual(
+      denyTools.filter((tool) => !registeredTools.has(tool)),
+      [],
+      "every machine-contract deny tool must be reachable through the Claude matcher",
+    );
+  });
+
+  test("canonical Claude project hooks preserve lifecycle format context and user hooks", () => {
+    const canonical = JSON.parse(
+      readFileSync(
+        new URL("canonical/runtime-assets/claude/settings.json", REPO_ROOT),
+        "utf8",
+      ),
+    );
+    const merged = mergeRepoClaudeSettings(
+      {
+        hooks: {
+          PostToolUse: [{
+            matcher: "CustomTool",
+            hooks: [{ type: "command", command: "node .claude/hooks/user-post-tool.mjs" }],
+          }],
+          SubagentStart: [{
+            matcher: "custom-*",
+            hooks: [{ type: "command", command: "node .claude/hooks/user-custom-start.mjs" }],
+          }],
+        },
+      },
+      canonical,
+      "D:/Meta_Kim",
+    );
+
+    for (const event of ["PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]) {
+      const serialized = JSON.stringify(merged.hooks[event]);
+      assert.match(serialized, /activate-meta-theory-spine\.mjs/u);
+      assert.match(serialized, /--runtime claude/u);
+    }
+    assert.match(JSON.stringify(merged.hooks.PostToolUse), /post-format\.mjs/u);
+    assert.match(JSON.stringify(merged.hooks.SubagentStart), /subagent-context\.mjs/u);
+    assert.match(JSON.stringify(merged.hooks.PostToolUse), /user-post-tool\.mjs/u);
+    assert.match(JSON.stringify(merged.hooks.SubagentStart), /user-custom-start\.mjs/u);
+  });
+
+  test("global update adds the missing enforcement hook and stays idempotent", () => {
+    const template = buildMetaKimHooksTemplate(
+      "C:\\Users\\Example\\.claude\\hooks\\meta-kim",
+    );
+    const historical = {
+      hooks: {
+        PreToolUse: [{
+          matcher: "Bash",
+          hooks: [{
+            type: "command",
+            command: 'node "C:/Users/Example/.claude/hooks/meta-kim/block-dangerous-bash.mjs"',
+          }],
+        }],
+      },
+    };
+
+    const upgraded = mergeGlobalMetaKimHooksIntoSettings(historical, template);
+    const repeated = mergeGlobalMetaKimHooksIntoSettings(upgraded, template);
+    const serialized = JSON.stringify(upgraded);
+    assert.match(serialized, /enforce-agent-dispatch\.mjs/u);
+    assert.equal(serialized.match(/enforce-agent-dispatch\.mjs/gu)?.length, 1);
+    assert.deepEqual(repeated, upgraded);
   });
 
   test("Claude global hook template keeps native HookPrompt before Meta_Kim spine", () => {
@@ -57,9 +193,36 @@ describe("Claude settings hook command rendering", () => {
 
     assert.match(promptHooks[0].command, /user-prompt-submit\.js/);
     assert.match(promptHooks[1].command, /activate-meta-theory-spine\.mjs/);
+    assert.match(promptHooks[2].command, /planning-continuity\.mjs/);
     assert.doesNotMatch(
       JSON.stringify(promptHooks),
       /hookprompt-adapter\.mjs/,
+    );
+  });
+
+  test("HookPrompt budget is expressed in Claude's seconds unit, not milliseconds", () => {
+    const template = buildMetaKimHooksTemplate(
+      "C:\\Users\\Example\\.claude\\hooks\\meta-kim",
+      "D:\\KimProject\\Meta_Kim",
+      {
+        hookPromptCommand:
+          'node "C:/Users/Example/.claude/hooks/user-prompt-submit.js"',
+      },
+    );
+    const { timeout } = template.UserPromptSubmit[0].hooks[0];
+
+    // Claude multiplies this field by 1000. A millisecond-shaped value such as
+    // 10000 silently buys 2.78 hours, which is indistinguishable from having no
+    // budget at all.
+    assert.ok(
+      timeout <= 600,
+      `HookPrompt timeout ${timeout} exceeds Claude's own 600s default, so it was written in milliseconds`,
+    );
+    // The hook issues a model request; a single-digit budget cuts prompt
+    // optimization off mid-flight on an ordinary slow round trip.
+    assert.ok(
+      timeout >= 30,
+      `HookPrompt timeout ${timeout}s is below the model round-trip budget`,
     );
   });
 
@@ -95,10 +258,11 @@ describe("Claude settings hook command rendering", () => {
 
     assert.match(promptHooks[0].command, /user-prompt-submit\.js/);
     assert.match(promptHooks[1].command, /activate-meta-theory-spine\.mjs/);
-    assert.match(promptHooks[2].command, /optional\.js/);
+    assert.match(promptHooks[2].command, /planning-continuity\.mjs/);
+    assert.match(promptHooks[3].command, /optional\.js/);
   });
 
-  test("global settings merge strips retired git push confirmation hooks", () => {
+  test("global settings merge preserves unproven same-name retired hooks", () => {
     const base = {
       hooks: {
         PreToolUse: [
@@ -130,12 +294,34 @@ describe("Claude settings hook command rendering", () => {
 
     assert.equal(
       commands.some((entry) => entry.includes("pre-git-push-confirm.mjs")),
-      false,
+      true,
     );
     assert.ok(commands.includes('node "C:/Users/Example/.claude/hooks/custom.mjs"'));
   });
 
-  test("global settings merge removes old managed events no longer in the template", () => {
+  test("global settings merge strips retired hooks only with ownership proof", () => {
+    const retired =
+      'node "C:/Users/Example/.claude/hooks/pre-git-push-confirm.mjs"';
+    const merged = mergeGlobalMetaKimHooksIntoSettings(
+      {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [{ type: "command", command: retired }],
+            },
+          ],
+        },
+      },
+      buildMetaKimHooksTemplate(
+        "C:\\Users\\Example\\.claude\\hooks\\meta-kim",
+      ),
+      { isManagedHookCommand: (command) => command === retired },
+    );
+    assert.doesNotMatch(JSON.stringify(merged), /pre-git-push-confirm\.mjs/u);
+  });
+
+  test("global settings merge replaces retired PostToolUse commands with lifecycle writeback", () => {
     const template = buildMetaKimHooksTemplate(
       "C:\\Users\\Example\\.claude\\hooks\\meta-kim",
     );
@@ -158,14 +344,25 @@ describe("Claude settings hook command rendering", () => {
       template,
     );
 
-    assert.equal(merged.hooks.PostToolUse, undefined);
+    assert.match(
+      JSON.stringify(merged.hooks.PostToolUse),
+      /activate-meta-theory-spine\.mjs/u,
+    );
+    assert.match(
+      JSON.stringify(merged.hooks.PostToolUse),
+      /planning-continuity\.mjs/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(merged.hooks.PostToolUse),
+      /post-format\.mjs/u,
+    );
     assert.match(
       JSON.stringify(merged.hooks),
       /block-dangerous-bash\.mjs/,
     );
   });
 
-  test("global settings merge replaces legacy root Meta_Kim hook commands", () => {
+  test("global settings merge replaces ownership-proven legacy root Meta_Kim hook commands", () => {
     const base = {
       hooks: {
         UserPromptSubmit: [
@@ -197,7 +394,12 @@ describe("Claude settings hook command rendering", () => {
       "C:\\Users\\Example\\.claude\\hooks\\meta-kim",
     );
 
-    const merged = mergeGlobalMetaKimHooksIntoSettings(base, template);
+    const merged = mergeGlobalMetaKimHooksIntoSettings(base, template, {
+      isManagedHookCommand: (command) =>
+        command.includes(".claude/hooks/activate-meta-theory-spine.mjs") ||
+        command.includes(".claude/hooks/block-dangerous-bash.mjs") ||
+        command.includes("/hooks/meta-kim/"),
+    });
     const commands = Object.values(merged.hooks)
       .flatMap((blocks) => blocks.flatMap((block) => block.hooks ?? []))
       .map((hook) => hook.command);
@@ -210,11 +412,10 @@ describe("Claude settings hook command rendering", () => {
       commands.some((entry) => entry.includes(".claude/hooks/block-dangerous-bash.mjs")),
       false,
     );
-    assert.ok(
-      commands.includes(
-        'node "C:/Users/Example/.claude/hooks/meta-kim/activate-meta-theory-spine.mjs"',
-      ),
-    );
+    assert.ok(commands.some((entry) =>
+      entry.includes('node "C:/Users/Example/.claude/hooks/meta-kim/activate-meta-theory-spine.mjs"') &&
+      entry.includes('"--runtime" "claude"'),
+    ));
     assert.ok(
       commands.includes(
         'node "C:/Users/Example/.claude/hooks/meta-kim/block-dangerous-bash.mjs"',
@@ -356,6 +557,71 @@ describe("Claude settings hook command rendering", () => {
     assert.match(JSON.stringify(merged.hooks), /user-session-start\.mjs/);
     assert.doesNotMatch(JSON.stringify(merged.hooks), /meta-kim-memory-save\.mjs/);
     assert.match(JSON.stringify(merged.hooks), /graphify-context\.mjs/);
+  });
+
+  // Cursor's hooks.json declares commands directly on the event block instead of
+  // nesting them under a matcher. Both shapes reach this one merge helper.
+  test("keeps every flat command block instead of collapsing them by absent matcher", () => {
+    const merged = mergeHookMatcherBlocks(
+      [{ command: "node .cursor/hooks/stop-compaction.mjs" }],
+      [
+        { command: "node /home/u/.cursor/hooks/meta-kim/spine.mjs", timeout: 5 },
+        { command: "node /home/u/.cursor/hooks/meta-kim/memory.mjs --event stop", timeout: 10 },
+      ],
+    );
+
+    assert.deepEqual(
+      merged.map((block) => block.command),
+      [
+        "node .cursor/hooks/stop-compaction.mjs",
+        "node /home/u/.cursor/hooks/meta-kim/spine.mjs",
+        "node /home/u/.cursor/hooks/meta-kim/memory.mjs --event stop",
+      ],
+      "a matcher-less addition must not be swallowed by an unrelated flat block",
+    );
+    assert.equal(merged[1].timeout, 5, "flat additions keep their own fields");
+    assert.equal(
+      merged.some((block) => Array.isArray(block.hooks)),
+      false,
+      "flat blocks must not grow a nested hooks array",
+    );
+  });
+
+  test("merging flat blocks twice does not duplicate a command", () => {
+    const additions = [
+      { command: "node /home/u/.cursor/hooks/meta-kim/spine.mjs", timeout: 5 },
+      { command: "node /home/u/.cursor/hooks/hookprompt-adapter.mjs", timeout: 10 },
+    ];
+    const once = mergeHookMatcherBlocks([], additions);
+    const twice = mergeHookMatcherBlocks(once, additions);
+
+    assert.deepEqual(twice, once, "flat merge must be idempotent");
+  });
+
+  // A matcher-keyed addition can carry `matcher: undefined` (Codex's
+  // UserPromptSubmit block does). Without an explicit shape check it matches any
+  // flat block and grafts a nested hooks array onto a block that already
+  // declares its own command, producing a block no runtime can read.
+  test("a matcher-less nested addition does not graft onto a flat command block", () => {
+    const merged = mergeHookMatcherBlocks(
+      [{ command: "node .cursor/hooks/subagent-context.mjs" }],
+      [{ hooks: [{ command: "node /home/u/.claude/hooks/meta-kim/spine.mjs" }] }],
+    );
+
+    assert.equal(merged.length, 2, "the nested addition becomes its own block");
+    assert.equal(
+      merged[0].command,
+      "node .cursor/hooks/subagent-context.mjs",
+      "the flat block is left intact",
+    );
+    assert.equal(
+      Array.isArray(merged[0].hooks),
+      false,
+      "the flat block must not gain a nested hooks array",
+    );
+    assert.deepEqual(merged[1].hooks.map((hook) => hook.command), [
+      "node /home/u/.claude/hooks/meta-kim/spine.mjs",
+    ]);
   });
 
 });

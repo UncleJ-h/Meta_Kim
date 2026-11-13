@@ -123,7 +123,7 @@ assert(
   "package script must point to the runtime safety validator",
 );
 assert(
-  String(pkg.scripts?.["meta:verify:governance"] ?? "").includes(
+  `${pkg.scripts?.["meta:verify:governance"] ?? ""} ${pkg.scripts?.["meta:verify:governance:core"] ?? ""}`.includes(
     `npm run ${contract.releaseGate.packageScript}`,
   ),
   "meta:verify:governance must run runtime safety validation",
@@ -226,7 +226,7 @@ hasAll(
 );
 hasAll(
   projectProjectionLayer.selectionInvariant ?? "",
-  ["activeTargets", "claude,codex", "--targets", ".meta-kim/local.overrides.json", "all four supported targets are formal"],
+  ["activeTargets", "claude,codex", "--targets", ".meta-kim/local.overrides.json", "all declared supported targets are formal"],
   "project projection selection invariant",
 );
 const platformSupportTiers = contract.installExperienceModel?.platformSupportTiers ?? {};
@@ -246,18 +246,30 @@ assert(
   "default selected targets must be Claude Code + Codex",
 );
 assert(
-  sameMembers(platformSupportTiers.nonDefaultFormalProjectionTargets, [
-    "openclaw",
-    "cursor",
-  ]),
-  "non-default formal projection targets must be OpenClaw + Cursor",
+  sameMembers(platformSupportTiers.nonDefaultFormalProjectionTargets,
+    productIdsByTier(catalog, "runtime_projection").filter((id) => !platformSupportTiers.defaultSelectedTargets.includes(id))),
+  "non-default formal projection targets must match the catalog outside defaults",
 );
+for (const runtime of ["gemini", "zcode"]) {
+  hasAll(conditionalProjectionSets[runtime] ?? [], ["AGENTS.md", ".meta-kim/state", ".meta-kim/backups"], `${runtime} project projection layer`);
+}
+assert(contract.hostConfigMerge.nativeProjectionBoundary?.projectionDoesNotGrantExecution === true,
+  "native projection must not grant host execution authority");
+assert(contract.hostConfigMerge.nativeProjectionBoundary?.zcode?.nativeProjectHooks === false,
+  "ZCode project hooks are ignored by the host and cannot be projected as active");
 assert(
   sameMembers(
     platformSupportTiers.dependencyInstallTargets,
     productIdsByTier(catalog, "dependency_install_target"),
   ),
   "dependency install targets must match dependency_install_target catalog products",
+);
+assert(
+  sameMembers(
+    platformSupportTiers.betaCompatibilityTargets,
+    productIdsByTier(catalog, "beta_compatibility"),
+  ),
+  "Beta compatibility targets must match beta_compatibility catalog products",
 );
 assert(
   sameMembers(
@@ -268,7 +280,7 @@ assert(
 );
 hasAll(
   platformSupportTiers.boundary ?? "",
-  ["OpenClaw", "Cursor", "formal Meta_Kim projection targets"],
+  ["OpenClaw", "Cursor", "beta_compatibility", "formal Meta_Kim projection targets"],
   "platform support tier boundary",
 );
 hasAll(
@@ -381,7 +393,7 @@ const nativeControlsOut = ensureCodexAppNativeControls(
     "[hooks]",
     'stop = "scripts/stop.mjs"',
     "",
-    '[projects."D:/KimProject/Meta_Kim"]',
+    '[projects."D:/workspace/Meta_Kim"]',
     'trust_level = "trusted"',
     "",
   ].join("\n"),
@@ -401,7 +413,7 @@ hasAll(
     '[plugins."computer-use@openai-bundled"]',
     "[mcp_servers.github]",
     "[hooks]",
-    '[projects."D:/KimProject/Meta_Kim"]',
+    '[projects."D:/workspace/Meta_Kim"]',
   ],
   "Codex native controls fixture",
 );
@@ -623,6 +635,17 @@ for (const doc of [checklist, pullRequestTemplate].filter(Boolean)) {
     "change readiness documentation",
   );
 }
+
+hasAll(
+  checklist,
+  [
+    "Installed-User Compatibility Gate",
+    "Historical-version update",
+    "Partial or failed prior install",
+    "fresh install is not enough",
+  ],
+  "installed-user compatibility contract",
+);
 
 if (!pullRequestTemplate) {
   console.warn(

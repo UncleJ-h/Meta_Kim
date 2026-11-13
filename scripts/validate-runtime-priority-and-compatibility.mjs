@@ -38,7 +38,9 @@ const FIXTURE_ARTIFACT_PATH = path.join(
 );
 
 const PRIMARY = ["claude_code", "codex"];
+const BETA_COMPATIBILITY = ["zcode", "deepseek-harness", "qoder", "trae"];
 const COMPATIBILITY = ["cursor", "openclaw"];
+const PRIORITY_ORDER = ["primary", "beta_compatibility", "compatibility"];
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -53,7 +55,9 @@ function validateContractShape(contract, stageContract, liveContract, pkg) {
   assert.equal(contract.status, "productized");
   sameSet(contract.prdTaskIds, ["P-085", "P-092"], "runtime contract task ids drifted");
   sameSet(contract.primaryRuntimeTier, PRIMARY, "runtime contract primary tier drifted");
+  sameSet(contract.betaCompatibilityRuntimeTier, BETA_COMPATIBILITY, "runtime contract beta compatibility tier drifted");
   sameSet(contract.compatibilityRuntimeTier, COMPATIBILITY, "runtime contract compatibility tier drifted");
+  assert.deepEqual(contract.priorityOrder, PRIORITY_ORDER, "runtime contract priority order drifted");
   assert.equal(contract.primaryRequiredEvidenceKind, "runtime_live_pass");
   for (const kind of [
     "compatibility_smoke_pass",
@@ -61,9 +65,11 @@ function validateContractShape(contract, stageContract, liveContract, pkg) {
     "blocked_with_contract",
     "native_harness_missing",
     "candidate_probe",
+    "packed_structural_adapter",
   ]) {
     assert.ok(contract.compatibilityAllowedEvidenceKinds.includes(kind), `missing compatibility kind ${kind}`);
   }
+  assert.deepEqual(contract.betaCompatibilityAllowedEvidenceKinds, ["packed_structural_adapter"]);
   assert.deepEqual(contract.priorityRules.primaryClosureTasks, [
     "P-087",
     "P-088",
@@ -72,12 +78,24 @@ function validateContractShape(contract, stageContract, liveContract, pkg) {
     "P-091",
   ]);
   assert.equal(contract.priorityRules.compatibilityDoesNotBlockPrimary, true);
+  assert.equal(contract.priorityRules.betaCompatibilityDoesNotBlockPrimary, true);
+  assert.equal(contract.priorityRules.compatibilityDoesNotBlockBetaCompatibility, true);
   assert.equal(contract.priorityRules.cursorNativeLiveBlockedOnlyBlocksAllToolCompatibility, true);
   assert.equal(contract.priorityRules.p024BlocksOnly, "all-tool compatibility claim");
   assert.equal(contract.priorityRules.compatibilityPriorityLeakTarget, 0);
+  assert.equal(contract.priorityRules.betaCompatibilityPriorityLeakTarget, 0);
   assert.equal(contract.priorityRules.openclawCursorPrimaryBlockerTarget, 0);
   assert.equal(contract.compatibilityDemotion.openclaw.tier, "compatibility");
   assert.equal(contract.compatibilityDemotion.cursor.tier, "compatibility");
+  for (const runtimeId of BETA_COMPATIBILITY) {
+    assert.equal(contract.compatibilityDemotion[runtimeId].tier, "beta_compatibility");
+    assert.deepEqual(contract.compatibilityDemotion[runtimeId].notAllowedToBlock, [
+      "Claude Code primary release gate",
+      "Codex primary release gate",
+    ]);
+  }
+  assert.ok(contract.noOverclaimRules.some((rule) => /packed structural adapter/u.test(rule)));
+  assert.ok(contract.noOverclaimRules.some((rule) => /live-certified/u.test(rule)));
 
   sameSet(stageContract.primaryRuntimeTier, PRIMARY, "stage contract primary tier drifted");
   sameSet(stageContract.compatibilityRuntimeTier, COMPATIBILITY, "stage contract compatibility tier drifted");
@@ -104,7 +122,7 @@ function validateContractShape(contract, stageContract, liveContract, pkg) {
     "package.json missing runtime priority validator",
   );
   assert.ok(
-    pkg.scripts?.["meta:verify:governance"]?.includes("meta:prd:runtime-priority:validate"),
+    `${pkg.scripts?.["meta:verify:governance"] ?? ""} ${pkg.scripts?.["meta:verify:governance:core"] ?? ""}`.includes("meta:prd:runtime-priority:validate"),
     "meta:verify:governance must include runtime priority validator",
   );
 }
@@ -115,19 +133,46 @@ function validateFixtureArtifact() {
     [path.join(REPO_ROOT, "scripts", "run-prompt-first-full-flow-live-acceptance.mjs"), "--fixture"],
     { cwd: REPO_ROOT, encoding: "utf8" },
   );
-  assert.match(stdout, /prompt-first full-flow fixture acceptance valid/);
-  assert.match(stdout, /compatibilitySmoke=openclaw:passed,cursor:passed/);
+  validateFixtureEvidence(readJson(FIXTURE_ARTIFACT_PATH), stdout);
+}
 
-  const artifact = readJson(FIXTURE_ARTIFACT_PATH);
+export function validateFixtureEvidence(artifact, stdout) {
+  assert.match(stdout, /prompt-first full-flow fixture acceptance valid/);
+  assert.match(stdout, /compatibilitySmoke=openclaw:fixture_pass_not_live,cursor:fixture_pass_not_live/);
+  assert.match(stdout, /P-087=fixture_pass_not_live/);
+  assert.match(stdout, /P-088=fixture_pass_not_live/);
   assert.equal(artifact.mode, "fixture");
   sameSet(artifact.requestedRuntimes, PRIMARY, "fixture requested runtimes must be primary only");
   sameSet(artifact.compatibilitySmokeRuntimes, COMPATIBILITY, "fixture compatibility runtimes drifted");
   assert.equal(artifact.compatibilitySmokePacket.status, "pass");
+  assert.equal(artifact.compatibilitySmokePacket.evidenceKind, "fixture_regression");
+  assert.equal(artifact.compatibilitySmokePacket.fixtureOnly, true);
+  assert.equal(artifact.compatibilitySmokePacket.compatibilitySmokeClaimAllowed, false);
   assert.equal(artifact.compatibilitySmokePacket.primaryLiveClaimAllowed, false);
-  assert.equal(artifact.compatibilitySmokeResults.openclaw.evidenceKind, "compatibility_smoke_pass");
-  assert.equal(artifact.compatibilitySmokeResults.cursor.evidenceKind, "compatibility_smoke_pass");
+  for (const runtime of COMPATIBILITY) {
+    const result = artifact.compatibilitySmokeResults[runtime];
+    assert.equal(result.mode, "fixture");
+    assert.equal(result.status, "fixture_pass_not_live");
+    assert.equal(result.evidenceKind, "fixture_regression");
+    assert.equal(result.fixtureOnly, true);
+    assert.equal(result.actualHostObserved, false);
+    assert.equal(result.compatibilitySmokeClaimAllowed, false);
+    assert.equal(result.primaryLiveClaimAllowed, false);
+    assert.equal(result.exitCode, undefined, "Fixture input cannot claim a subprocess exit receipt");
+  }
   assert.equal(artifact.summary.fixtureModeCannotClaimLivePass, true);
+  assert.equal(artifact.summary.fixtureModeCannotClaimCompatibilitySmokePass, true);
+  assert.deepEqual(artifact.summary.liveRuntimesPassed, []);
   assert.equal(artifact.summary.primaryRuntimePerfection, false);
+  for (const runtime of PRIMARY) {
+    const payload = artifact.runtimeResults[runtime];
+    assert.equal(payload.verificationResult.evidenceKind, "fixture_regression");
+    assert.equal(payload.claimBoundary.liveExecutionPass, false);
+    assert.equal(payload.claimBoundary.releaseGradeFullFlowClaim, false);
+  }
+  for (const taskId of ["P-087", "P-088"]) {
+    assert.equal(artifact.prdTaskStatuses[taskId], "fixture_pass_not_live", `${taskId} cannot claim a fixture as live acceptance`);
+  }
   for (const taskId of ["P-089", "P-090", "P-091"]) {
     assert.equal(artifact.prdTaskStatuses[taskId], "pass", `${taskId} must pass in fixture regression`);
   }
@@ -184,16 +229,21 @@ function main() {
       status: "pass",
       contract: "config/contracts/runtime-priority-and-compatibility-contract.json",
       primaryRuntimeTier: PRIMARY,
+      betaCompatibilityRuntimeTier: BETA_COMPATIBILITY,
       compatibilityRuntimeTier: COMPATIBILITY,
+      priorityOrder: PRIORITY_ORDER,
       compatibilityPriorityLeakTarget: 0,
+      betaCompatibilityPriorityLeakTarget: 0,
       privateEvidence: [prdEvidence],
     }, null, 2)}\n`,
   );
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`${error.stack ?? error.message}\n`);
-  process.exit(1);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    process.exitCode = 1;
+  }
 }

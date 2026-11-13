@@ -1,10 +1,44 @@
 #!/usr/bin/env node
-import { promises as fs } from "node:fs";
+import { buildDependencyMethodHandoff } from "./dependency-method-handoff.mjs";
+import { promises as fs, constants as fsConstants } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { GOVERNANCE_OWNERS, OS_TARGETS, RUNTIMES, classifyTaskShape, exists, readJson, repoPath, scoreRoute, stateDir, supportScore, toPosix } from "./governance-lib.mjs";
+import { GOVERNANCE_OWNERS, OS_TARGETS, RUNTIMES, annotateCrossScopeAgentCollisions, classifyTaskShape, exists, readJson, repoPath, scoreRoute, stateDir, supportScore, toPosix } from "./governance-lib.mjs";
 import { CAPABILITY_GAP_DECISION_CONTRACT, decideCapabilityGap } from "./capability-gap-mvp.mjs";
 import { classifyMetaTheoryEntry } from "./meta-theory-entry-classifier.mjs";
+import { runtimeOperatingSystem } from "./runtime-operating-system.mjs";
+import { selectRuntimeAgentEvidence } from "./runtime-agent-evidence.mjs";
+import { loadRuntimeProfiles, resolveRuntimeProjection } from "./meta-kim-sync-config.mjs";
+import { resolvePlanningRuntime } from "./runtime-tool-profiles.mjs";
+import { detectHostRuntimeFromEnv } from "./governed-execution/host-runtime-provenance.mjs";
+import {
+  evaluateChoiceRequirement,
+  resolveNativeChoiceSurface,
+} from "./governed-execution/choice-policy.mjs";
+import {
+  resolveRuntimeCapabilityClaim,
+  runtimeCapabilityNameForTool,
+  runtimeSupportForCapability,
+} from "./runtime-capability-claims.mjs";
+import { loadEffectiveRuntimeCapabilityClaims } from "./effective-runtime-capability-claims.mjs";
+import { evaluateRouteExecutionGate } from "./runtime-execution-gate.mjs";
+import { discoverDependencyAgentContracts, matchDependencyAgentContracts, readDependencyProjectOverrides, stableJson } from "./dependency-agent-discovery.mjs";
+import { discoverDependencySkillContracts } from "./dependency-skill-discovery.mjs";
+import { LOCAL_DEPENDENCY_TOOL_CONTRACT } from "./governed-execution/local-dependency-tool-contract.mjs";
+import { durableCapabilityRequestsFromTask } from "./capability-request-intent.mjs";
+import { resolveAgentCapabilityProfile } from "./agent-capability-profile.mjs";
+import { inspectTrustedPath } from "./safe-managed-file-operations.mjs";
+import { decomposeTaskActions, extractActionPaths } from "./task-action-decomposition.mjs";
+import { scopeComparisonKey, scopeKeysAreProvablyDisjoint } from "./task-scope-comparison.mjs";
+import {
+  sanitizeCapabilityPublicationText,
+  sanitizeCapabilityPublicationValue,
+} from "./capability-publication-sanitizer.mjs";
+import {
+  getGlobalProfilePaths,
+} from "./meta-kim-local-state.mjs";
 
+async function selectRouteMain() {
 function argValue(name, fallback = null) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : fallback;
@@ -15,22 +49,124 @@ async function readStateJson(name, fallback) {
   return (await exists(file)) ? JSON.parse(await fs.readFile(file, "utf8")) : fallback;
 }
 
+async function readGlobalInventoryJson(fallback) {
+  const profileState = getGlobalProfilePaths();
+  const relativeInventoryPath = path.join("capability-index", "global-capabilities.json");
+  const candidates = [
+    {
+      path: path.join(profileState.profileDir, relativeInventoryPath),
+      sourceRef: `~/.meta-kim/state/${profileState.profile}/capability-index/global-capabilities.json`,
+    },
+    {
+      path: path.join(stateDir, relativeInventoryPath),
+      sourceRef: null,
+    },
+  ];
+  for (const candidate of candidates) {
+    if (!(await exists(candidate.path))) continue;
+    return {
+      value: JSON.parse(await fs.readFile(candidate.path, "utf8")),
+      sourceRef: candidate.sourceRef,
+    };
+  }
+  return { value: fallback, sourceRef: candidates[0].sourceRef };
+}
+
 const task = argValue("--task", "");
+const actionTask = argValue("--action-task", task);
+const fetchOnly = process.argv.includes("--fetch-only");
+const hostWorkOrder = JSON.parse(argValue("--thinking-work-order-json", "null"));
+// Optional diagnostic selection supplied by the current host after reading the
+// source contract. Word overlap alone only recalls candidates. This assessment
+// does not grant execution, replace a Thinking work order or confirm a user choice.
+const methodAssessment = JSON.parse(argValue("--method-assessment-json", "null"));
+const methodWorkKind = argValue("--method-work-kind", null);
+const methodCapabilityId = argValue("--method-capability-id", null);
+const methodContextRaw = argValue("--method-context-json", null);
+const methodContext = methodContextRaw ? JSON.parse(methodContextRaw) : { capabilityNeed: [], artifactFlow: [] };
+const requirementsContextRaw = argValue("--requirements-discovery-json", null);
+const requirementsContext = requirementsContextRaw ? JSON.parse(requirementsContextRaw) : null;
+if (requirementsContext && (!/^[a-f0-9]{64}$/u.test(requirementsContext.discoveryDigest ?? "") ||
+    !Array.isArray(requirementsContext.evidenceRefs) || requirementsContext.evidenceRefs.length === 0 ||
+    requirementsContext.evidenceRefs.some((ref) => typeof ref !== "string" || !ref.trim()) ||
+    !Array.isArray(requirementsContext.capabilityNeed) || requirementsContext.capabilityNeed.some((need) => typeof need !== "string" || !need.trim()) ||
+    !Array.isArray(requirementsContext.methods) || requirementsContext.methods.some((method) => !method ||
+      typeof method !== "object" || Array.isArray(method) ||
+      method.methodCapabilityId !== null && typeof method.methodCapabilityId !== "string" ||
+      method.sourceRef !== null && typeof method.sourceRef !== "string"))) {
+  throw new TypeError("Requirements route context requires current material references and method demands, never an owner or authorization");
+}
+if ((methodWorkKind || methodCapabilityId) &&
+    (!["support", "vertical_slice", "migration_batch"].includes(methodWorkKind) || !methodCapabilityId?.trim())) {
+  throw new TypeError("Method selection requires the existing slice workKind and methodCapabilityId");
+}
+if (!methodContext || typeof methodContext !== "object" || Array.isArray(methodContext) ||
+    !Array.isArray(methodContext.capabilityNeed) || methodContext.capabilityNeed.some((need) => typeof need !== "string" || !need.trim()) ||
+    !Array.isArray(methodContext.artifactFlow) || methodContext.artifactFlow.some((flow) => !flow || typeof flow !== "object" || Array.isArray(flow)) ||
+    methodContextRaw && !methodCapabilityId) {
+  throw new TypeError("Method context requires the current slice capability demand and artifact flow, without selecting an owner or granting permission");
+}
+const requestedRouteRunId = argValue("--run-id", null);
+// A route-search constraint, never a claim of native confirmation or Permission.
+const intentDeliveryStrategy = argValue("--intent-delivery-strategy", null);
+// This is route-preview input only. The governed runner separately checks the
+// confirmed intent and explicit scope before selecting a local worker.
+const localToolRequestRaw = argValue("--local-tool-request-json", null);
+const localToolRequest = localToolRequestRaw ? JSON.parse(localToolRequestRaw) : null;
+if (intentDeliveryStrategy != null && !["fast_usable", "long_term_extensible"].includes(intentDeliveryStrategy)) throw new TypeError("Unknown intent delivery strategy");
 const runtimeArg = argValue("--runtime", "auto");
-const osArg = argValue("--os", "auto");
+const osArg = argValue("--os", null);
+const requestedOwnerSourceKey = argValue("--owner-source", null);
+const requestedOwnerSourceRef = argValue("--owner-source-ref", null);
+const requestedOwnerContentDigest = String(
+  argValue("--owner-content-digest", null) ?? "",
+).replace(/^sha256:/iu, "").toLowerCase() || null;
 const json = process.argv.includes("--json");
-const runtime = runtimeArg === "auto" ? "codex" : runtimeArg;
-const osTarget = osArg === "auto" ? "windows" : osArg;
+const rejectedCodexHostToolSchemaRaw =
+  argValue("--codex-host-tool-schema", null) ??
+  process.env.META_KIM_CODEX_HOST_TOOL_SCHEMA ??
+  null;
+const detectedHost = detectHostRuntimeFromEnv(process.env);
+const runtimeSelection = resolvePlanningRuntime({ requestedRuntime: runtimeArg, configuredRuntime: process.env.META_KIM_RUNTIME,
+  hostRuntime: detectedHost.runtime, hostBasis: detectedHost.basis });
+const runtime = runtimeSelection.runtime;
+const operatingSystem = runtimeOperatingSystem(osArg);
+const { targetOs: osTarget, hostOs } = operatingSystem;
 const taskShape = classifyTaskShape(task);
 const taskText = String(task ?? "").toLowerCase();
 const entryClassification = classifyMetaTheoryEntry(task);
-const choicePolicy = entryClassification.ambiguityPacket?.choicePolicy ?? "no_choice_needed";
-const subjectiveRouteChoice = entryClassification.triggerReason === "subjective_quality_ambiguous";
+const choiceSurfacePolicy = await readJson("config/governance/choice-surface-policy.json");
+
+// An offline CLI process cannot attest the active Codex host's top-level tool
+// schema. Caller-supplied JSON/env is retained only as rejected evidence; the
+// interactive host must perform native binding from its own live tool surface.
+const codexHostToolSchema = {
+  status: "not_observed_in_offline_route_process",
+  hostSurface: "spawn_agent",
+  inputProperties: [],
+  ownerSelectorField: null,
+  evidenceSource: null,
+  suppliedArtifactRejected: Boolean(rejectedCodexHostToolSchemaRaw),
+  rejectedReason: rejectedCodexHostToolSchemaRaw
+    ? "caller_supplied_host_schema_is_not_current_host_attestation"
+    : null,
+};
+const entrySignals = entryClassification.signals ?? {};
+const routeChangingDimensionSignals = entrySignals.routeChangingDimensionSignals ?? [];
+const runtimeChoiceSurface = resolveNativeChoiceSurface(choiceSurfacePolicy, runtime);
+const stateDirRef = toPosix(path.relative(repoPath("."), stateDir));
+const GOVERNANCE_CHAIN_PREFIX_RE =
+  /^critical(?:\s+thinking)?(?:\s*(?:->|=>|→|,|，|、|;|；|and)?\s+)fetch(?:\s*(?:->|=>|→|,|，|、|;|；|and)?\s+)(?:deep\s+)?thinking(?:\s*(?:->|=>|→|,|，|、|;|；|and)?\s+)review\s*/iu;
+const concurrentDispatchIntentPresent =
+  entrySignals.directParallelRequest === true ||
+  entrySignals.structuredGovernanceChainRequest === true ||
+  entrySignals.explicitMetaTheory === true ||
+  entrySignals.productBuildIntent === true;
 const nativeChoiceEvidenceRaw =
   argValue("--native-choice-evidence", null) ??
   process.env.META_KIM_NATIVE_CHOICE_EVIDENCE ??
   null;
-function normalizeNativeChoiceEvidence(raw) {
+function normalizeNativeChoiceEvidence(raw, expectedSurface) {
   const base = {
     completedStages: [],
   };
@@ -71,13 +207,9 @@ function normalizeNativeChoiceEvidence(raw) {
       status: answerRecorded ? "completed" : (parsed.status ?? parsed.state ?? "present"),
       surface,
       answerRecorded,
-      trusted:
-        answerRecorded &&
-        completedStages.length > 0 &&
-        evidenceRefs.length > 0 &&
-        ["request_user_input", "AskUserQuestion", "native_choice"].includes(
-          surface,
-        ),
+      trusted: false,
+      trustBoundary: "reference_only_cli_or_environment",
+      expectedSurface,
       evidenceRef: parsed.evidenceRef ?? parsed.answerRef ?? null,
       evidenceRefs,
       completedStages,
@@ -92,26 +224,52 @@ function normalizeNativeChoiceEvidence(raw) {
     };
   }
 }
-const nativeChoiceEvidence = normalizeNativeChoiceEvidence(nativeChoiceEvidenceRaw);
+const nativeChoiceEvidence = normalizeNativeChoiceEvidence(
+  nativeChoiceEvidenceRaw,
+  runtimeChoiceSurface.surface,
+);
 function hasChoiceStage(stage) {
   return nativeChoiceEvidence.trusted === true && nativeChoiceEvidence.completedStages.includes(stage);
 }
-const criticalChoiceBlocksExecution = choicePolicy === "must_ask" && !hasChoiceStage("Critical");
-const subjectiveThinkingChoiceRequired = subjectiveRouteChoice;
-const thinkingChoiceBlocksExecution = subjectiveThinkingChoiceRequired && !hasChoiceStage("Thinking");
-
 const weapons = (await readJson("config/capability-index/weapon-registry.json")).weapons ?? [];
 const registryDependencies = (await readJson("config/capability-index/dependency-project-registry.json")).projects ?? [];
 const repoCapabilityIndex = await readJson("config/capability-index/meta-kim-capabilities.json");
 const workflowContract = await readJson("config/contracts/workflow-contract.json");
 const capabilityInventory = await readStateJson("capability-inventory.json", { capabilities: [] });
-const globalCapabilityInventory = await readStateJson(path.join("capability-index", "global-capabilities.json"), { byCapabilityType: { agents: {} }, byPlatform: {} });
+const globalCapabilityInventoryRecord = await readGlobalInventoryJson({
+  byCapabilityType: { agents: {} },
+  byPlatform: {},
+});
+const globalCapabilityInventory = globalCapabilityInventoryRecord.value;
+const globalCapabilityInventoryRef = globalCapabilityInventoryRecord.sourceRef ??
+  `${stateDirRef}/capability-index/global-capabilities.json`;
 const dependencyIndex = await readStateJson("dependency-capability-index.json", { discoveredDependencyProjects: [] });
-const choiceSurfacePolicy = await readJson("config/governance/choice-surface-policy.json");
 const intentContract = await readJson("config/governance/intent-amplification-contract.json");
-const localOverrides = (await exists(repoPath(".meta-kim/local.overrides.json")))
-  ? await readJson(".meta-kim/local.overrides.json")
-  : {};
+const runtimeCapabilityState = loadEffectiveRuntimeCapabilityClaims({
+  projectRoot: process.env.META_KIM_CALLER_CWD || repoPath("."),
+});
+const runtimeMatrix = runtimeCapabilityState.effectiveMatrix;
+function activeRuntimeSupport() {
+  const platform = runtimeMatrix.platforms?.find((entry) => entry.platform === runtime);
+  const claims = (platform?.capabilities ?? []).map((capability) =>
+    resolveRuntimeCapabilityClaim(runtimeMatrix, {
+      runtime,
+      capability: capability.capability,
+      mode: "interactive_host",
+    }));
+  if (claims.some((claim) => claim.executable && claim.hostSupport === "native")) return "native";
+  if (claims.some((claim) => claim.executable)) return "partial";
+  if (claims.some((claim) => ["native", "partial"].includes(claim.hostSupport))) return "partial";
+  return claims.some((claim) => claim.hostSupport === "unsupported") ? "unsupported" : "unknown";
+}
+const dependencyProjectRoot = path.resolve(argValue("--project-root") || process.env.META_KIM_CALLER_CWD || repoPath("."));
+const agentCapabilityProfileContext = JSON.parse(argValue("--agent-profile-context-json", "{}"));
+if (!agentCapabilityProfileContext || typeof agentCapabilityProfileContext !== "object" || Array.isArray(agentCapabilityProfileContext) ||
+    Object.keys(agentCapabilityProfileContext).some((key) => !workflowContract.protocols.agentBlueprintPacket.projectCapabilityProfilePolicy.contextFields.includes(key)) ||
+    Object.values(agentCapabilityProfileContext).some((value) => !Array.isArray(value))) {
+  throw new TypeError("agentCapabilityProfileContext requires only profileSelections, fitAssessments and approvalRefs arrays");
+}
+const localOverrides = await readDependencyProjectOverrides(dependencyProjectRoot);
 const projectProjectionMode = localOverrides.projectProjectionMode ?? "project";
 const projectProjectionPolicy = {
   projectProjectionMode,
@@ -171,7 +329,26 @@ function implicitScriptCapabilityGapRequested() {
   return recurrenceSignal && deterministicSignal && noAgentSignal;
 }
 
+function agentProviderReuseConcernRequested() {
+  const agentTarget = /agent|subagent|owner|智能体|代理/.test(taskText);
+  const contextualAgentTarget =
+    /(?:codex|meta[_ -]?kim|metakim|系统|它|他).{0,16}(?:创建|新建)/.test(taskText) &&
+    /自己|一直|反复|不断|重复|老是|总是|好像/.test(taskText);
+  if (!agentTarget && !contextualAgentTarget) return false;
+  const creationComplaint =
+    /一直(?:在)?(?:自己)?创建|一直.{0,12}创建|反复.{0,12}创建|不断.{0,12}创建|重复.{0,12}创建|老是.{0,12}创建|总是.{0,12}创建|自己创建|创建.*太多|keeps?\s+creating|creating\s+agents?|always\s+creates?/.test(taskText);
+  const globalReuseSignal =
+    /global|全局|已有|现有|复用|reuse|existing|找/.test(taskText);
+  return creationComplaint || globalReuseSignal;
+}
+
 function explicitCapabilityGapRequested() {
+  if (
+    agentProviderReuseConcernRequested() &&
+    !/capability gap|missing capability|missing dependency|缺能力|能力缺口|缺少能力|缺少依赖/.test(taskText)
+  ) {
+    return false;
+  }
   return [
     "capability gap",
     "missing capability",
@@ -196,10 +373,17 @@ function explicitCapabilityGapRequested() {
 }
 
 function taskTerms() {
+  if (taskShape === "goal_contract") return ["goal prompt", "loop prompt", "goal contract", "intent amplification", "goalpro", "目标契约", "目标合同", "意图放大"];
   if (taskShape === "strategy_product_decision") return ["strategy", "product", "decision", "monetization", "策略", "产品", "商业化", "变现"];
   if (taskShape === "platform_governance") return ["runtime", "platform", "hook", "os", "codex", "cursor", "openclaw", "claude", "平台", "钩子"];
   if (taskShape === "engineering_execution") return ["code", "test", "refactor", "engineering", "代码", "测试", "重构"];
   return ["governance", "capability", "workflow", "治理", "能力"];
+}
+
+function decisionAdjustmentRequested() {
+  if (taskShape !== "strategy_product_decision") return false;
+  if (productBuildExecutionRequested()) return false;
+  return /decision|judge|判断|决策|选择|取舍|pass.?kill|要不要|是否要|值不值得|怎么改|怎么做|how should|路径|方案|策略|优化|improve conversion|高流量|标题|文案|封面/.test(taskText);
 }
 
 function fitsTask(entry) {
@@ -210,6 +394,23 @@ function fitsTask(entry) {
 
 function capabilityEntries(index, type) {
   return Object.values(index?.byCapabilityType?.[type] ?? {});
+}
+
+function rawPlatformCapabilityEntries(index, type) {
+  return Object.values(index?.byPlatform ?? {}).flatMap(
+    (platform) => platform?.capabilities?.[type] ?? [],
+  );
+}
+
+function exactOwnerSourceSelected(entry) {
+  if (!requestedOwnerSourceKey || !requestedOwnerContentDigest) return false;
+  const sourceKeyMatches = String(entry?.sourceKey ?? "") === requestedOwnerSourceKey;
+  const digestMatches = String(entry?.contentDigest ?? "")
+    .replace(/^sha256:/iu, "")
+    .toLowerCase() === requestedOwnerContentDigest;
+  const sourceRefMatches = !requestedOwnerSourceRef ||
+    toPosix(String(entry?.sourceRef ?? "")) === toPosix(String(requestedOwnerSourceRef));
+  return sourceKeyMatches && digestMatches && sourceRefMatches;
 }
 
 function uniqueById(items) {
@@ -227,20 +428,51 @@ function uniqueStrings(items) {
   return [...new Set(items.filter(Boolean).map((item) => String(item)))];
 }
 
+function compactProviderMetadata(value) {
+  if (Array.isArray(value)) return value.map(compactProviderMetadata);
+  if (!value || typeof value !== "object") {
+    if (typeof value !== "string") return value;
+    return sanitizeCapabilityPublicationText(value, {
+      repoRoot: repoPath("."),
+      homeDir: process.env.USERPROFILE ?? process.env.HOME ?? "",
+    });
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !["path", "workspace", "baseDir"].includes(key))
+      .map(([key, nested]) => [key, compactProviderMetadata(nested)]),
+  );
+}
+
 function compactAgent(entry, source) {
   const layer = entry.layer ?? (String(entry.id ?? "").startsWith("meta-") ? "meta" : "execution");
-  const sourceRef = entry.sourcePath ?? entry.relativePath ?? (entry.platformId ? `${entry.platformId}:${entry.id}` : entry.id);
+  const sourceRef = entry.sourceRef ?? entry.sourcePath ?? entry.relativePath ?? (entry.platformId ? `${entry.platformId}:${entry.id}` : entry.id);
   return {
     id: entry.id,
     layer,
     source,
     platformId: entry.platformId ?? null,
-    sourceRef: toPosix(sourceRef),
+    sourceRef: compactProviderMetadata(toPosix(sourceRef)),
     executionBlock: entry.executionBlock ?? layer === "meta",
-    description: entry.description ?? null,
-    own: entry.own ?? null,
-    boundary: entry.boundary ?? null,
-    trigger: entry.trigger ?? null,
+    description: compactProviderMetadata(entry.description ?? null),
+    own: compactProviderMetadata(entry.own ?? null),
+    boundary: compactProviderMetadata(entry.boundary ?? null),
+    trigger: compactProviderMetadata(entry.trigger ?? null),
+    metadata: compactProviderMetadata(entry.metadata ?? null),
+    validCustomAgentDefinition: entry.validCustomAgentDefinition ?? entry.metadata?.validCustomAgentDefinition ?? null,
+    customAgentDefinitionErrors: entry.customAgentDefinitionErrors ?? entry.metadata?.customAgentDefinitionErrors ?? [],
+    sourceClass: entry.sourceClass ?? null,
+    sourceRoot: compactProviderMetadata(entry.sourceRoot ?? null),
+    sourceKey: compactProviderMetadata(entry.sourceKey ?? null),
+    sourcePriority: entry.sourcePriority ?? null,
+    contentDigest: entry.contentDigest ?? null,
+    nativeIdentity: entry.nativeIdentity ?? entry.nativeAgentName ?? entry.metadata?.nativeAgentName ?? entry.metadata?.name ?? entry.id,
+    provenance: compactProviderMetadata(entry.provenance ?? []),
+    collision: compactProviderMetadata(entry.collision ?? null),
+    routeEligible: entry.routeEligible ?? true,
+    sourceSelectedExplicitly: entry.sourceSelectedExplicitly === true,
+    cacheEvidence: compactProviderMetadata(entry.cacheEvidence ?? null),
+    cacheEvidenceOnly: entry.cacheEvidenceOnly === true,
   };
 }
 
@@ -251,7 +483,16 @@ function compactCapabilityProvider(entry, source, type = entry.type ?? "skills")
     type,
     source,
     platformId: entry.platformId ?? null,
-    sourceRef: toPosix(sourceRef),
+    sourceRef: compactProviderMetadata(toPosix(sourceRef)),
+    sourceClass: entry.sourceClass ?? null,
+    sourceRoot: compactProviderMetadata(entry.sourceRoot ?? null),
+    sourceKey: compactProviderMetadata(entry.sourceKey ?? null),
+    sourcePriority: entry.sourcePriority ?? null,
+    contentDigest: entry.contentDigest ?? null,
+    nativeIdentity: entry.nativeIdentity ?? entry.id,
+    provenance: compactProviderMetadata(entry.provenance ?? []),
+    collision: compactProviderMetadata(entry.collision ?? null),
+    routeEligible: entry.routeEligible ?? true,
   };
 }
 
@@ -291,33 +532,59 @@ async function projectRuntimeAgents() {
     { runtime: "claude_code", dir: ".claude/agents", extension: ".md" },
     { runtime: "codex", dir: ".codex/agents", extension: ".toml" },
     { runtime: "cursor", dir: ".cursor/agents", extension: ".md" },
+    { runtime: "gemini", dir: ".gemini/agents", extension: ".md" },
+    { runtime: "zcode", dir: ".zcode/agents", extension: ".md" },
   ];
   const agents = [];
   for (const { runtime: runtimeName, dir, extension } of dirs) {
-    const absDir = repoPath(dir);
+    const absDir = inspectTrustedPath(dependencyProjectRoot, dir)?.target;
+    if (!absDir) continue;
     if (!(await exists(absDir))) continue;
     const entries = await fs.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(extension)) continue;
-      const id = entry.name.slice(0, -extension.length);
+      const inventoryId = entry.name.slice(0, -extension.length);
+      let id = inventoryId;
       const layer = id.startsWith("meta-") ? "meta" : "execution";
+      let metadata = null;
+      let validCustomAgentDefinition = null;
+      let customAgentDefinitionErrors = [];
+      let contentDigest = null;
+      const content = await fs.readFile(path.join(absDir, entry.name), "utf8");
+      contentDigest = createHash("sha256").update(content).digest("hex");
+      if (runtimeName === "codex") {
+        ({ metadata, errors: customAgentDefinitionErrors } = parseCodexAgentDefinition(content));
+        validCustomAgentDefinition = customAgentDefinitionErrors.length === 0;
+        if (validCustomAgentDefinition) id = metadata.name;
+      }
       agents.push({
         id,
         layer,
         source: "project_runtime_agent_inventory",
         runtime: runtimeName,
         sourceRef: toPosix(path.join(dir, entry.name)),
+        sourceRoot: dependencyProjectRoot,
         executionBlock: layer === "meta",
+        own: runtimeName === "codex" ? null : content,
+        metadata,
+        validCustomAgentDefinition,
+        customAgentDefinitionErrors,
+        inventoryId,
+        sourceClass: "project",
+        sourcePriority: 100,
+        nativeIdentity: id,
+        contentDigest,
+        sourceKey: `${runtimeName}:agents:${id}:project:${toPosix(path.join(dir, entry.name))}`,
       });
     }
   }
-  const openclawWorkspaces = repoPath("openclaw/workspaces");
+  const openclawWorkspaces = path.join(dependencyProjectRoot, "openclaw/workspaces");
   if (await exists(openclawWorkspaces)) {
     const entries = await fs.readdir(openclawWorkspaces, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const soulPath = path.join("openclaw/workspaces", entry.name, "SOUL.md");
-      if (!(await exists(repoPath(soulPath)))) continue;
+      if (!inspectTrustedPath(dependencyProjectRoot, soulPath)) continue;
       const id = entry.name;
       const layer = id.startsWith("meta-") ? "meta" : "execution";
       agents.push({
@@ -326,6 +593,8 @@ async function projectRuntimeAgents() {
         source: "project_runtime_agent_inventory",
         runtime: "openclaw",
         sourceRef: toPosix(soulPath),
+        sourceRoot: dependencyProjectRoot,
+        contentDigest: createHash("sha256").update(await fs.readFile(path.join(dependencyProjectRoot, soulPath))).digest("hex"),
         executionBlock: layer === "meta",
       });
     }
@@ -333,28 +602,171 @@ async function projectRuntimeAgents() {
   return agents;
 }
 
+function parseCodexAgentDefinition(content) {
+  const scalar = (key) => {
+    const triple = content.match(
+      new RegExp(`^${key}\\s*=\\s*(?:\"\"\"|''')([\\s\\S]*?)(?:\"\"\"|''')`, "mu"),
+    );
+    if (triple) return triple[1].trim();
+    const single = content.match(new RegExp(`^${key}\\s*=\\s*[\"']([^\"']+)[\"']`, "mu"));
+    return single?.[1]?.trim() ?? null;
+  };
+  const metadata = {
+    name: scalar("name"),
+    description: scalar("description"),
+    developer_instructions: scalar("developer_instructions"),
+  };
+  return {
+    metadata,
+    errors: [
+      ...(!metadata.name ? ["missing_name"] : []),
+      ...(!metadata.description ? ["missing_description"] : []),
+      ...(!metadata.developer_instructions ? ["missing_developer_instructions"] : []),
+    ],
+  };
+}
+
+async function globalRuntimeAgentProviders() {
+  const profileId = runtime === "claude_code" ? "claude" : runtime;
+  const profiles = await loadRuntimeProfiles();
+  const profile = profiles[profileId];
+  const agentProjection = profile?.projection?.globalAgentProjection;
+  if (!agentProjection?.supported) return [];
+
+  const projection = resolveRuntimeProjection(profileId, "global");
+  const agentsDir = projection.agentsDir;
+  if (!agentsDir || !(await exists(agentsDir))) return [];
+  const userHome = process.env.USERPROFILE ?? process.env.HOME ?? projection.baseDir;
+
+  const providers = [];
+  const entries = await fs.readdir(agentsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(agentProjection.fileExtension)) continue;
+    const inventoryId = entry.name.slice(0, -agentProjection.fileExtension.length);
+    let id = inventoryId;
+    let metadata = null;
+    let customAgentDefinitionErrors = [];
+    let validCustomAgentDefinition = null;
+    const agentPath = path.join(agentsDir, entry.name);
+    const content = await fs.readFile(agentPath, "utf8");
+    if (agentProjection.format === "codex_toml") {
+      ({ metadata, errors: customAgentDefinitionErrors } = parseCodexAgentDefinition(content));
+      validCustomAgentDefinition = customAgentDefinitionErrors.length === 0;
+      if (validCustomAgentDefinition) id = metadata.name;
+    }
+    const layer = id.startsWith("meta-") ? "meta" : "execution";
+    const platformId = runtime === "claude_code" ? "claudeCode" : runtime;
+    const sourceRef = `~/${toPosix(path.relative(userHome, agentPath))}`;
+    const sourceRoot = `~/${toPosix(path.relative(userHome, agentsDir))}`;
+    const contentDigest = createHash("sha256").update(content).digest("hex");
+    providers.push({
+      id,
+      inventoryId,
+      layer,
+      source: "local_global_agent_inventory",
+      runtime,
+      platformId,
+      sourceClass: "personal",
+      sourceRoot,
+      sourceRef,
+      sourcePriority: 300,
+      nativeIdentity: id,
+      contentDigest,
+      sourceKey: `${platformId}:agents:${id}:personal:${sourceRef}`,
+      executionBlock: layer === "meta",
+      own: agentProjection.format === "codex_toml" ? null : content,
+      metadata,
+      validCustomAgentDefinition,
+      customAgentDefinitionErrors,
+    });
+  }
+  const byNativeIdentity = new Map();
+  for (const provider of providers) {
+    const group = byNativeIdentity.get(provider.nativeIdentity) ?? [];
+    group.push(provider);
+    byNativeIdentity.set(provider.nativeIdentity, group);
+  }
+  return [...byNativeIdentity.values()].map((group) => {
+    const candidates = [...group].sort((left, right) =>
+      String(left.sourceRef).localeCompare(String(right.sourceRef)));
+    const winner = candidates[0];
+    const distinctDigests = [...new Set(candidates.map((entry) => entry.contentDigest))];
+    const exactDuplicate = candidates.length > 1 && distinctDigests.length === 1;
+    const ambiguous = runtime === "codex" && candidates.length > 1 && !exactDuplicate;
+    const provenance = candidates.map((entry) => ({
+      id: entry.id,
+      inventoryId: entry.inventoryId,
+      sourceClass: entry.sourceClass,
+      sourceRoot: entry.sourceRoot,
+      sourceRef: entry.sourceRef,
+      contentDigest: entry.contentDigest,
+      nativeIdentity: entry.nativeIdentity,
+      sourcePriority: entry.sourcePriority,
+      sourceKey: entry.sourceKey,
+      sourceValid: entry.validCustomAgentDefinition !== false,
+    }));
+    const collision = {
+      detected: candidates.length > 1,
+      kind: candidates.length <= 1
+        ? "none"
+        : exactDuplicate
+          ? "exact_duplicate"
+          : "conflicting_definitions",
+      candidateCount: candidates.length,
+      distinctContentDigests: distinctDigests,
+      winnerSourceKey: winner.sourceKey,
+      winnerSourceRef: winner.sourceRef,
+      exactDuplicate,
+      ambiguous,
+      routeEligible: !ambiguous && winner.validCustomAgentDefinition !== false,
+      evidenceSource: "live_filesystem",
+    };
+    return {
+      ...winner,
+      sourceCandidates: candidates.map((entry) => ({
+        ...entry,
+        provenance,
+        collision,
+      })),
+      provenance,
+      collision,
+      routeEligible: !ambiguous && winner.validCustomAgentDefinition !== false,
+      ambiguousNativeIdentity: ambiguous,
+    };
+  });
+}
+
 async function projectSkillProviders() {
   const dirs = [
     { runtime: "codex", dir: ".agents/skills", marker: "SKILL.md" },
+    { runtime: "gemini", dir: ".agents/skills", marker: "SKILL.md" },
+    { runtime: "gemini", dir: ".gemini/skills", marker: "SKILL.md" },
+    { runtime: "zcode", dir: ".zcode/skills", marker: "SKILL.md" },
     { runtime: "claude_code", dir: ".claude/skills", marker: "SKILL.md" },
     { runtime: "cursor", dir: ".cursor/skills", marker: "SKILL.md" },
     { runtime: "openclaw", dir: "openclaw/skills", marker: "SKILL.md" },
   ];
   const providers = [];
   for (const { runtime: runtimeName, dir, marker } of dirs) {
-    const absDir = repoPath(dir);
+    const absDir = inspectTrustedPath(dependencyProjectRoot, dir)?.target;
+    if (!absDir) continue;
     if (!(await exists(absDir))) continue;
     const entries = await fs.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (runtimeName === "gemini" && dir === ".gemini/skills" &&
+          providers.some((candidate) => candidate.runtime === "gemini" && candidate.id === entry.name)) continue;
       const skillFile = path.join(dir, entry.name, marker);
-      if (!(await exists(repoPath(skillFile)))) continue;
+      const skillPath = inspectTrustedPath(dependencyProjectRoot, skillFile)?.target;
+      if (!skillPath) continue;
       providers.push({
         id: entry.name,
         type: "skills",
         source: "project_runtime_skill_inventory",
+        sourceRoot: dependencyProjectRoot,
         runtime: runtimeName,
         sourceRef: toPosix(skillFile),
+        contentDigest: createHash("sha256").update(await fs.readFile(skillPath)).digest("hex"),
       });
     }
   }
@@ -366,9 +778,12 @@ async function projectCapabilityProviders() {
     { runtime: "claude_code", dir: ".claude/hooks", type: "hooks", source: "project_runtime_hook_inventory", extensions: [".js", ".mjs", ".cjs", ".ts", ".py", ".sh"] },
     { runtime: "codex", dir: ".codex/hooks", type: "hooks", source: "project_runtime_hook_inventory", extensions: [".js", ".mjs", ".cjs", ".ts", ".py", ".sh"] },
     { runtime: "cursor", dir: ".cursor/hooks", type: "hooks", source: "project_runtime_hook_inventory", extensions: [".js", ".mjs", ".cjs", ".ts", ".py", ".sh"] },
+    { runtime: "gemini", dir: ".gemini/hooks", type: "hooks", source: "project_runtime_hook_inventory", extensions: [".js", ".mjs", ".cjs", ".ts", ".py", ".sh"] },
     { runtime: "openclaw", dir: "openclaw/hooks", type: "hooks", source: "project_runtime_hook_inventory", extensions: [".js", ".mjs", ".cjs", ".ts", ".py", ".sh"] },
     { runtime: "claude_code", dir: ".claude/commands", type: "commands", source: "project_runtime_command_inventory", extensions: [".md", ".toml", ".yaml", ".yml"], recursive: true },
     { runtime: "codex", dir: ".codex/commands", type: "commands", source: "project_runtime_command_inventory", extensions: [".md", ".toml", ".yaml", ".yml"], recursive: true },
+    { runtime: "gemini", dir: ".gemini/commands", type: "commands", source: "project_runtime_command_inventory", extensions: [".toml"], recursive: true },
+    { runtime: "zcode", dir: ".zcode/commands", type: "commands", source: "project_runtime_command_inventory", extensions: [".md"], recursive: true },
     { runtime: "cursor", dir: ".cursor/rules", type: "rules", source: "project_runtime_rule_inventory", extensions: [".mdc", ".md"], recursive: true },
     { runtime: "codex", dir: ".codex/prompts", type: "prompts", source: "project_runtime_prompt_inventory", extensions: [".md", ".txt", ".yaml", ".yml"], recursive: true },
     { runtime: "claude_code", dir: ".claude/prompts", type: "prompts", source: "project_runtime_prompt_inventory", extensions: [".md", ".txt", ".yaml", ".yml"], recursive: true },
@@ -390,6 +805,7 @@ async function projectCapabilityProviders() {
   for (const file of [
     { id: "claude-settings-json", runtime: "claude_code", sourceRef: ".claude/settings.json" },
     { id: "cursor-hooks-json", runtime: "cursor", sourceRef: ".cursor/hooks.json" },
+    { id: "gemini-settings-json", runtime: "gemini", sourceRef: ".gemini/settings.json" },
     { id: "openclaw-template-json", runtime: "openclaw", sourceRef: "openclaw/openclaw.template.json" },
   ]) {
     if (await exists(repoPath(file.sourceRef))) {
@@ -418,6 +834,8 @@ async function projectCapabilityProviders() {
     { id: "repo-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "shared", sourceRef: ".mcp.json" },
     { id: "cursor-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "cursor", sourceRef: ".cursor/mcp.json" },
     { id: "codex-config-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "codex", sourceRef: ".codex/config.toml" },
+    { id: "gemini-config-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "gemini", sourceRef: ".gemini/settings.json" },
+    { id: "zcode-config-mcp", type: "mcpServers", source: "project_runtime_mcp_inventory", runtime: "zcode", sourceRef: ".zcode/config.json" },
   ]) {
     if (await exists(repoPath(file.sourceRef))) providers.push(file);
   }
@@ -428,6 +846,27 @@ async function scanSkillRoot(rootDir, source, platformId, { maxProviders = 160 }
   const providers = [];
   if (!(await exists(rootDir))) return providers;
   const home = process.env.USERPROFILE ?? process.env.HOME ?? "";
+  const maxSkillBytes = 256 * 1024;
+  let remainingBytes = 8 * 1024 * 1024;
+  async function currentSkillDigest(skillFile) {
+    const checked = inspectTrustedPath(home || rootDir, path.relative(home || rootDir, skillFile));
+    if (!checked) return null;
+    let handle;
+    try {
+      handle = await fs.open(checked.target, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      const info = await handle.stat();
+      if (!info.isFile() || info.size < 1 || info.size > maxSkillBytes || info.size > remainingBytes) return null;
+      // Read at most the observed size plus one byte. A growing/changing file
+      // cannot acquire a binding from a silently truncated read.
+      const content = Buffer.alloc(info.size + 1);
+      const { bytesRead } = await handle.read(content, 0, content.length, 0);
+      const after = await handle.stat();
+      remainingBytes -= bytesRead;
+      if (bytesRead !== info.size || after.size !== info.size || after.mtimeMs !== info.mtimeMs) return null;
+      return createHash("sha256").update(content.subarray(0, bytesRead)).digest("hex");
+    } catch { return null; }
+    finally { await handle?.close(); }
+  }
   function displaySkillRef(skillFile) {
     const normalizedSkillFile = toPosix(skillFile);
     const normalizedHome = home ? toPosix(home) : "";
@@ -447,12 +886,15 @@ async function scanSkillRoot(rootDir, source, platformId, { maxProviders = 160 }
     if (entries.some((entry) => entry.isFile() && entry.name === "SKILL.md")) {
       const rel = toPosix(path.relative(rootDir, absDir));
       const id = rel && rel !== "." ? rel : path.basename(absDir);
+      const contentDigest = await currentSkillDigest(path.join(absDir, "SKILL.md"));
+      if (!contentDigest) return;
       providers.push({
         id,
         type: "skills",
         source,
         platformId,
         sourceRef: displaySkillRef(path.join(absDir, "SKILL.md")),
+        contentDigest,
       });
       return;
     }
@@ -488,8 +930,233 @@ async function codexGlobalSkillProviders() {
 }
 
 const repoCanonicalAgents = capabilityEntries(repoCapabilityIndex, "agents").map((entry) => compactAgent(entry, "repo_canonical_capability_index"));
-const localGlobalAgents = capabilityEntries(globalCapabilityInventory, "agents").map((entry) => compactAgent(entry, "local_global_agent_inventory"));
+const filesystemRuntimeAgents = await globalRuntimeAgentProviders();
+const liveFilesystemAgentCandidates = filesystemRuntimeAgents.flatMap(
+  (agent) => agent.sourceCandidates ?? [agent],
+);
+const exactLiveSourceAgents = liveFilesystemAgentCandidates
+  .filter(exactOwnerSourceSelected)
+  .map((entry) => ({
+    ...entry,
+    sourceSelectedExplicitly: true,
+    routeEligible:
+      (entry.validCustomAgentDefinition ?? entry.metadata?.validCustomAgentDefinition) !== false,
+  }));
+const authoritativeFilesystemAgents = exactLiveSourceAgents.length > 0
+  ? exactLiveSourceAgents
+  : filesystemRuntimeAgents;
+const cachedInventoryAgentEntries = capabilityEntries(globalCapabilityInventory, "agents");
+function cacheEvidenceForLiveAgent(liveAgent) {
+  const cached = cachedInventoryAgentEntries.find((entry) => entry.id === liveAgent.id);
+  if (!cached) return { present: false, sourceAware: false, liveMatch: false };
+  const cachedSources = Array.isArray(cached.provenance) && cached.provenance.length > 0
+    ? cached.provenance
+    : [cached];
+  const sourceAware = cachedSources.every(
+    (entry) => entry?.sourceRef && entry?.sourceKey && /^[a-f0-9]{64}$/iu.test(
+      String(entry?.contentDigest ?? "").replace(/^sha256:/iu, ""),
+    ),
+  );
+  const liveMatch = sourceAware && cachedSources.some(
+    (entry) =>
+      toPosix(String(entry.sourceRef)) === toPosix(String(liveAgent.sourceRef)) &&
+      String(entry.contentDigest).replace(/^sha256:/iu, "").toLowerCase() ===
+        String(liveAgent.contentDigest).replace(/^sha256:/iu, "").toLowerCase(),
+  );
+  return {
+    present: true,
+    sourceAware,
+    liveMatch,
+    cachedSourceKey: cached.sourceKey ?? null,
+    cachedContentDigest: cached.contentDigest ?? null,
+    cachedCollision: cached.collision ?? null,
+    disposition: liveMatch
+      ? "cache_correlated_live_filesystem_authoritative"
+      : "cache_evidence_only_live_filesystem_authoritative",
+  };
+}
+const liveGlobalAgents = authoritativeFilesystemAgents.map((agent) => ({
+  ...agent,
+  cacheEvidence: cacheEvidenceForLiveAgent(agent),
+}));
+const liveGlobalAgentIds = new Set(liveGlobalAgents.map((agent) => agent.id));
+const cacheOnlyGlobalAgents = cachedInventoryAgentEntries
+  .filter((entry) => !liveGlobalAgentIds.has(entry.id))
+  .map((entry) => compactAgent({
+    ...entry,
+    routeEligible: false,
+    cacheEvidenceOnly: true,
+  }, "local_global_agent_inventory"));
+const localGlobalAgents = [];
+const localGlobalAgentKeys = new Set();
+for (const agent of [...liveGlobalAgents, ...cacheOnlyGlobalAgents]) {
+  const key = `${agent.runtime ?? agent.platformId ?? "shared"}:${agent.id}`;
+  if (localGlobalAgentKeys.has(key)) continue;
+  localGlobalAgentKeys.add(key);
+  localGlobalAgents.push(agent);
+}
 const projectRuntimeAgentCandidates = await projectRuntimeAgents();
+const dependencyAgentDiscovery = await discoverDependencyAgentContracts({
+  projects: registryDependencies, projectRoot: dependencyProjectRoot, localOverrides,
+});
+const dependencySkillDiscovery = localToolRequest?.status === "ready"
+  ? await discoverDependencySkillContracts({
+      request: localToolRequest.request,
+      capabilityNeedIds: [LOCAL_DEPENDENCY_TOOL_CONTRACT.capabilityId],
+      projects: registryDependencies, projectRoot: dependencyProjectRoot, localOverrides,
+    })
+  : { skills: [], capabilities: [], sources: [], matches: [], canExecute: false, invocationStatus: "not_invoked" };
+const dependencySkillCandidate = dependencySkillDiscovery.capabilities.length === 1
+  ? dependencySkillDiscovery.capabilities[0] : null;
+const dependencySkillContract = dependencySkillDiscovery.skills.find((skill) =>
+  skill.componentId === dependencySkillCandidate?.componentId &&
+  skill.dependencyId === dependencySkillCandidate?.dependencyId);
+const localScanInvocation = dependencySkillCandidate?.selectedCapability?.invocation;
+const localToolPlatformSupported = Array.isArray(LOCAL_DEPENDENCY_TOOL_CONTRACT.supportedPlatforms) &&
+  LOCAL_DEPENDENCY_TOOL_CONTRACT.supportedPlatforms.includes(process.platform) && osTarget === "windows";
+const localSourceReview = localToolRequest?.sourceReview;
+const localSourceReviewMatches = dependencySkillCandidate && localSourceReview?.status === 'pass' &&
+  ["dependencyId", "componentVersion", "contractSha256", "componentContentSha256", "indexSha256"]
+    .every((field) => localSourceReview[field] === dependencySkillCandidate[field]) &&
+  typeof localSourceReview.sourceRoot === "string" && path.isAbsolute(localSourceReview.sourceRoot) &&
+  (process.platform === "win32"
+    ? path.resolve(localSourceReview.sourceRoot).toLowerCase() === path.resolve(dependencySkillCandidate.sourceRoot).toLowerCase()
+    : path.resolve(localSourceReview.sourceRoot) === path.resolve(dependencySkillCandidate.sourceRoot)) &&
+  Array.isArray(localSourceReview.evidenceRefs) && localSourceReview.evidenceRefs.length > 0 &&
+  localSourceReview.evidenceRefs.every((ref) => typeof ref === "string" && ref.trim());
+const selectedLocalScanCapability = dependencySkillCandidate && dependencySkillContract &&
+  localToolPlatformSupported &&
+  localSourceReviewMatches && dependencySkillCandidate.dependencyId === LOCAL_DEPENDENCY_TOOL_CONTRACT.dependencyId &&
+  dependencySkillCandidate.componentId === LOCAL_DEPENDENCY_TOOL_CONTRACT.componentId &&
+  dependencySkillCandidate.componentVersion === LOCAL_DEPENDENCY_TOOL_CONTRACT.componentVersion &&
+  dependencySkillCandidate.selectedCapability?.id === LOCAL_DEPENDENCY_TOOL_CONTRACT.capabilityId &&
+  stableJson(localScanInvocation) === stableJson(LOCAL_DEPENDENCY_TOOL_CONTRACT.invocation) &&
+  dependencySkillCandidate.sideEffects?.length === 0 && dependencySkillCandidate.humanGate?.required === false
+    ? { ...dependencySkillCandidate, fullContract: dependencySkillContract.fullContract } : null;
+const localToolExecutionGate = {
+  applies: localToolRequest?.applies === true,
+  status: localToolRequest?.applies !== true ? "not_applicable"
+    : localToolRequest.status !== "ready" ? "blocked"
+    : selectedLocalScanCapability ? "ready" : "blocked",
+  blockers: localToolRequest?.status === "blocked" ? localToolRequest.blockers
+    : localToolRequest?.applies === true && !localToolPlatformSupported ? ["local_tool_platform_unsupported"]
+    : localToolRequest?.applies === true && !selectedLocalScanCapability
+      ? [dependencySkillCandidate && !localSourceReviewMatches ? "local_source_review_binding_mismatch" : "exact_local_scan_contract_unavailable"] : [],
+  input: localToolRequest?.status === "ready" ? localToolRequest.input : null,
+  taskHash: localToolRequest?.taskHash ?? null,
+  intentDigest: localToolRequest?.intentDigest ?? null,
+  selectedCapability: selectedLocalScanCapability,
+  invocationStatus: "not_invoked",
+  grantsNativePermission: false,
+  supportedPlatforms: LOCAL_DEPENDENCY_TOOL_CONTRACT.supportedPlatforms,
+  sourceReviewBinding: localSourceReviewMatches ? { status: "exact_review_bound", evidenceRefs: localSourceReview.evidenceRefs } : { status: "not_verified" },
+  effectClass: "read_only_support",
+};
+const professionalMethodDemand = Boolean(methodCapabilityId || requirementsContext?.methods.length);
+const dependencyAgentMatches = matchDependencyAgentContracts(professionalMethodDemand
+  ? [actionTask, ...(requirementsContext?.capabilityNeed ?? methodContext.capabilityNeed)].join("\n") : task,
+  dependencyAgentDiscovery.agents, { hostSelection: methodAssessment });
+const explorationMethod = requirementsContext?.methods.length === 1 ? requirementsContext.methods[0] : null;
+const methodContractOwners = methodCapabilityId ? dependencyAgentDiscovery.agents.filter((agent) =>
+  agent.ownerContract.capabilities.some((capability) => methodCapabilityId === capability.id ||
+    methodCapabilityId === `${agent.dependencyId}:${capability.id}`))
+  : explorationMethod ? dependencyAgentDiscovery.agents.filter((agent) => {
+    if (!explorationMethod.methodCapabilityId || !explorationMethod.sourceRef ||
+        !agent.ownerContract.capabilities.some((capability) => explorationMethod.methodCapabilityId === capability.id ||
+          explorationMethod.methodCapabilityId === `${agent.dependencyId}:${capability.id}`)) return false;
+    // Both references are demands relative to the actual business root. Only
+    // discovery reads files and verifies their contract/component hashes.
+    const requestedSource = path.resolve(dependencyProjectRoot, explorationMethod.sourceRef);
+    const discoveredSource = path.resolve(dependencyProjectRoot, agent.sourceRef);
+    return hostOs === "windows" ? requestedSource.toLowerCase() === discoveredSource.toLowerCase() : requestedSource === discoveredSource;
+  }) : [];
+const currentMethodOperation = professionalMethodDemand || requirementsContext ? inspectCurrentMethodOperation(requirementsContext
+  ? actionTask : [actionTask, ...methodContext.capabilityNeed].join("\n")) : null;
+// Source permissions describe the method, not the current request. A diagnostic
+// support flag cannot turn an unclassified or subjective change into a read-only
+// review. Unknown actions remain for the host's source-bound Thinking work order.
+const readOnlyProfessionalReview = (methodWorkKind === "support" || requirementsContext) && methodContractOwners.length === 1 &&
+  methodContractOwners[0].routeEligible === true && methodContractOwners[0].executionBlock !== true &&
+  !currentMethodOperation.sideEffectRequested && !currentMethodOperation.unclearProhibition &&
+  currentMethodOperation.readOnlyReview;
+const currentReadOnlyOperation = readOnlyProfessionalReview;
+const explicitCapabilityLifecycle = durableCapabilityRequestsFromTask(task).some(
+  (request) => request.mutationAuthorized && request.candidateType !== "script",
+);
+const technicalScriptRequest = /脚本|\bscript\b/iu.test(task) &&
+  /\b(?:json|node(?:\.js)?|python|powershell|bash|shell|sql|javascript|typescript)\b|代码|程序|命令行/iu.test(task) &&
+  !/口播|分镜|拍摄|台词|screenplay|scriptwriting/iu.test(task);
+const explicitProfessionalTextProduction =
+  /(?:^|[.!?;:]\s*|[,，;；]\s*)(?:(?:please\s+)?(?:(?:directly\s+)?(?:help me\s+)?|help me\s+directly\s+)|(?:请)?(?:(?:直接)?(?:帮我)?|帮我直接))?(?:write|draft|generate|create|produce|rewrite|compose|写(?:出)?|撰写|生成|产出|创作|改写|起草)/iu.test(task) &&
+  /\b(?:titles?|headlines?|covers?|captions?|copy|text|drafts?|scripts?|descriptions?)\b|标题|封面|文案|文字|脚本|详情页/u.test(task);
+const PRODUCT_BUILD_INTENT_SIGNALS = {
+  content: [
+    /article|essay|post|copy|content|writing|newsletter|script|draft/i,
+    /文章|稿子|帖子|内容|写作|文案|脚本|草稿|随手记|想法|发出去/,
+  ],
+  currentResearch: [
+    /market|research|competitor|policy|platform|rule|current/i,
+    /市场|研究|竞品|平台|规则|最新|调研|内容渠道|外部服务|第三方/,
+  ],
+  interface: [
+    /app|web|site|dashboard|frontend|ui|ux|interface|page|tool|product|mvp/i,
+    /应用|网站|网页|页面|前端|界面|工具|产品|面板|后台|MVP/i,
+  ],
+  implementation: [
+    /build|implement|develop|ship|launch|api|backend|database|service|queue|workflow/i,
+    /实现|开发|上线|接口|API|后端|数据库|服务|队列|工作流/,
+  ],
+  automationIntegration: [
+    /auto[-\s]?publish|scheduler|integration|callback|oauth|account|adapter/i,
+    /自动发布|发布器|定时|排期|集成|回调|账号|授权|适配|连接/,
+  ],
+  dataState: [
+    /database|state|history|record|storage|analytics|observability/i,
+    /数据库|状态|历史|记录|存储|数据|追踪|观测|统计/,
+  ],
+  safety: [
+    /security|permission|approval|risk|compliance|credential|auth/i,
+    /安全|权限|审批|风险|合规|凭证|授权|账号/,
+  ],
+  verification: [
+    /test|qa|verify|acceptance|regression|release|launch/i,
+    /测试|验收|验证|回归|发布|上线/,
+  ],
+  monetization: [
+    /payment|billing|subscription|pricing|monetization/i,
+    /付费|支付|订阅|定价|商业化|收款/,
+  ],
+  mobile: [
+    /ios|android|native mobile|mobile app/i,
+    /原生|移动端|手机 App|安卓|苹果/,
+  ],
+};
+const dependencyAgentScopeExclusion = explicitCapabilityLifecycle
+  ? "explicit_capability_lifecycle_uses_existing_governance"
+  : readOnlyProfessionalReview ? null
+  : ["engineering_execution", "platform_governance", "goal_contract"].includes(taskShape) ||
+    (/decision|judge|判断|决策|选择|取舍|怎么改|怎么做|是否要|要不要|路径|方案|策略|转化|how should|improve conversion/.test(taskText) &&
+      !explicitProfessionalTextProduction) ||
+    (entrySignals.productBuildIntent === true &&
+      !(taskShape === "strategy_product_decision" && explicitProfessionalTextProduction && !productBuildExecutionRequested())) ||
+    entrySignals.serialOrSlowRouteComplaint === true || technicalScriptRequest
+    ? "task_scope_exceeds_read_only_professional_contract"
+    : null;
+const dependencyAgentMatch = dependencyAgentScopeExclusion
+  ? { ...dependencyAgentMatches, selected: null, reason: dependencyAgentScopeExclusion }
+  : readOnlyProfessionalReview
+    ? { ...dependencyAgentMatches, selected: methodContractOwners[0], reason: "source_verified_method_for_current_read_only_review" }
+  : dependencyAgentMatches;
+// A quality adjective does not change a source-matched professional text task
+// into UI design. The selected method retains its own required inputs/boundaries.
+// An explicit interface/page request still needs its existing design choice.
+const explicitInterfaceScope = /\b(?:ui|ux|website|webpage|web page|landing page|user interface)\b|页面|界面|网页|网站/iu.test(task);
+const subjectiveRouteChoice = entrySignals.subjectiveQualitySignal === true &&
+  explicitInterfaceScope && !currentReadOnlyOperation;
+const dependencyMethodHandoff = buildDependencyMethodHandoff({ task, match: professionalMethodDemand
+  ? { ...dependencyAgentMatch, selected: methodContractOwners.length === 1 && methodContractOwners[0].routeEligible === true &&
+    methodContractOwners[0].executionBlock !== true ? methodContractOwners[0] : null }
+  : dependencyAgentMatches, scopeExclusion: dependencyAgentScopeExclusion });
 const repoCanonicalSkillProviders = capabilityEntries(repoCapabilityIndex, "skills").map((entry) => compactCapabilityProvider(entry, "repo_canonical_capability_index", "skills"));
 const projectRuntimeSkillProviders = await projectSkillProviders();
 const codexGlobalSkillFileProviders = await codexGlobalSkillProviders();
@@ -502,7 +1169,40 @@ const repoCanonicalCapabilityProviders = [
 const projectRuntimeCapabilityProviders = [
   ...projectRuntimeSkillProviders,
   ...await projectCapabilityProviders(),
-];
+].sort((a, b) => {
+  const aPs = typeof a?.id === "string" && a.id.startsWith("package-script:") ? 0 : 1;
+  const bPs = typeof b?.id === "string" && b.id.startsWith("package-script:") ? 0 : 1;
+  return aPs - bPs;
+});
+
+function selectProjectRuntimeCapabilityEvidence(providers, limit = 80, selectedIds = new Set()) {
+  const requiredConfigIds = new Set([
+    "codex-hooks-json",
+    "claude-settings-json",
+    "cursor-hooks-json",
+    "openclaw-template-json",
+  ]);
+  const evidencePriority = (provider) => {
+    if (provider?.source === "project_runtime_hook_config_inventory") return 0;
+    if (provider?.source === "project_runtime_mcp_inventory") return 1;
+    if (["rules", "prompts", "skills"].includes(provider?.type)) return 2;
+    if (provider?.type === "hooks") return 3;
+    if (typeof provider?.id === "string" && provider.id.startsWith("package-script:")) return 5;
+    return 4;
+  };
+  const ordered = [...providers].sort((a, b) => evidencePriority(a) - evidencePriority(b));
+  const requiredEvidence = [
+    ...providers.filter((provider) => selectedIds.has(provider?.id)),
+    ...ordered.filter((provider) => requiredConfigIds.has(provider?.id)),
+    ...ordered.filter(
+      (provider) => typeof provider?.id === "string" && provider.id.startsWith("package-script:"),
+    ).slice(0, 1),
+    ...["skills", "commands", "hooks", "mcpServers", "rules", "prompts"]
+      .map((type) => ordered.find((provider) => provider?.type === type))
+      .filter(Boolean),
+  ];
+  return uniqueById([...requiredEvidence, ...ordered]).slice(0, limit);
+}
 const localGlobalCapabilityProvidersAll = ["skills", "commands", "hooks", "plugins", "mcpServers", "mcpTools", "rules", "prompts"].flatMap((type) =>
   capabilityEntries(globalCapabilityInventory, type)
     .map((entry) => compactCapabilityProvider(entry, `local_global_${type}_inventory`, type)),
@@ -514,6 +1214,28 @@ const localGlobalSkillProviders = localGlobalCapabilityProvidersAll
 const discoveredRuntimeToolProviders = (capabilityInventory.capabilities ?? [])
   .filter((capability) => capability.type === "runtime_tool")
   .map((entry) => compactCapabilityProvider(entry, "local_runtime_capability_inventory", "runtimeTools"));
+function bindRuntimeToolClaim(provider) {
+  const matrixCapability = runtimeCapabilityNameForTool(provider.id);
+  const claim = resolveRuntimeCapabilityClaim(runtimeMatrix, {
+    runtime,
+    capability: matrixCapability,
+    mode: "interactive_host",
+  });
+  return {
+    ...provider,
+    runtimeSupport: runtimeSupportForCapability(runtimeMatrix, matrixCapability),
+    runtimeCapability: matrixCapability,
+    runtimeMode: "interactive_host",
+    executionEligible: claim.executable,
+    routeEligibility: claim.executable ? "callable" : "reference",
+    capabilityClaim: {
+      hostSupport: claim.hostSupport,
+      hostConfidence: claim.hostConfidence,
+      acceptanceState: claim.acceptanceState,
+    },
+  };
+}
+
 const runtimeToolProviders = uniqueById([
   ...discoveredRuntimeToolProviders,
   ...[
@@ -539,7 +1261,7 @@ const runtimeToolProviders = uniqueById([
       sourceRef: `${runtime}:filesystem`,
     },
   ],
-]);
+]).map(bindRuntimeToolClaim);
 const capabilityProviderCoverage = {
   repoCanonical: Object.fromEntries(["skills", "commands", "hooks", "mcpServers", "mcpTools", "plugins", "rules", "prompts", "runtimeTools"].map((type) => [type, capabilityEntries(repoCapabilityIndex, type).length])),
   projectRuntimeLightScan: Object.fromEntries(["skills", "commands", "hooks", "mcpServers", "rules", "prompts", "runtimeTools"].map((type) => [type, type === "runtimeTools" ? runtimeToolProviders.length : projectRuntimeCapabilityProviders.filter((provider) => provider.type === type).length])),
@@ -697,17 +1419,30 @@ function platformMatchesRuntime(agent) {
   if (runtime === "codex") return normalized === "codex" || normalized === "codexapp";
   if (runtime === "cursor") return normalized === "cursor";
   if (runtime === "openclaw") return normalized === "openclaw";
+  if (runtime === "gemini") return normalized === "gemini";
+  if (runtime === "zcode") return normalized === "zcode";
   return false;
 }
 
-const runtimeScopedProjectExecutionAgents = projectRuntimeAgentCandidates
-  .filter((agent) => agent.runtime === runtime || agent.runtime === "shared");
-const runtimeScopedLocalGlobalAgents = localGlobalAgents.filter(platformMatchesRuntime);
+const runtimeScopedAgents = annotateCrossScopeAgentCollisions([
+  ...projectRuntimeAgentCandidates.filter((agent) => agent.runtime === runtime || agent.runtime === "shared"),
+  ...localGlobalAgents.filter(platformMatchesRuntime),
+], runtime);
+const runtimeScopedProjectExecutionAgents = runtimeScopedAgents
+  .filter((agent) => agent.source === "project_runtime_agent_inventory");
+const runtimeScopedLocalGlobalAgents = runtimeScopedAgents
+  .filter((agent) => agent.source !== "project_runtime_agent_inventory");
 const candidateExecutionAgents = [
   ...runtimeScopedProjectExecutionAgents,
   ...runtimeScopedLocalGlobalAgents,
+  ...(fetchOnly || hostWorkOrder ? dependencyAgentDiscovery.agents : dependencyAgentMatch.selected ? [dependencyAgentMatch.selected] : []),
 ]
-  .filter((agent) => agent.layer !== "meta" && agent.executionBlock !== true);
+  .filter(
+    (agent) =>
+      agent.layer !== "meta" &&
+      agent.executionBlock !== true &&
+      agent.routeEligible !== false,
+  );
 const candidateExistingExecutionOwners = candidateExecutionAgents.map((agent) => agent.id);
 const ownerDiscoveryPacket = {
   discoveryPrinciple: "canonical_index_first_capability_discovery_owner_last_binding",
@@ -717,6 +1452,7 @@ const ownerDiscoveryPacket = {
     "runtime_mirror_indexes",
     "project_runtime_agent_inventory",
     "local_global_agent_inventory",
+    "dependency_agent_contract",
     "available_capability_providers_skills_tools_mcp",
     "runtime_tool_provider_inventory",
   ],
@@ -728,13 +1464,22 @@ const ownerDiscoveryPacket = {
   ],
   governanceStages,
   repoCanonicalAgents: repoCanonicalAgents.slice(0, 20),
-  projectRuntimeAgents: projectRuntimeAgentCandidates.slice(0, 80),
+  projectRuntimeAgents: selectRuntimeAgentEvidence(projectRuntimeAgentCandidates, 80),
   localGlobalAgents: localGlobalAgents.slice(0, 30),
+  dependencyAgentDiscovery: {
+    sources: dependencyAgentDiscovery.sources,
+    agents: dependencyAgentDiscovery.agents,
+    match: { ...dependencyAgentMatch, selected: dependencyAgentMatch.selected?.id ?? null },
+  },
+  dependencySkillDiscovery,
   repoCanonicalSkillProviders: repoCanonicalSkillProviders.slice(0, 30),
   projectRuntimeSkillProviders: projectRuntimeSkillProviders.slice(0, 40),
   localGlobalSkillProviders,
   repoCanonicalCapabilityProviders: repoCanonicalCapabilityProviders.slice(0, 60),
-  projectRuntimeCapabilityProviders: projectRuntimeCapabilityProviders.slice(0, 80),
+  projectRuntimeCapabilityProviders: selectProjectRuntimeCapabilityEvidence(
+    projectRuntimeCapabilityProviders,
+    80,
+  ),
   localGlobalCapabilityProviders,
   runtimeToolProviders: runtimeToolProviders.slice(0, 40),
   capabilityProviderCoverage,
@@ -742,13 +1487,15 @@ const ownerDiscoveryPacket = {
   globalInventoryFreshness,
   capabilityDiscoverySearchLog: [
     { source: "repo_canonical_capability_index", checked: true, sourceRef: "config/capability-index/meta-kim-capabilities.json" },
+    ...dependencyAgentDiscovery.sources.map((source) => ({ source: "dependency_agent_contract", checked: true, ...source })),
+    ...dependencySkillDiscovery.sources.map((source) => ({ source: "dependency_skill_contract", checked: true, ...source })),
     { source: "runtime_mirror_capability_indexes", checked: true, sourceRef: ".claude/.codex/.cursor/openclaw capability-index mirrors" },
     { source: "project_projection_policy", checked: true, sourceRef: `.meta-kim/local.overrides.json#projectProjectionMode=${projectProjectionMode}` },
     { source: "claude_project_inventory", checked: true, sourceRef: ".claude/agents; .claude/skills; .claude/commands; .claude/hooks; .claude/settings.json" },
     { source: "codex_project_inventory", checked: true, sourceRef: ".codex/agents; .agents/skills; .codex/commands; .codex/hooks; .codex/hooks.json; .codex/config.toml; .mcp.json; package.json scripts" },
     { source: "cursor_project_inventory", checked: true, sourceRef: ".cursor/agents; .cursor/skills; .cursor/rules; .cursor/prompts; .cursor/hooks; .cursor/hooks.json; .cursor/mcp.json" },
     { source: "openclaw_project_inventory", checked: true, sourceRef: "openclaw/workspaces; openclaw/skills; openclaw/hooks; openclaw/openclaw.template.json" },
-    { source: "local_global_inventory_cache", checked: true, sourceRef: ".meta-kim/state/default/capability-index/global-capabilities.json" },
+    { source: "local_global_inventory_cache", checked: true, sourceRef: globalCapabilityInventoryRef },
     { source: "claude_global_inventory", checked: true, sourceRef: "~/.claude/agents; ~/.claude/skills; ~/.claude/commands; ~/.claude/hooks; ~/.claude/settings.json" },
     { source: "codex_global_inventory", checked: true, sourceRef: "~/.codex/agents; ~/.codex/skills; ~/.codex/commands; ~/.codex/hooks; ~/.codex/hooks.json; ~/.codex/config.toml; ~/.agents/skills" },
     { source: "codex_global_skill_filesystem_light_scan", checked: true, sourceRef: "~/.codex/skills; ~/.codex/plugins/cache" },
@@ -790,7 +1537,7 @@ const ownerDiscoveryPacket = {
     "openclaw/workspaces",
     "openclaw/openclaw.template.json",
     "config/runtime-capability-matrix.json",
-    ".meta-kim/state/default/capability-inventory.json",
+    `${stateDirRef}/capability-inventory.json`,
     ".mcp.json",
     "package.json",
     "scripts",
@@ -817,7 +1564,7 @@ const ownerDiscoveryPacket = {
     "~/.openclaw/workspace-*",
     "~/.openclaw/skills",
     "~/.openclaw/hooks",
-    ".meta-kim/state/default/capability-index/global-capabilities.json",
+    globalCapabilityInventoryRef,
     "config/contracts/workflow-contract.json",
   ],
 };
@@ -857,12 +1604,40 @@ const candidateFoundationalCapabilities = (capabilityInventory.capabilities ?? [
   .slice(0, 20)
   .map((cap) => cap.id);
 
-function routeForWeapon(weapon) {
+function dependencyTaskFitScore(dep) {
+  const terms = taskTerms();
+  const depText = JSON.stringify(dep).toLowerCase();
+  let score = dep.reuseScore ?? 50;
+  if (terms.some((term) => depText.includes(term))) score += 25;
+  if (taskShape === "goal_contract" && dep.id === "goalpro") score += 50;
+  if (taskShape === "strategy_product_decision" && dep.id === "kim-decision") score += 20;
+  if (dependencyExecutable(dep)) score += 30;
+  else score -= 120;
+  return score;
+}
+
+function selectDependencyForWeapon(weapon) {
   const dependencyIds = weapon.dependencyProjects ?? [];
-  const dep = dependencyIds.length ? candidateDependencies.find((candidate) => dependencyIds.includes(candidate.id)) ?? null : null;
+  if (!dependencyIds.length) return null;
+  const matches = candidateDependencies.filter((candidate) =>
+    dependencyIds.includes(candidate.id),
+  );
+  const executableMatches = matches.filter(dependencyExecutable);
+  const pool = executableMatches.length ? executableMatches : [];
+  return pool
+    .sort((a, b) => dependencyTaskFitScore(b) - dependencyTaskFitScore(a))[0] ?? null;
+}
+
+function routeForWeapon(weapon) {
+  const dep = selectDependencyForWeapon(weapon);
   const runtimeValue = weapon.runtimeSupport?.[runtime] ?? "unknown";
   const osValue = weapon.osSupport?.[osTarget] ?? "unknown";
-  const available = new Set(ownerDiscoveryPacket.candidateExistingExecutionOwners);
+  const available = new Set([
+    ...ownerDiscoveryPacket.candidateExistingExecutionOwners,
+    ...(taskShape !== "engineering_execution"
+      ? (ownerDiscoveryPacket.governanceStageOwners ?? [])
+      : []),
+  ]);
   const executionOwner = weapon.ownerCandidates?.find((owner) => available.has(owner)) ?? null;
   const selectedOwner = weapon.ownerCandidates?.[0] ?? null;
   const existingOwnerMatched = selectedOwner
@@ -878,6 +1653,9 @@ function routeForWeapon(weapon) {
   if (weapon.ownerCandidates?.some((owner) => owner === "general-purpose")) blockedReasons.push("general-purpose fallback");
   if (weapon.ownerCandidates?.some((owner) => /runtimeInstanceAlias|nickname/i.test(owner))) blockedReasons.push("runtime alias as durable owner");
   if (taskShape === "engineering_execution" && selectedOwner && GOVERNANCE_OWNERS.includes(selectedOwner)) blockedReasons.push("governance agent as implementation worker");
+  if (productBuildExecutionRequested() && weapon.id === "meta-kim-decision-patterns") {
+    blockedReasons.push("product build requires multi-lane orchestration; decision patterns remain a lens inside Thinking");
+  }
   if (dep && !dependencyExecutable(dep)) {
     if (dep.routeEligibility === "reference_only" || dep.invokeAs === "reference") blockedReasons.push("dependency reference_only");
     if (!dep.invocationPath) blockedReasons.push("dependency missing invocationPath");
@@ -1000,8 +1778,26 @@ const reusableProviders = uniqueById(sortProvidersForRuntime([
   ...runtimeToolProviders,
 ]));
 
-function selectProvider(type, preferredIds = []) {
-  const providers = sortProvidersForRuntime(reusableProviders.filter((provider) => provider.type === type));
+function referenceOnlyProvider(provider) {
+  if (provider?.routeEligibility === "reference_only") return true;
+  const identities = [provider?.id, provider?.sourceRef, provider?.sourceRoot]
+    .filter((value) => typeof value === "string")
+    .flatMap((value) => value.toLowerCase().split(/[\\/:]/u));
+  return registryDependencies.some((project) =>
+    (project.capabilityCard?.routeEligibility === "reference_only" || project.interface?.invokeAs === "reference") &&
+    (identities.includes(String(project.id).toLowerCase()) ||
+      (project.interface?.preferredWeaponId && provider?.id === project.interface.preferredWeaponId)));
+}
+
+function providerEligibleForRoute(provider, { allowReferenceOnly = false } = {}) {
+  return provider?.routeEligible !== false && (allowReferenceOnly || !referenceOnlyProvider(provider)) &&
+    (provider?.type !== "runtimeTools" || provider?.executionEligible === true);
+}
+
+function selectProvider(type, preferredIds = [], { allowReferenceOnly = false } = {}) {
+  const providers = sortProvidersForRuntime(reusableProviders.filter((provider) =>
+    provider.type === type &&
+    providerEligibleForRoute(provider, { allowReferenceOnly })));
   for (const preferredId of preferredIds) {
     const match = providers.find((provider) => provider.id === preferredId) ??
       providers.find((provider) => provider.id?.includes(preferredId));
@@ -1015,7 +1811,7 @@ function selectAnyProvider(preferredIds = [], allowedTypes = null) {
     allowedTypes
       ? reusableProviders.filter((provider) => allowedTypes.includes(provider.type))
       : reusableProviders,
-  );
+  ).filter(providerEligibleForRoute);
   for (const preferredId of preferredIds) {
     const match = providers.find((provider) => provider.id === preferredId) ??
       providers.find((provider) => provider.id?.includes(preferredId));
@@ -1024,7 +1820,287 @@ function selectAnyProvider(preferredIds = [], allowedTypes = null) {
   return providers[0] ?? null;
 }
 
+const agentProfileSnapshots = new Map();
+function skillAuthoringRequested(text = task) {
+  return /(?:create|refactor|rewrite|design|review|evaluate|audit|optimi[sz]e)\s+(?:(?:a|an|the|this|existing|project|new|reusable)\s+){0,5}skills?\b|(?:创建|新建|改写|重构|设计|评审|审核|优化)\s*(?:一个|现有|本项目|当前项目|项目|新的|可复用)?\s*(?:skill|技能)/iu.test(text) ||
+    durableCapabilityRequestsFromTask(text).some((request) => request.candidateType === "skill" && request.requestedAction !== "reuse");
+}
+
+function profileForExecutionOwner(owner, capabilityNeed = [], fallbackProviders = [], action = task) {
+  if (!owner) return { status: "not_configured", fitStatus: "not_evaluated", selectedProviders: [], blockedReasons: [] };
+  const skillAuthoring = decomposeTaskActions(String(action)).length === 1 && skillAuthoringRequested(action);
+  const key = stableJson({ id: owner.id, source: owner.source, sourceRef: owner.sourceRef, contentDigest: owner.contentDigest, capabilityNeed, skillAuthoring, fallback: fallbackProviders.map((provider) => provider?.id) });
+  if (!agentProfileSnapshots.has(key)) {
+    agentProfileSnapshots.set(key, resolveAgentCapabilityProfile({
+      projectRoot: dependencyProjectRoot, owner, context: agentCapabilityProfileContext, providers: reusableProviders,
+      runtime, osTarget, capabilityNeed, fallbackProviders, skillAuthoring,
+      providerEligible: (provider) => providerEligibleForRoute(provider) && runtimeMatchScore(provider) < 9 &&
+        provider.executionEligible !== false && provider.osSupport?.[osTarget] !== "unsupported",
+    }));
+  }
+  return agentProfileSnapshots.get(key);
+}
+
+function profileSelectedProviders(selected, snapshot) {
+  const result = { ...selected };
+  const slotKeys = { skill: "skill", mcp_tool: "mcpTool", command: "command", runtime_tool: "runtimeTool" };
+  for (const slot of snapshot.slots ?? []) {
+    result[`profile:${slot.bindingType}:${slot.capabilitySlot}`] = slot.provider;
+    result[slotKeys[slot.bindingType]] = slot.provider;
+  }
+  const creator = snapshot.slots?.find((slot) => slot.capabilitySlot === "skill-agent-tool-creation");
+  if (creator) result.skill = creator.provider;
+  return result;
+}
+
+const implementationActionPattern = /\b(?:fix|implement|build|refactor|rebuild|migrate|write|edit|update|repair|modify|change|patch)\b|修复|修改|实现|构建|重构|迁移|写入|编辑|更新|改代码|搞定/iu;
+
+function explicitOwnerRefusalConflict(owner, action = taskText) {
+  const contract = [owner?.description, owner?.own, owner?.boundary, owner?.metadata?.description, owner?.metadata?.developer_instructions].filter(Boolean).join("\n");
+  const clauses = taskEffectText(action).toLowerCase()
+    .split(/(?=\b(?:and|or|then|but|to|while|without|using|for)\b)|[，,、;；]/iu)
+    .map((clause) => clause.trim().replace(/^(?:and|or|then|but|to|while|using|for)\s+/iu, ""))
+    .filter((clause) => !/^(?:without|do not|don't|don’t|never)\b/iu.test(clause));
+  const mutationObjects = clauses.flatMap((clause) => {
+    const mutation = implementationActionPattern.exec(clause);
+    return mutation ? [clause.slice(mutation.index + mutation[0].length)] : [];
+  });
+  if (!mutationObjects.length) return false;
+  const refusals = contract.matchAll(/\b(?:(?:do not|does not|never|cannot)\s+(?:implement|support|use|build|work with|modify|change|edit|write)|refuse(?:s)?\s*(?:to\s+(?:implement|support|use|build|modify|change|edit|write))?)\s+([^.!?;。；\n]+)/giu);
+  return [...refusals].some((match) => {
+    // Keep the complete refused object: backend schema changes is narrower
+    // than backend. Purpose/display clauses do not become mutation objects.
+    const subject = match[1].toLowerCase().replace(/\s+\b(?:changes?|modifications?|implementation|development|writes?)\s*$/u, "");
+    const terms = (subject.match(/[a-z0-9][a-z0-9.+#-]*/gu) ?? []).filter((term) => !["a", "an", "any", "the", "in", "of", "with"].includes(term));
+    const objects = terms.length === 1 ? clauses : mutationObjects;
+    return terms.length > 0 && objects.some((object) => terms.every((term) => termMatchesProviderText(object, term)));
+  });
+}
+
+// Apply the same qualification to ordinary, dependency and per-lane owners.
+// An assessed profile never grants tools, permissions or a native identity.
+function applyAgentProfilesToRoute(route) {
+  const selected = route.selectedCapabilityProviders ?? {};
+  const owner = selected.agent ?? candidateExecutionAgents.find((candidate) => candidate.id === route.owner);
+  const snapshot = profileForExecutionOwner(owner, [], Object.values(selected).filter(Boolean));
+  const gaps = [...snapshot.blockedReasons ?? []];
+  if (owner && explicitOwnerRefusalConflict(owner)) gaps.push("owner_explicit_refusal_conflicts_with_task");
+  for (const request of [...agentCapabilityProfileContext.profileSelections ?? [], ...agentCapabilityProfileContext.fitAssessments ?? []]) {
+    const requestedOwner = candidateExecutionAgents.find((candidate) => {
+      const resolved = profileForExecutionOwner(candidate);
+      return stableJson(resolved.owner) === stableJson(request.owner);
+    });
+    if (!requestedOwner) gaps.push("profile_context_owner_not_discovered");
+    else {
+      const resolved = profileForExecutionOwner(requestedOwner);
+      if (resolved.status === "capability_gap") gaps.push(...resolved.blockedReasons);
+    }
+  }
+  const bindLane = (lane) => {
+    const laneOwner = candidateExecutionAgents.find((candidate) => candidate.id === lane.ownerAgent);
+    const previous = lane.capabilityBinding?.selectedProviders ?? {};
+    const laneSnapshot = profileForExecutionOwner(laneOwner, lane.capabilityNeed ?? [], Object.values(previous).filter(Boolean), lane.purpose ?? task);
+    if (laneSnapshot.status === "capability_gap") gaps.push(...laneSnapshot.blockedReasons);
+    if (laneOwner && explicitOwnerRefusalConflict(laneOwner, lane.purpose ?? taskText)) gaps.push(`owner_explicit_refusal_conflicts_with_lane:${lane.laneId}`);
+    const providers = profileSelectedProviders(previous, laneSnapshot);
+    if (providers.mcpTool) providers.mcp = providers.mcpTool;
+    return { ...lane, agentCapabilityProfile: laneSnapshot,
+      capabilityProvider: providers.skill ?? lane.capabilityProvider,
+      capabilityBinding: { ...lane.capabilityBinding, selectedProviders: providers },
+      ...(lane.codexSpawnBinding ? { codexSpawnBinding: codexSpawnBindingForOwner(lane.ownerAgent, lane.ownerKind ?? "agent", lane.laneId,
+        { ...lane, agentCapabilityProfile: laneSnapshot, capabilityLoadout: { ...laneSnapshot, selectedProviders: providers } }) } : {}),
+    };
+  };
+  const parallelExecutionLanes = route.parallelExecutionLanes?.map(bindLane);
+  const subjectiveUiCapabilityAmplification = route.subjectiveUiCapabilityAmplification
+    ? { ...route.subjectiveUiCapabilityAmplification, lanes: route.subjectiveUiCapabilityAmplification.lanes.map(bindLane) } : undefined;
+  const mergedSelected = profileSelectedProviders(selected, snapshot);
+  return { ...route, agentCapabilityProfile: snapshot,
+    selectedCapabilityProviders: mergedSelected,
+    ...(route.codexSpawnBinding && owner ? { codexSpawnBinding: codexSpawnBindingForOwner(owner.id, "agent", null, {
+      purpose: actionTask, roleDisplayName: roleDisplayNameForOwner(owner.id), agentCapabilityProfile: snapshot,
+      capabilityLoadout: { ...snapshot, selectedProviders: mergedSelected },
+    }) } : {}),
+    ...(parallelExecutionLanes ? { parallelExecutionLanes } : {}),
+    ...(subjectiveUiCapabilityAmplification ? { subjectiveUiCapabilityAmplification } : {}),
+    ...(gaps.length ? { score: Math.min(route.score, 49), scoreBand: "blocked", blockedReasons: [...route.blockedReasons ?? [], ...gaps] } : {}),
+  };
+}
+
+const routeRunId = resolveRouteRunId(requestedRouteRunId);
+const routeOccurredAt = new Date().toISOString();
+
+// Fetch and host-selected work orders stop before lexical route synthesis.
+// Inventory references identify observed records, not native invocation or trust.
+if (fetchOnly || hostWorkOrder) {
+  const fact = (provider) => Object.fromEntries(["id", "type", "providerType", "source", "sourceRef", "sourceRoot", "sourceKey",
+    "contentDigest", "description", "boundary", "ownerContract", "runtime", "platformId", "runtimeSupport", "osSupport",
+    "routeEligible", "executionEligible", "executionBlock", "layer", "routeEligibility", "cacheEvidenceOnly",
+    "validCustomAgentDefinition", "nativeCustomAgentEligible", "ownerBindingMode", "metadata", "risk"]
+    .filter((key) => provider[key] !== undefined).map((key) => [key, key === "metadata" && provider.metadata
+      ? Object.fromEntries(["name", "description", "developer_instructions", "capabilityLoadout", "permissions", "sideEffects"].filter((field) => provider.metadata[field] !== undefined).map((field) => [field, provider.metadata[field]]))
+      : provider[key]]));
+  const agents = candidateExecutionAgents.map(fact);
+  const providers = reusableProviders.map(fact);
+  const inventory = { projectRoot: dependencyProjectRoot, runtime, os: osTarget, agents, providers };
+  const inventoryDigest = createHash("sha256").update(stableJson(inventory)).digest("hex");
+  const identify = (provider) => ({ ...provider,
+    inventoryRef: "sha256:" + createHash("sha256").update(stableJson(provider)).digest("hex") });
+  const fetchPacket = { stage: "Fetch", runtimeSelection, capabilityDiscovery: { inventoryDigest,
+    context: { runtime, os: osTarget, hostOs },
+    agents: agents.map(identify), providers: providers.map(identify),
+    searchLog: ownerDiscoveryPacket.capabilityDiscoverySearchLog },
+    claimBoundary: "Current discovered source records only; no semantic fit, native invocation or execution authorization." };
+  const gap = (missing) => ({ gap: "The host-selected work order has an unresolved current capability binding.",
+    missing, returnToStage: "Thinking" });
+  if (fetchOnly) {
+    console.log(JSON.stringify({ schemaVersion: 1, task, taskShape, runtime, runtimeSelection, os: osTarget,
+      status: "needs_thinking", fetchPacket, ownerDiscoveryPacket,
+      recommendedRoute: null, rankedRoutes: [], workerTaskPacketDrafts: [],
+      routeExecutionGate: { canHandoffToHost: false, canEnterExecution: false, executionAuthorized: false,
+        handoffStatus: "pending_host_thinking", hostAction: "return_to_thinking", returnToStage: "Thinking" } }));
+    return;
+  }
+  const blockers = [];
+  if (!/^[a-f0-9]{64}$/u.test(hostWorkOrder.inventoryDigest ?? "")) blockers.push("fetch_inventory_binding_required");
+  const selected = {};
+  for (const [slot, requested] of Object.entries(hostWorkOrder.selectedCapabilityProviders ?? {})) {
+    const pool = ["agent", "verificationAgent"].includes(slot) ? fetchPacket.capabilityDiscovery.agents : fetchPacket.capabilityDiscovery.providers;
+    const matches = pool.filter((provider) => requested?.inventoryRef === provider.inventoryRef &&
+      requested.id === provider.id && requested.source === provider.source &&
+      requested.sourceRef === provider.sourceRef && (requested.contentDigest ?? null) === (provider.contentDigest ?? null));
+    if (matches.length !== 1 || !providerEligibleForRoute(matches[0])) blockers.push("selected_inventory_binding_unavailable:" + slot);
+    else selected[slot] = matches[0];
+  }
+  const owner = selected.agent;
+  for (const method of requirementsContext?.methods ?? []) {
+    const requestedSource = typeof method.sourceRef === "string" ? path.resolve(dependencyProjectRoot, method.sourceRef) : null;
+    const actualSource = owner?.sourceRef ? path.resolve(dependencyProjectRoot, owner.sourceRef) : null;
+    const sameSource = requestedSource && actualSource && (hostOs === "windows"
+      ? requestedSource.toLowerCase() === actualSource.toLowerCase() : requestedSource === actualSource);
+    if (owner?.source !== "dependency_agent_contract" || !sameSource ||
+        hostWorkOrder.methodCapabilityId !== method.methodCapabilityId) blockers.push("explicit_material_method_source_conflicts_with_selected_contract");
+  }
+  if (!owner || !/^[a-f0-9]{64}$/iu.test(String(owner.contentDigest ?? "").replace(/^sha256:/u, ""))) {
+    blockers.push("selected_owner_source_hash_required");
+  }
+  if (!hostWorkOrder.selectionReason || !Array.isArray(hostWorkOrder.toolRequirements) ||
+      !Array.isArray(hostWorkOrder.scopeFiles) || !Array.isArray(hostWorkOrder.shardScope) || !hostWorkOrder.shardScope.length) blockers.push("current_work_order_required");
+  if (!selected.verificationAgent || hostWorkOrder.handoffTarget !== selected.verificationAgent.id ||
+      !/^[a-f0-9]{64}$/iu.test(String(selected.verificationAgent.contentDigest ?? "").replace(/^sha256:/u, ""))) {
+    blockers.push("current_verification_owner_source_required");
+  }
+  const readOnly = ["read_only_worker", "read_only_support"].includes(hostWorkOrder.effectClass);
+  const localWrite = hostWorkOrder.effectClass === "local_write";
+  if (owner?.source === "dependency_agent_contract") {
+    const capabilities = owner.ownerContract.capabilities.filter((capability) =>
+      !hostWorkOrder.methodCapabilityId || capability.id === hostWorkOrder.methodCapabilityId ||
+      owner.dependencyId + ":" + capability.id === hostWorkOrder.methodCapabilityId);
+    if (capabilities.length !== 1 || !readOnly || capabilities[0].sideEffects.length) blockers.push("exact_read_only_method_contract_required");
+    if (hostWorkOrder.toolRequirements.some((tool) => !capabilities[0]?.permissions.includes(tool))) blockers.push("method_tool_requirement_exceeds_contract");
+  } else if (hostWorkOrder.methodCapabilityId) blockers.push("explicit_method_requires_exact_discovered_contract");
+  for (const tool of hostWorkOrder.toolRequirements ?? []) {
+    if (!Object.values(selected).some((provider) => provider.id === tool ||
+      provider.ownerContract?.capabilities?.some((capability) => capability.permissions.includes(tool)))) {
+      blockers.push("tool_requirement_not_bound:" + tool);
+    }
+  }
+  const scopeFiles = [];
+  const shardScope = localWrite ? [] : hostWorkOrder.shardScope;
+  const planningBlockers = localWrite ? ["current_thinking_scope_dependency_check_required"] : [];
+  const checkedScope = (file) => {
+    if (scopeComparisonKey(file) === null || file.split(/[\\/]/u).some((part) => part === "." || part === "..")) return null;
+    const root = path.resolve(dependencyProjectRoot);
+    const relative = path.relative(root, path.isAbsolute(file) ? file : path.resolve(root, file));
+    if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(".." + path.sep)) return null;
+    try { return inspectTrustedPath(root, relative, { allowMissing: localWrite })?.target ?? null; }
+    catch { return null; }
+  };
+  for (const file of hostWorkOrder.scopeFiles ?? []) {
+    const checked = checkedScope(file);
+    if (checked) scopeFiles.push(checked);
+    else blockers.push("scope_outside_current_project_or_unavailable:" + file);
+  }
+  if (localWrite) {
+    if (!scopeFiles.length) planningBlockers.push("local_write_scope_files_required");
+    for (const shard of hostWorkOrder.shardScope) {
+      const checked = checkedScope(shard);
+      if (checked) shardScope.push(checked);
+      else blockers.push("shard_outside_current_project_or_unavailable:" + shard);
+    }
+    for (const file of scopeFiles) {
+      const key = scopeComparisonKey(file);
+      if (!shardScope.some((shard) => {
+        const shardKey = scopeComparisonKey(shard);
+        return key === shardKey || key.startsWith(shardKey + "/");
+      })) planningBlockers.push("write_scope_not_covered_by_shard:" + path.relative(dependencyProjectRoot, file));
+    }
+  }
+  const snapshot = owner ? profileForExecutionOwner(owner, hostWorkOrder.capabilityNeed ?? [], Object.values(selected), hostWorkOrder.todayTask) : null;
+  if (snapshot?.status === "capability_gap") blockers.push(...snapshot.blockedReasons);
+  // A profile is a constraint on the host choice, not another selector.
+  const profileSlotKeys = { skill: "skill", mcp_tool: "mcpTool", command: "command", runtime_tool: "runtimeTool" };
+  for (const slot of snapshot?.slots ?? []) {
+    const slotKey = "profile:" + slot.bindingType + ":" + slot.capabilitySlot;
+    const hostProvider = selected[slotKey] ?? selected[profileSlotKeys[slot.bindingType]];
+    if (!hostProvider) blockers.push("host_profile_slot_binding_required:" + slot.capabilitySlot);
+    else if (["id", "source", "sourceRef", "sourceRoot", "contentDigest"].some((key) =>
+      (hostProvider[key] ?? null) !== (slot.provider[key] ?? null))) {
+      blockers.push("host_profile_slot_binding_conflict:" + slot.capabilitySlot);
+    }
+  }
+  const providersAfterProfile = selected;
+  for (const provider of Object.values(providersAfterProfile).filter(Boolean)) {
+    const known = [...agents, ...providers].filter((entry) => entry.id === provider.id && entry.source === provider.source &&
+      entry.sourceRef === provider.sourceRef && (entry.contentDigest ?? null) === (provider.contentDigest ?? null));
+    const identities = new Set(known.map((entry) => stableJson([entry.id, entry.source, entry.sourceRef, entry.sourceRoot, entry.contentDigest])));
+    if (identities.size !== 1 || !providerEligibleForRoute(known[0])) blockers.push("merged_provider_not_current:" + provider.id);
+  }
+  if (skillAuthoringRequested(actionTask) && providersAfterProfile.skill?.id !== "meta-skill-creator") {
+    blockers.push("meta_skill_creator_required_for_skill_authoring");
+  }
+  const route = { id: "host-thinking:" + runtime + ":" + hostWorkOrder.roleInstanceId,
+    owner: owner?.id ?? null, weapon: providersAfterProfile.skill?.id ?? providersAfterProfile.command?.id ?? providersAfterProfile.runtimeTool?.id ?? null,
+    dependency: providersAfterProfile.skill?.id ?? null, dependencyProject: owner?.dependencyId ?? null,
+    runtime, os: osTarget, verificationOwner: selected.verificationAgent?.id ?? null,
+    verificationMethod: "Current work order verifySteps and actual host results",
+    selectionPolicy: "host_selected_current_bindings", selectionStatus: blockers.length ? "blocked" : "bindings_verified_not_invoked",
+    selectedCapabilityProviders: providersAfterProfile, agentCapabilityProfile: snapshot,
+    ownerBinding: { selectedOwner: owner?.id ?? null, source: owner?.source, sourceRef: owner?.sourceRef,
+      providerEvidenceRef: owner?.inventoryRef, existingOwnerMatched: Boolean(owner), bindingStage: "Thinking" },
+    blockedReasons: blockers, selectionReason: hostWorkOrder.selectionReason, nativeInvocationVerified: false };
+  const executionGate = evaluateRouteExecutionGate({ route, runtime, taskShape: "standard_path", choiceRequired: false, effectiveMatrix: runtimeMatrix });
+  const ready = !blockers.length && executionGate.routeCompatible === true;
+  const binding = owner ? codexSpawnBindingForOwner(owner.id, "agent", hostWorkOrder.roleInstanceId,
+    { ...hostWorkOrder, purpose: hostWorkOrder.todayTask, roleDisplayName: hostWorkOrder.roleDisplayName,
+      scopeFiles, shardScope,
+      verificationOwner: selected.verificationAgent?.id, verification: hostWorkOrder.verifySteps, agentCapabilityProfile: snapshot,
+      capabilityLoadout: { ...snapshot, selectedProviders: providersAfterProfile } }) : null;
+  const draft = { ...hostWorkOrder, ownerAgent: owner?.id, ownerSource: owner?.source, sourceRef: owner?.sourceRef,
+    ownerContract: owner?.ownerContract ?? null, purpose: hostWorkOrder.todayTask, scopeFiles, shardScope,
+    codexSpawnBinding: binding, agentCapabilityProfile: snapshot,
+    mutationPolicy: readOnly ? "read_only" : "scoped_local_writes_only", externalWriteBoundary: hostWorkOrder.effectClass === "external_write",
+    workspaceIsolation: readOnly ? "shared_workspace_read_only" : "unproven",
+    externalWritePolicy: readOnly ? "forbidden" : "forbidden_without_host_authorization",
+    collisionPolicy: readOnly ? "no_overlap" : "unproven",
+    safetyEvidence: { status: ready && readOnly ? "proven" : "unproven", shardScope,
+      ...(localWrite ? { planningBlockers } : {}),
+      evidenceBasis: localWrite ? "trusted_project_paths_pending_current_thinking_graph" : "current_discovered_sources_and_requested_read_only_scope_not_permission" } };
+  console.log(JSON.stringify({ schemaVersion: 1, task, taskShape, runtime, os: osTarget, fetchPacket, ownerDiscoveryPacket,
+    recommendedRoute: blockers.length ? null : { ...route, executionCapabilityGate: executionGate },
+    selectedCapabilityProviders: blockers.length ? {} : providersAfterProfile,
+    rankedRoutes: [route], workerTaskPacketDrafts: ready ? [draft] : [],
+    capabilityGapPacket: ready ? null : gap([...blockers, ...executionGate.blockers ?? []]),
+    capabilityGapDetected: !ready, capabilityGapDecision: ready ? null : { decision: "blocked_or_needs_approval" },
+    routeExecutionGate: { routeCompatible: executionGate.routeCompatible, canHandoffToHost: ready && !planningBlockers.length,
+      canEnterExecution: false, executionAuthorized: false, handoffStatus: ready && !planningBlockers.length ? "ready_for_host_handoff" : "blocked",
+      hostAction: ready && !planningBlockers.length ? "host_action_required" : "return_to_thinking", returnToStage: ready && !planningBlockers.length ? null : "Thinking",
+      planningBlockers, blockedBy: [...blockers, ...planningBlockers] } }));
+  return;
+}
+
 const CAPABILITY_NEED_TERMS = {
+  "software-architecture-and-extension-boundaries": ["architecture", "architectural", "maintainability", "extension", "system-design", "架构", "可扩展", "可维护"],
   "product-intent-and-context": ["product", "context", "get-context", "design-consultation", "strategy", "用户", "产品"],
   "capability-discovery-and-retrieval": ["findskill", "skill-scout", "skill-stocktake", "discover", "search", "retrieval", "capability", "发现", "检索"],
   "current-platform-policy-research": ["deep-research", "browse", "browser", "research", "platform", "policy", "market", "规则", "研究"],
@@ -1099,8 +2175,9 @@ function scoreProviderForCapabilityNeed(provider, capabilityNeed = []) {
 function candidateProvidersForCapabilityNeed(capabilityNeed = [], allowedTypes = null, limit = 6) {
   const pool = sortProvidersForRuntime(
     allowedTypes
-      ? reusableProviders.filter((provider) => allowedTypes.includes(provider.type))
-      : reusableProviders,
+      ? reusableProviders.filter((provider) =>
+          allowedTypes.includes(provider.type) && providerEligibleForRoute(provider))
+      : reusableProviders.filter(providerEligibleForRoute),
   );
   const scored = pool
     .map((provider) => scoreProviderForCapabilityNeed(provider, capabilityNeed))
@@ -1188,49 +2265,6 @@ function taskMatchesAnyPattern(patterns) {
   return patterns.some((pattern) => taskMatchesPattern(pattern));
 }
 
-const PRODUCT_BUILD_INTENT_SIGNALS = {
-  content: [
-    /article|essay|post|copy|content|writing|newsletter|script|draft/i,
-    /文章|稿子|帖子|内容|写作|文案|脚本|草稿|随手记|想法|发出去/,
-  ],
-  currentResearch: [
-    /market|research|competitor|policy|platform|rule|current/i,
-    /市场|研究|竞品|平台|规则|最新|调研|小红书|抖音|公众号|视频号/,
-  ],
-  interface: [
-    /app|web|site|dashboard|frontend|ui|ux|interface|page|tool|product|mvp/i,
-    /应用|网站|网页|页面|前端|界面|工具|产品|面板|后台|MVP/i,
-  ],
-  implementation: [
-    /build|implement|develop|ship|launch|api|backend|database|service|queue|workflow/i,
-    /实现|开发|上线|接口|API|后端|数据库|服务|队列|工作流/,
-  ],
-  automationIntegration: [
-    /auto[-\s]?publish|scheduler|integration|callback|oauth|account|adapter/i,
-    /自动发布|发布器|定时|排期|集成|回调|账号|授权|适配|连接/,
-  ],
-  dataState: [
-    /database|state|history|record|storage|analytics|observability/i,
-    /数据库|状态|历史|记录|存储|数据|追踪|观测|统计/,
-  ],
-  safety: [
-    /security|permission|approval|risk|compliance|credential|auth/i,
-    /安全|权限|审批|风险|合规|凭证|授权|账号/,
-  ],
-  verification: [
-    /test|qa|verify|acceptance|regression|release|launch/i,
-    /测试|验收|验证|回归|发布|上线/,
-  ],
-  monetization: [
-    /payment|billing|subscription|pricing|monetization/i,
-    /付费|支付|订阅|定价|商业化|收款/,
-  ],
-  mobile: [
-    /ios|android|native mobile|mobile app/i,
-    /原生|移动端|手机 App|安卓|苹果/,
-  ],
-};
-
 function hasProductBuildSignal(name) {
   return taskMatchesAnyPattern(PRODUCT_BUILD_INTENT_SIGNALS[name] ?? []);
 }
@@ -1264,6 +2298,11 @@ function productBuildLaneEvidence() {
     verification,
     contentOnly,
   };
+}
+
+function productBuildExecutionRequested() {
+  const evidence = productBuildLaneEvidence();
+  return evidence.implementation || evidence.automationIntegration || (evidence.interfaceNeeded && evidence.dataState);
 }
 
 function productRouteDecisionRequested() {
@@ -1335,13 +2374,22 @@ function buildCapabilityTeamBlueprint(lanes, omittedLanesWithReason, evidence) {
     inspiration: "agent-teams-playbook abstracted from agent roles to capability slots",
     scenario,
     collaborationMode,
-    fallbackChain: [
-      "local capability inventory",
-      "find-skills or equivalent capability discovery",
-      "runtime provider binding",
-      "run-scoped workerTaskPacket",
-      "degraded main-thread staged execution with reason",
-    ],
+    capabilityResolutionPolicy: {
+      mode: "stop_on_first_qualified_provider",
+      localProviderTypes: ["agent", "skill", "mcp", "command", "runtimeTool", "hook", "plugin", "memory", "dependency"],
+      externalDiscoveryTrigger: "only_after_local_multi_provider_gap_is_proven",
+      runtimeBinding: runtime === "codex"
+        ? "top_level_spawn_agent_task_name_message_fork_turns"
+        : runtime === "claude_code"
+          ? "native_agent_or_task_surface"
+          : "current_runtime_native_agent_surface",
+      degradedModeTrigger: "only_after_host_surface_permission_or_owner_gap",
+      forbidden: [
+        "continue_to_external_search_after_qualified_local_match",
+        "label_successful_native_agent_dispatch_as_fallback",
+        "silent_general_purpose_owner_fallback",
+      ],
+    },
     rows: lanes.map((lane, index) => ({
       id: index + 1,
       capabilitySlot: lane.laneId,
@@ -1351,11 +2399,21 @@ function buildCapabilityTeamBlueprint(lanes, omittedLanesWithReason, evidence) {
       ownerFamily: lane.roleDisplayName,
       selectedOwner: lane.ownerAgent,
       providerBindingPolicy: "capability_need_runtime_match",
+      codexSpawnBinding:
+        lane.codexSpawnBinding ??
+        codexSpawnBindingForOwner(lane.ownerAgent, lane.ownerKind, lane.laneId),
       dependsOn: lane.dependsOn,
       parallelGroup: lane.parallelGroup,
       runtimeExecutionSurface:
-        lanes.length >= 2
-          ? "host subagent/custom-agent when available; otherwise workerTaskPacket"
+        runtime === "codex" &&
+        (lane.codexSpawnBinding ??
+          codexSpawnBindingForOwner(lane.ownerAgent, lane.ownerKind, lane.laneId))
+          ? (lane.codexSpawnBinding ?? codexSpawnBindingForOwner(lane.ownerAgent, lane.ownerKind, lane.laneId))
+              ?.ownerBindingMode === "native_custom_agent"
+            ? "Codex native custom-agent request using the schema-confirmed agent_type owner selector"
+            : "Codex run-scoped worker request carrying the selected owner contract in the bounded message"
+          : lanes.length >= 2
+            ? "host subagent/custom-agent when available; otherwise workerTaskPacket"
           : "single workerTaskPacket",
     })),
     omittedCapabilitySlots: omittedLanesWithReason,
@@ -1367,38 +2425,458 @@ function selectOwner(preferredOwners = []) {
   return preferredOwners.find((owner) => available.has(owner)) ?? null;
 }
 
+function normalizeCodexTaskName(value) {
+  const original = String(value ?? "worker");
+  const normalized = original
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const digest = createHash("sha256").update(original).digest("hex").slice(0, 8);
+  const base = (normalized || "worker").slice(0, 55).replace(/_+$/g, "") || "worker";
+  return `${base}_${digest}`;
+}
+
+function resolveRouteRunId(value) {
+  if (value != null) {
+    const normalized = String(value).trim();
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(normalized) ||
+      normalized === "." ||
+      normalized === ".."
+    ) {
+      throw new Error("Invalid --run-id: expected a safe 1-128 character run identifier.");
+    }
+    return normalized;
+  }
+  return `route-${Date.now().toString(36)}-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+
+function codexProviderId(provider, ownerId) {
+  const scope = provider?.source === "local_global_agent_inventory"
+    ? "global"
+    : provider?.source === "project_runtime_agent_inventory"
+      ? "project"
+      : provider?.source ?? "runtime";
+  return `${scope}:${ownerId}`;
+}
+
+function codexOwnerSource(provider) {
+  if (!provider) return null;
+  if (provider.source !== "local_global_agent_inventory") return provider.sourceRef ?? null;
+  const sourceRef = String(provider.sourceRef ?? "").replace(/\\/g, "/");
+  if (sourceRef.startsWith("~/")) return sourceRef;
+  const platform = String(provider.platformId ?? "").toLowerCase();
+  if (platform === "codex" || platform === "codexapp") return `~/.codex/agents/${sourceRef}`;
+  if (platform === "claudecode" || platform === "claude_code") return `~/.claude/agents/${sourceRef}`;
+  if (platform === "cursor") return `~/.cursor/agents/${sourceRef}`;
+  return `global-agent:${sourceRef}`;
+}
+
+function codexOwnerDefinition(provider) {
+  const sourceRef = String(provider?.sourceRef ?? "").replace(/\\/g, "/");
+  const isCodexRuntimeProvider =
+    provider?.runtime === "codex" ||
+    ["codex", "codexapp"].includes(String(provider?.platformId ?? "").toLowerCase());
+  const isToml = /(?:^|\/)agents\/[^/]+\.toml$/iu.test(sourceRef) || /\.toml$/iu.test(sourceRef);
+  const metadata = provider?.metadata ?? {};
+  const requiredMetadataPresent = ["name", "description", "developer_instructions"].every(
+    (field) => typeof metadata?.[field] === "string" && metadata[field].trim().length > 0,
+  );
+  const nativeNameMatchesInventory = metadata?.name === provider?.id;
+  const sourceRouteEligible =
+    provider?.routeEligible !== false || provider?.sourceSelectedExplicitly === true;
+  const sourceCanBeBoundByNativeHost = !(
+    provider?.collision?.ambiguous === true ||
+    provider?.collision?.kind === "conflicting_definitions"
+  );
+  const definitionValidated = provider?.validCustomAgentDefinition === true ||
+    (requiredMetadataPresent && nativeNameMatchesInventory);
+  const nativeCustomAgentEligible = Boolean(
+    isCodexRuntimeProvider &&
+      isToml &&
+      definitionValidated &&
+      nativeNameMatchesInventory &&
+      sourceRouteEligible &&
+      sourceCanBeBoundByNativeHost,
+  );
+  return {
+    format: nativeCustomAgentEligible ? "codex_custom_agent_toml" : "non_native_owner_definition",
+    sourceRef: codexOwnerSource(provider),
+    nativeAgentName: requiredMetadataPresent ? metadata.name : null,
+    nativeCustomAgentEligible,
+    sourceSelectedExplicitly: provider?.sourceSelectedExplicitly === true,
+    sourceKey: provider?.sourceKey ?? null,
+    contentDigest: provider?.contentDigest ?? null,
+    provenance: provider?.provenance ?? [],
+    collision: provider?.collision ?? null,
+    cacheEvidence: provider?.cacheEvidence ?? null,
+    routeEligible: sourceRouteEligible,
+    sourceCanBeBoundByNativeHost,
+    validationErrors: [
+      ...(provider?.customAgentDefinitionErrors ?? []),
+      ...(!isToml ? ["owner_source_is_not_toml"] : []),
+      ...(!requiredMetadataPresent ? ["required_codex_agent_fields_missing"] : []),
+      ...(metadata?.name && !nativeNameMatchesInventory ? ["native_name_does_not_match_selected_owner"] : []),
+      ...(!sourceRouteEligible ? ["ambiguous_native_owner_source"] : []),
+      ...(!sourceCanBeBoundByNativeHost ? ["native_host_cannot_bind_conflicting_source_definition"] : []),
+    ],
+    reason: nativeCustomAgentEligible
+      ? "Owner was discovered from a Codex TOML custom-agent definition; native binding still requires an active host owner selector and a successful invocation."
+      : "Owner is not backed by a validated Codex TOML custom-agent definition whose declared name matches the selected owner identity, so it can only bind through the run-scoped owner contract.",
+  };
+}
+
+function roleDisplayNameForOwner(ownerId) {
+  const owner = String(ownerId ?? "").toLowerCase();
+  if (/test|qa|verify/.test(owner)) return "test";
+  if (/backend|security|api|server/.test(owner)) return "backend";
+  if (/frontend|react|ui|accessibility/.test(owner)) return "frontend";
+  if (/review|architect/.test(owner)) return "review";
+  if (/search|analysis|explor/.test(owner)) return "analysis";
+  if (/docs?|content/.test(owner)) return "docs";
+  return "worker";
+}
+
+function buildCodexWorkerMessage(ownerId, ownerKind, roleInstanceId, taskPacket = null, provider = null) {
+  const taskPacketId = taskPacket?.taskPacketId ?? `worker-task:${roleInstanceId ?? ownerId}`;
+  const resolvedRoleInstanceId = taskPacket?.roleInstanceId ?? roleInstanceId ?? ownerId;
+  const roleDisplayName = taskPacket?.roleDisplayName ?? ownerId;
+  const ownerSource = taskPacket?.ownerSource ?? codexOwnerSource(provider);
+  const capabilityLoadout = taskPacket?.capabilityLoadout ?? {
+    weapon: taskPacket?.weapon ?? null,
+    dependency: taskPacket?.dependency ?? null,
+  };
+  const ownerDefinition = codexOwnerDefinition(provider);
+  const ownerBindingMode = taskPacket?.ownerBindingMode ?? "run_scoped_owner_contract";
+  const nativeAgentType = ownerBindingMode === "native_custom_agent"
+    ? taskPacket?.nativeAgentType ?? ownerId
+    : null;
+  const metaKimBinding = {
+    runId: routeRunId,
+    family: "agent_subagent",
+    providerId: codexProviderId(provider, ownerId),
+    bindingRef: `${routeRunId}:agent_subagent:${codexProviderId(provider, ownerId)}:${taskPacketId}`,
+    taskPacketId,
+    roleInstanceId: resolvedRoleInstanceId,
+    occurredAt: routeOccurredAt,
+    evidenceKind: "spawn_agent_result",
+  };
+  return JSON.stringify({
+    schemaVersion: "codex-native-worker-invocation-v0.2",
+    taskPacketId,
+    roleDisplayName,
+    roleInstanceId: resolvedRoleInstanceId,
+    ownerAgent: ownerId,
+    ownerKind,
+    ownerSource,
+    ownerBindingMode,
+    nativeAgentType,
+    ownerDefinition,
+    ownerContract: provider?.ownerContract ?? null,
+    capabilityLoadout,
+    agentCapabilityProfile: taskPacket?.agentCapabilityProfile ?? null,
+    referenceDirection: taskPacket?.agentCapabilityProfile?.referenceDirection ?? taskPacket?.referenceDirection ?? taskPacket?.decisionImpact ?? null,
+    requiredMaterials: taskPacket?.agentCapabilityProfile?.materials ?? [],
+    scope: {
+      purpose: taskPacket?.purpose ?? `Execute the bounded worker task owned by ${ownerId}.`,
+      decisionImpact: taskPacket?.decisionImpact ?? null,
+      scopeFiles: taskPacket?.scopeFiles ?? [],
+      nonGoals: [...taskPacket?.nonGoals ?? [], "Do not absorb sibling lanes", "Do not mutate outside the declared scope"],
+    },
+    coordination: {
+      dependsOn: taskPacket?.dependsOn ?? [],
+      parallelGroup: taskPacket?.parallelGroup ?? null,
+      mergeOwner: taskPacket?.mergeOwner ?? "meta-conductor",
+      shardScope: taskPacket?.shardScope ?? [],
+      workspaceIsolation: taskPacket?.workspaceIsolation ?? null,
+      externalWritePolicy: taskPacket?.externalWritePolicy ?? "unproven",
+      collisionPolicy: taskPacket?.collisionPolicy ?? "unproven",
+    },
+    outputContract: {
+      deliverable: taskPacket?.output ?? "Return the scoped result, changed files or evidence, and unresolved blockers.",
+      acceptanceCriterionIds: taskPacket?.acceptanceCriterionIds ?? [],
+      verifySteps: taskPacket?.verifySteps ?? [],
+      verificationOwner: taskPacket?.verificationOwner ?? "meta-prism",
+      verification: taskPacket?.verification ?? "Run the lane-specific checks named by the work order.",
+    },
+    metaKimBinding,
+  });
+}
+
+function codexSpawnBindingForOwner(ownerId, ownerKind = "agent", roleInstanceId = null, taskPacket = null) {
+  if (runtime !== "codex" || ownerKind !== "agent" || !ownerId) return null;
+  const provider = candidateExecutionAgents.find((agent) => agent.id === ownerId);
+  if (!provider) return null;
+  const ownerSource = codexOwnerSource(provider);
+  const ownerDefinition = codexOwnerDefinition(provider);
+  const ownerSelectorField = codexHostToolSchema.ownerSelectorField;
+  const ownerBindingMode =
+    ownerDefinition.nativeCustomAgentEligible && ownerSelectorField
+      ? "native_custom_agent"
+      : "run_scoped_owner_contract";
+  const nativeAgentType = ownerBindingMode === "native_custom_agent" ? ownerId : null;
+  const message = buildCodexWorkerMessage(ownerId, ownerKind, roleInstanceId, {
+    ...taskPacket,
+    ownerSource,
+    ownerBindingMode,
+    nativeAgentType,
+  }, provider);
+  const followupMessage = buildCodexWorkerMessage(ownerId, ownerKind, roleInstanceId, {
+    ...taskPacket,
+    ownerSource,
+    ownerBindingMode: "run_scoped_owner_contract",
+    nativeAgentType: null,
+  }, provider);
+  const binding = {
+    hostSurface: "spawn_agent",
+    supportedHostSurfaces: ["spawn_agent", "followup_task"],
+    task_name: normalizeCodexTaskName(taskPacket?.taskPacketId ?? roleInstanceId ?? ownerId),
+    fork_turns: "none",
+    message,
+    followupTaskTemplate: {
+      hostSurface: "followup_task",
+      target: null,
+      targetPolicy: "existing_runtime_instance_id_only_not_owner_identity",
+      message: followupMessage,
+      ownerBindingMode: "run_scoped_owner_contract",
+      nativeAgentType: null,
+    },
+    ownerAgent: ownerId,
+    ownerKind,
+    ownerSource,
+    ownerBindingMode,
+    nativeAgentType,
+    ownerSelectorField,
+    ownerDefinition,
+    nativeCustomAgentCandidate: {
+      eligibleOwnerDefinition: ownerDefinition.nativeCustomAgentEligible,
+      requiredHostSelector: "agent_type_or_equivalent",
+      requiredInvocationResult: "successful_before_invoked_or_completed_presentation",
+      promotionRule:
+        "Schema-confirmed agent_type plus a Codex TOML owner may select the native request mode; only a successful host result may mark that request invoked or completed.",
+    },
+    sourceRef: provider.sourceRef,
+    runtimeInstanceAlias: null,
+    visibleBindingRequired: true,
+    hostSurfaceProbeRequired: true,
+    hostToolSchemaEvidence: codexHostToolSchema,
+    invocationReadiness: ownerBindingMode === "native_custom_agent"
+      ? "native_custom_agent_request_ready_success_still_requires_host_result"
+      : ownerDefinition.nativeCustomAgentEligible
+        ? "run_scoped_ready_native_custom_agent_requires_host_schema"
+      : "run_scoped_ready_owner_is_not_codex_toml",
+    unavailablePolicy: "block_or_declare_degraded_without_legacy_fallback",
+  };
+  if (ownerBindingMode === "native_custom_agent") {
+    binding[ownerSelectorField] = ownerId;
+  }
+  return binding;
+}
+
+// Remove complete prohibition clauses without erasing a later requested action.
+function taskEffectText(text) {
+  return String(text ?? "").replace(/\b(?:do not|don't|don’t|never)\s+(?:modify|edit|write|delete|remove|create|change|patch)\s+(?:any\s+)?(?:files|source files|code)[.!]?(?=$|[\n;])/giu, "")
+    .split(/[，,;；。.!?\n]/u)
+    .filter((clause) => {
+      const statement = clause.trim();
+      // A direct prohibition governs its whole object, including coordinated
+      // prohibited operations. A condition, contrast or later imperative does
+      // not: keep that clause for the existing ambiguity/effect checks.
+      const directProhibition = /^(?:不|不要|不得|禁止)(?:改(?:代码|源码|文件)|(?:修改|改动|编辑|写入|写|删除|移除|创建|更新|实现|开发|构建|安装|打开|连接|访问|发起|发送|发|进行|运行|执行|生成|制作|部署|发布|上传|代投|投递).+)$/u.test(statement);
+      const falseClaimProhibition = /^不以.+冒充.+$/u.test(statement);
+      const mixedOrConditional = /(?:但|而|却|不过|然而|然后|随后|接着|接下来|先|再|就|才|直接|仍|还|同时|并|以便|为了|从而|如果|除非|只要|否则|—|--|[:：])|\b(?:but|then|instead|also|if|unless|until|without)\b/iu.test(statement);
+      return !((directProhibition || falseClaimProhibition) && !mixedOrConditional);
+    })
+    .join("; ");
+}
+
+// The method ID is a capability demand, never an owner or authorization. Check
+// action heads so a reviewed build/deployment plan does not become a build job.
+function inspectCurrentMethodOperation(text) {
+  const inspection = "(?:check|review|inspect|audit|assess|evaluate|analy[sz]e|verify|investigate|compare|read)\\b|(?:只读)?(?:审阅|评审|检查|审查|审核|评估|分析|验证|排查|读取|阅读|对照)";
+  const mutation = "\\b(?:fix|implement|build|create|refactor|rebuild|migrate|write|edit|update|repair|modify|change|patch|delete|remove|deploy|publish|release|upload|send|execute|run|generate|render)\\b|修复|修改|改(?:代码|源码|文件)|实现|构建|创建|重构|迁移|写入|编辑|更新|删除|移除|部署|发布|上传|发送|运行|执行|生成|制作";
+  const actionHead = new RegExp(`^(?:${inspection}|${mutation})`, "iu");
+  const reviewHead = new RegExp(`^(?:(?:read[- ]only)\\s+)?(?:${inspection})`, "iu");
+  const mutationHead = new RegExp(`^(?:${mutation})`, "iu");
+  const retainedEffect = new RegExp(`(?:${mutation})`, "iu");
+  const useMethod = new RegExp(`^use\\b.*?\\bto\\s+(?=${inspection}|${mutation})`, "iu");
+  const nextAction = new RegExp(`\\s+(?:and|then|but|also)\\s+(?=${inspection}|${mutation}|do not\\b)|(?:并且|然后|随后|接着|并|、)(?=${inspection}|${mutation})`, "iu");
+  let review = false;
+  let sideEffect = false;
+  let unclearProhibition = false;
+  const actions = decomposeTaskActions(taskEffectText(String(text ?? "").replace(GOVERNANCE_CHAIN_PREFIX_RE, "").trim()));
+  for (const action of actions) {
+    for (const clause of action.terms.split(/(?<=[.!?])\s+|[\n;；。]/u).flatMap((part) => part.split(nextAction))) {
+      let head = clause.trim().replace(/^(?:(?:please|first|then|next|finally)\s+|(?:首先|然后|随后|最后|先|再)[，,:：]?\s*)/iu, "");
+      // Only taskEffectText removes a complete narrow prohibition. A retained
+      // mixed/unclear clause cannot hide a later effect behind its first word.
+      if (/^(?:do not|don't|don’t|never|without)\b|^(?:不要|不得|禁止|不)/iu.test(head) && retainedEffect.test(head)) {
+        unclearProhibition = true;
+      }
+      head = head.replace(useMethod, "");
+      if (!actionHead.test(head) && !reviewHead.test(head)) continue;
+      review ||= reviewHead.test(head);
+      sideEffect ||= mutationHead.test(head);
+    }
+  }
+  return { readOnlyReview: review && !sideEffect && !unclearProhibition, sideEffectRequested: sideEffect, unclearProhibition };
+}
+
 function selectExecutionOwner() {
-  const available = new Set(ownerDiscoveryPacket.candidateExistingExecutionOwners);
-  const preferenceGroups = [
-    { terms: ["agent", "subagent", "owner", "search", "discover", "find", "智能体", "代理", "搜索", "寻找", "发现"], owners: ["codebase-search", "search-specialist", "analysis", "worker"] },
-    { terms: ["test", "smoke", "verify", "validation", "测试", "验证"], owners: ["test", "verify", "e2e-runner", "pr-test-analyzer", "worker"] },
-    { terms: ["doc", "docs", "readme", "文档"], owners: ["docs", "api-documenter", "worker"] },
-    { terms: ["frontend", "ui", "react", "前端"], owners: ["frontend", "worker"] },
-    { terms: ["backend", "api", "server", "后端"], owners: ["backend", "worker"] },
-    { terms: ["review", "审查"], owners: ["review", "code-reviewer", "worker"] },
+  const effectText = taskEffectText(currentReadOnlyOperation ? actionTask : taskText);
+  const inspectionRequested = /\b(?:check|review|inspect|audit|analy[sz]e|verify|investigate|read)\b|只读|审阅|检查|审查|审核|分析|验证|排查|读取|阅读/iu.test(effectText);
+  const mutationRequested = implementationActionPattern.test(effectText);
+  const testExecutionRequested = /\b(?:run|execute)\b.{0,50}\b(?:tests?|regressions?|smoke|validation|qa)\b|(?:运行|执行|跑|进行).{0,30}(?:测试|回归|验证)/iu.test(effectText);
+  const buildFailureRequested = /\b(?:build|compile|typecheck|type-check|tsc)\b.{0,50}\b(?:fail(?:ure|ed)?|error|broken|cannot|unable)\b|\b(?:fail(?:ed|ure)?|error)\b.{0,50}\b(?:build|compile|typecheck|type-check|tsc)\b|构建失败|编译失败|类型错误|类型检查失败/iu.test(effectText);
+  const documentationRequested = /\b(?:docs?|readme|documentation)\b|文档/iu.test(effectText);
+  const workKind = currentReadOnlyOperation ? "inspection" : mutationRequested
+    ? buildFailureRequested ? "build_repair" : "implementation"
+    : testExecutionRequested ? "test_execution"
+      : inspectionRequested ? "inspection"
+        : productBuildExecutionRequested() ? "implementation" : "other";
+  const implementationMutationRequested = ["implementation", "build_repair"].includes(workKind);
+  const matchesTerm = (text, term) => /^[\x00-\x7f]+$/u.test(term)
+    ? termMatchesProviderText(text, term)
+    : text.includes(term);
+  const taskMatches = (terms) => terms.some((term) => matchesTerm(taskText, term));
+  const frontendTerms = ["frontend", "ui", "react", "user interface", "前端", "页面", "界面"];
+  const frontendRequested = implementationMutationRequested && !documentationRequested && taskMatches(frontendTerms);
+  // Qualify once before every preference and fallback. An overlapping language
+  // or domain name never upgrades a read-only/review contract into an executor.
+  const ownerPermitsWork = (id) => {
+    const agent = candidateExecutionAgents.find((candidate) => candidate.id === id);
+    if (explicitOwnerRefusalConflict(agent, currentReadOnlyOperation ? actionTask : taskText)) return false;
+    const declaredCapabilities = [agent?.description, agent?.own,
+      agent?.metadata?.description, agent?.metadata?.developer_instructions].filter(Boolean).join("\n");
+    const contract = [declaredCapabilities, agent?.boundary].filter(Boolean).join("\n");
+    // Explicit exclusions are constraints, never positive capability evidence.
+    // Keep later refusals even when another sentence declares the same domain.
+    const refusalClausePattern = /(?:\b(?:do\s+not|does\s+not|don't|don’t|never|cannot|can't|can’t|must\s+not|not\s+(?:for|responsible\s+for)|refuse(?:s)?\s+to|exclude(?:s|d)?|no)\b|(?:不得|不要|不能|禁止|拒绝|不负责|不支持|排除))[^.!?;。；\n]*/giu;
+    const refusals = (contract.match(refusalClausePattern) ?? []).join("\n");
+    const affirmativeCapabilities = declaredCapabilities.replace(refusalClausePattern, " ");
+    const reviewRole = /(?:^|[-_])review(?:er)?(?:$|[-_])/iu.test(id);
+    const readOnly = reviewRole || /\bread[-_ ]only\b|\bno implementation\b|只读|禁止(?:修改|写入)(?:文件|代码)/iu.test(contract) ||
+      /\b(?:do not|don't|never)\s+(?:edit|modify|write|change)\s+(?:any\s+)?(?:files|code|source files)\s*(?:[.!;\n]|$)/iu.test(contract);
+    const buildOnly = matchesTerm(id, "build-error-resolver");
+    if (!implementationMutationRequested && workKind !== "test_execution") return true;
+    if (readOnly || (buildOnly && workKind !== "build_repair")) return false;
+    if (frontendRequested && frontendTerms.some((term) => matchesTerm(refusals, term))) return false;
+    if (!frontendRequested || buildOnly) return true;
+    return ["worker", "javascript", "typescript"].some((term) => matchesTerm(id, term)) ||
+      frontendTerms.some((term) => matchesTerm(`${id}\n${affirmativeCapabilities}`, term));
+  };
+  const candidates = [...new Set(candidateExistingExecutionOwners)].filter(
+    (id) =>
+      typeof id === "string" &&
+      !id.includes("general-purpose") &&
+      !/runtimeInstanceAlias|nickname/i.test(id) &&
+      ownerPermitsWork(id),
+  );
+  if (candidates.length === 0) return null;
+  if (dependencyAgentMatch.selected && !requestedOwnerSourceKey && !requestedOwnerSourceRef && !requestedOwnerContentDigest && candidates.includes(dependencyAgentMatch.selected.id)) {
+    return dependencyAgentMatch.selected.id;
+  }
+  const taskLower = String(taskText || "").toLowerCase();
+  const findInAvailable = (prefs) => {
+    for (const pref of prefs) {
+      const exact = candidates.find((id) => id === pref);
+      if (exact) return exact;
+      const partial = candidates.find((id) => matchesTerm(id, pref));
+      if (partial) return partial;
+    }
+    return null;
+  };
+  if (workKind === "inspection") {
+    const reviewer = findInAvailable(["code-reviewer", "architect-review", "review", "reviewer"]);
+    if (reviewer) return reviewer;
+    return findInAvailable(["analysis", "worker"]);
+
+  }
+  if (workKind === "test_execution") return findInAvailable(["test", "verify", "qa", "e2e-runner", "worker"]);
+  if (workKind === "build_repair") {
+    const buildOwner = findInAvailable(["build-error-resolver"]);
+    if (buildOwner) return buildOwner;
+  }
+  if (implementationMutationRequested) {
+    if (documentationRequested) return findInAvailable(["doc-updater", "docs", "api-documenter", "content-specialist", "worker"]);
+    // Domain eligibility was applied to every candidate above. Preferences
+    // cannot suppress a related specialist discovered outside this short list.
+    if (frontendRequested) {
+      const frontendOwner = findInAvailable(["frontend-engineer", "frontend-developer", "frontend", "react-specialist", "nextjs-developer", "javascript-pro", "typescript-pro", "worker"]);
+      if (frontendOwner) return frontendOwner;
+    }
+  }
+  const preferenceGroups = implementationMutationRequested ? [
+    { terms: ["python"], owners: ["python-pro", "fastapi-pro", "django-pro", "backend", "worker"] },
+    { terms: ["typescript", "tsc"], owners: ["typescript-pro", "javascript-pro", "backend", "worker"] },
+    { terms: ["javascript", "node.js", "nodejs"], owners: ["javascript-pro", "typescript-pro", "backend", "worker"] },
+    { terms: ["security", "backend", "hook", "routing", "runtime", "code", "安全", "后端", "钩子", "路由", "运行时"], owners: ["backend-security-coder", "backend-data-engineer", "backend-developer", "backend", "worker"] },
+    { terms: ["doc", "docs", "readme", "文档"], owners: ["doc-updater", "docs", "api-documenter", "content-specialist", "worker"] },
+    { terms: ["api", "server"], owners: ["backend-security-coder", "backend-data-engineer", "backend-developer", "backend", "worker"] },
+  ] : [
+    {
+      terms: ["agent", "subagent", "owner", "search", "discover", "find", "智能体", "代理", "搜索", "寻找", "发现"],
+      owners: ["codebase-search", "search-specialist", "analysis", "worker", "backend"],
+    },
+    {
+      terms: ["test", "smoke", "verify", "validation", "qa", "测试", "验证"],
+      owners: ["test", "verify", "qa", "e2e-runner", "pr-test-analyzer", "build-error-resolver", "worker"],
+    },
+    {
+      terms: ["doc", "docs", "readme", "文档"],
+      owners: ["docs", "api-documenter", "content-specialist", "worker"],
+    },
+    {
+      terms: ["frontend", "ui", "react", "前端", "页面"],
+      owners: ["frontend", "ui", "react", "accessibility-specialist", "worker"],
+    },
+    {
+      terms: ["backend", "api", "server", "后端"],
+      owners: ["backend", "api", "server", "worker"],
+    },
+    {
+      terms: ["review", "审查", "reviewer"],
+      owners: ["code-reviewer", "architect-review", "review", "worker"],
+    },
   ];
   for (const group of preferenceGroups) {
-    if (!group.terms.some((term) => taskText.includes(term))) continue;
-    const owner = group.owners.find((candidate) => available.has(candidate));
+    if (!taskMatches(group.terms)) continue;
+    const owner = findInAvailable(group.owners);
     if (owner) return owner;
   }
-  return [
+  const genericOwner = findInAvailable(implementationMutationRequested ? ["worker", "backend"] : [
     "worker",
-    "analysis",
     "backend",
-    "test",
-    "verify",
-    "codebase-search",
-    "search-specialist",
-    "docs-researcher",
-    "reviewer",
-  ].find((candidate) => available.has(candidate)) ?? null;
+    "code-reviewer",
+    "build-error-resolver",
+    "api-documenter",
+    "architect-review",
+  ]);
+  if (genericOwner) return genericOwner;
+  const scored = candidates.map((id) => {
+    const idLower = id.toLowerCase();
+    let score = 0;
+    for (const part of idLower.split(/[-_./]/)) {
+      if (part && part.length >= 3 && matchesTerm(taskLower, part)) score += 1;
+    }
+    return { id, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.score > 0 ? scored[0].id : null;
 }
 
 function capabilityDiscoveryTaskRequested() {
-  const discoveryVerb = /find|discover|search|match|route|寻找|发现|搜索|检索|匹配|路由/.test(taskText);
+  const discoveryVerb = /find|discover|search|match|route|寻找|找|发现|搜索|检索|匹配|路由/.test(taskText);
   const discoveryTarget = /agent|subagent|owner|skill|provider|capability|mcp|tool|智能体|代理|技能|能力|工具/.test(taskText);
-  return discoveryVerb && discoveryTarget;
+  const executionFanoutDiscovery =
+    concurrentDispatchIntentPresent && (
+      taskShape === "engineering_execution" ||
+      entrySignals.directParallelRequest === true ||
+      entrySignals.explicitMetaTheory === true ||
+      entrySignals.structuredGovernanceChainRequest === true
+    );
+  return (discoveryVerb && discoveryTarget) || agentProviderReuseConcernRequested() || executionFanoutDiscovery;
 }
 
 // 9 类 owner 池（agent / skill / mcp / command / runtimeTool / hook / plugin / memory / dependency）。
@@ -1461,6 +2939,7 @@ function resolveProvider({ kind, terms, runtime: runtimeName = runtime }) {
   const poolFn = PROVIDER_POOL_SOURCES[kind];
   if (!poolFn) return null;
   const pool = poolFn().filter((p) => {
+    if (!providerEligibleForRoute(p)) return false;
     if (kind === "agent") return declared.has(p.id);
     return true;
   });
@@ -1481,40 +2960,132 @@ function resolveProvider({ kind, terms, runtime: runtimeName = runtime }) {
 }
 
 function buildParallelExecutionLanes() {
-  // 最大限度放开：>=2 个独立工作单元就拆 lane。
-  // lane terms 来自 taskText 临时提取（路径 + 显式 lane 标记 + 句子分段），
-  // 不预设 DOMAIN_KEYWORDS。owner 通过 resolveProvider 按 9 类池（agent → skill → mcp
-  // → command → runtimeTool → hook → plugin → memory → dependency）优先级链探测，
-  // 第一个命中的 kind 就用；都找不到就别硬塞。
+  // Requirements findings are material for one current professional operation,
+  // not a design DAG or authorization to execute the described future product.
+  if (requirementsContext) return null;
+  // Draft whole actions from the original text; normalized matching text must
+  // never become the authority for file paths, task content or dependencies.
+  const actions = decomposeTaskActions(String(actionTask ?? "").replace(GOVERNANCE_CHAIN_PREFIX_RE, "").trim());
   const laneSegments = new Map();
-
-  // 1. 路径型 segment：src/ui、src/api、database/migrations —— 每个顶层目录一个 lane
-  for (const match of taskText.matchAll(/(?:^|[\s,;:(])([a-z][\w-]*\/[\w.-]+)/g)) {
-    const path = match[1];
-    const top = path.split("/")[0];
-    if (["the", "and", "for", "with", "under", "into", "from", "in", "on", "to"].includes(top)) continue;
-    const key = `path:${top}`;
+  function addLaneSegment(key, laneHint, terms, metadata = {}) {
+    const normalizedTerms = String(terms ?? "").trim();
+    if (!normalizedTerms) return;
     if (!laneSegments.has(key)) {
-      laneSegments.set(key, { laneHint: top, terms: path.replace(/[\/_.]/g, " ") });
+      laneSegments.set(key, { laneHint, terms: normalizedTerms, ...metadata });
     }
   }
 
-  // 2. 显式 lane 标记：lane A / lane B —— laneHint 当 key
-  for (const match of taskText.matchAll(/lane\s+([a-z0-9]+)/gi)) {
-    const label = match[1].toLowerCase();
-    const key = `lane:${label}`;
-    if (!laneSegments.has(key)) {
-      laneSegments.set(key, { laneHint: label, terms: `lane ${label}` });
-    }
+  function deriveLaneSafetyEvidence(segment, laneId) {
+    const segmentText = String(segment?.terms ?? "");
+    const mutationRequested = !readOnlyProfessionalReview && /\b(?:fix|implement|build|create|refactor|rebuild|migrate|write|edit|update|delete|remove|deploy|publish|release|upload|send)\b|修复|修改|实现|构建|创建|重构|迁移|写入|编辑|更新|删除|移除|部署|发布|上传|发送/iu.test(taskText);
+    const inspectionRequested = readOnlyProfessionalReview || /\b(?:check|review|inspect|audit|analy[sz]e|verify|investigate|read)\b|检查|审查|审核|分析|验证|排查|读取|阅读/iu.test(taskText);
+    const externalWriteRequested = !readOnlyProfessionalReview && /\b(?:deploy|publish|release|upload|send|email)\b|部署|发布|上传|发送|邮件/iu.test(taskText);
+    const explicitPaths = extractActionPaths(segmentText);
+    const readOnly = inspectionRequested && !mutationRequested && !externalWriteRequested;
+    const dependencyKnown = segment.dependencyEvidence !== "unproven";
+    const shardScope = explicitPaths.length > 0
+      ? [...new Set(explicitPaths)]
+      : readOnly && segment.source === "capability_anchor" && dependencyKnown
+        ? [`read-only-capability:${laneId}`]
+        : [];
+    const proven =
+      dependencyKnown && !externalWriteRequested && shardScope.length > 0;
+    return {
+      status: proven ? "proven" : "unproven",
+      evidenceBasis: !dependencyKnown
+        ? "dependency_relationship_unproven"
+        : readOnly && shardScope.length > 0
+        ? "read_only_lane_with_explicit_scope_and_dependency_evidence"
+        : explicitPaths.length > 0
+          ? "explicit_local_path_scope"
+          : "missing_non_overlapping_shard_scope",
+      shardScope,
+      dependencyEvidence: segment.dependencyEvidence,
+      mutationPolicy: readOnly ? "read_only" : explicitPaths.length > 0 ? "scoped_local_writes_only" : "unproven",
+      workspaceIsolation: readOnly ? "shared_workspace_read_only" : explicitPaths.length > 0 ? "shared_workspace_disjoint_paths" : "unproven",
+      externalWritePolicy: externalWriteRequested ? "requested_not_parallel_safe" : "forbidden",
+      collisionPolicy: proven
+        ? "deny_writes_outside_shard_scope_and_merge_through_meta_conductor"
+        : "unproven",
+    };
   }
 
-  // 3. 句子分段：逗号/分号/「and」/「与」断句
-  for (const segment of taskText.split(/[,;]|\band\b|与|和|以及/)) {
-    const trimmed = segment.trim();
-    if (trimmed.length < 4) continue;
-    const key = `seg:${trimmed}`;
-    if (!laneSegments.has(key)) {
-      laneSegments.set(key, { laneHint: trimmed.slice(0, 24), terms: trimmed });
+  for (const [index, action] of actions.entries()) {
+    addLaneSegment(`action:${index}`, action.laneHint, action.terms, action);
+  }
+
+  // 4. 无显式标点时，用能力锚点拆 lane。很多真实任务会写成
+  // “平台 key adapter 注册 能力账本 路由 上传证据”，入口分类已能识别
+  // 多 lane，但句子分段会只得到一整句。这里只在文本已表达并行/治理/
+  // 产品多线意图时构造候选 lane；真正的 fan-out 仍由后面的 Thinking
+  // worker packets、DAG 与碰撞边界裁决。
+  if (concurrentDispatchIntentPresent && actions.length < 2 && !actions.some((action) => action.dependencyEvidence.startsWith("explicit_sequence")) && !actions.some((action) => extractActionPaths(action.terms).length > 0)) {
+    const anchorPatterns = [
+      {
+        key: "meta-theory-rules",
+        hint: "meta-theory",
+        re: /(?:meta-theory|元理论|治理规则|规则)/iu,
+        terms: "meta-theory rules governance",
+      },
+      {
+        key: "codex-runtime",
+        hint: "codex-runtime",
+        re: /(?:codex\s+runtime|runtime|运行时)/iu,
+        terms: "codex runtime adapter",
+      },
+      {
+        key: "test-gap",
+        hint: "test",
+        re: /(?:测试缺口|测试|test\s+gap|tests?)/iu,
+        terms: "test verification gap",
+      },
+      {
+        key: "platform-key-adapter",
+        hint: "platform-adapter",
+        re: /(?:平台.*(?:key|adapter|适配|注册)|(?:key|adapter).*(?:注册|能力账本))/iu,
+        terms: "platform key adapter registry",
+      },
+      {
+        key: "capability-ledger",
+        hint: "capability-ledger",
+        re: /(?:能力账本|能力矩阵|capability\s+(?:ledger|matrix))/iu,
+        terms: "capability ledger matrix",
+      },
+      {
+        key: "platform-route",
+        hint: "route",
+        re: /(?:平台.*路由|路由|route)/iu,
+        terms: "platform route routing",
+      },
+      {
+        key: "upload-evidence",
+        hint: "upload-evidence",
+        re: /(?:上传证据|上传|upload\s+evidence|upload)/iu,
+        terms: "upload evidence proof",
+      },
+    ];
+    const matchingAnchors = anchorPatterns.filter((pattern) => pattern.re.test(taskText));
+    // These are candidate capability partitions only. Do not keep the original
+    // umbrella task as a sibling, or describe inferred partitions as independent.
+    if (matchingAnchors.length >= 2) laneSegments.clear();
+    for (const pattern of matchingAnchors.length >= 2 ? matchingAnchors : []) {
+      if (pattern.re.test(taskText)) {
+        if (
+          laneSegments.size >= 2 &&
+          [...laneSegments.values()].some((segment) =>
+            pattern.re.test(`${segment.laneHint ?? ""} ${segment.terms ?? ""}`),
+          )
+        ) {
+          continue;
+        }
+        addLaneSegment(`anchor:${pattern.key}`, pattern.hint, pattern.terms, {
+          source: "capability_anchor",
+          dependsOnIndexes: [],
+          dependencyEvidence: actions[0]?.dependencyEvidence === "explicit_parallel_request"
+            ? "explicit_parallel_request"
+            : "unproven",
+        });
+      }
     }
   }
 
@@ -1524,21 +3095,42 @@ function buildParallelExecutionLanes() {
   const lanes = [];
   for (const [, segment] of laneSegments) {
     let provider = null;
-    for (const kind of KIND_PRIORITY) {
-      provider = resolveProvider({ kind, terms: segment.terms });
-      if (provider) break;
+    let capabilityProvider = null;
+    if (concurrentDispatchIntentPresent) {
+      provider = resolveProvider({ kind: "agent", terms: segment.terms });
+      if (!provider) {
+        const fallbackOwner = selectExecutionOwner();
+        provider = fallbackOwner ? { id: fallbackOwner, kind: "agent", metadata: null } : null;
+      }
+      for (const kind of KIND_PRIORITY.filter((item) => item !== "agent")) {
+        capabilityProvider = resolveProvider({ kind, terms: segment.terms });
+        if (capabilityProvider) break;
+      }
+    } else {
+      for (const kind of KIND_PRIORITY) {
+        provider = resolveProvider({ kind, terms: segment.terms });
+        if (provider) break;
+      }
     }
-    if (!provider) continue;
+    // A missing provider must not silently remove a predecessor and promote a
+    // dependent action. Let the normal capability-gap route handle no binding.
+    if (!provider) return null;
+    const laneId = `exec-${segment.laneHint.replace(/[^a-z0-9一-鿿-]/gi, "-").toLowerCase()}-${lanes.length + 1}`;
+    const safetyEvidence = deriveLaneSafetyEvidence(segment, laneId);
     lanes.push({
-      laneId: `exec-${segment.laneHint.replace(/[^a-z0-9一-鿿-]/gi, "-").toLowerCase()}-${lanes.length + 1}`,
-      roleDisplayName: segment.laneHint,
+      laneId,
+      roleDisplayName: roleDisplayNameForOwner(provider.id),
       ownerKind: provider.kind,
       ownerAgent: provider.id,
-      purpose: `并行执行 "${segment.terms.trim().slice(0, 60)}"；独立交付，由 ${provider.kind}/${provider.id} owner 负责`,
-      capabilityProvider: null,
+      codexSpawnBinding: codexSpawnBindingForOwner(provider.id, provider.kind, laneId),
+      purpose: segment.terms,
+      capabilityProvider,
       decisionImpact: `${provider.kind}/${provider.id} 是 runtime-scoped 真 owner，匹配到 lane terms：${segment.terms.trim().slice(0, 40)}`,
-      dependsOn: [],
+      dependsOn: (segment.dependsOnIndexes ?? []).map((index) => lanes[index].laneId),
+      dependencyEvidence: segment.dependencyEvidence,
+      scopeFiles: safetyEvidence.shardScope,
       parallelGroup: "parallel-execution",
+      safetyEvidence,
     });
   }
 
@@ -1580,37 +3172,55 @@ function classifyOrchestratorKinds(lanes) {
 function executionCapabilityDiscoveryRoute() {
   const parallelExecutionLanes = buildParallelExecutionLanes();
   const explicitDiscoveryRoute = capabilityDiscoveryTaskRequested();
-  if (taskShape !== "engineering_execution" && !explicitDiscoveryRoute) return null;
+  const wantsSkillAuthoring = skillAuthoringRequested();
+  if (subjectiveRouteChoice) return null;
+  if (taskShape !== "engineering_execution" && !explicitDiscoveryRoute && !dependencyAgentMatch.selected && !wantsSkillAuthoring) return null;
   const selectedOwner = selectExecutionOwner();
   const selectedAgentProvider = [
     ...runtimeScopedProjectExecutionAgents,
     ...runtimeScopedLocalGlobalAgents,
+    ...dependencyAgentDiscovery.agents,
   ].find((agent) => agent.id === selectedOwner) ?? null;
+  const usesDependencyContract = selectedAgentProvider?.source === "dependency_agent_contract" && !wantsSkillAuthoring;
   const wantsDiscovery = explicitDiscoveryRoute || /find|discover|search|寻找|发现/.test(taskText);
-  const wantsCreation = /create|scaffold|generate|创建|生成/.test(taskText);
-  const selectedSkillDiscovery = selectProvider("skills", ["findskill", "skill-scout", "skill-stocktake"]);
-  const selectedSkillCreation = selectProvider("skills", ["skill-creator", "create-agent", "agent-teams-playbook"]);
-  const selectedSkill = wantsDiscovery
-    ? selectedSkillDiscovery ?? selectedSkillCreation
-    : wantsCreation
-      ? selectedSkillCreation ?? selectedSkillDiscovery
-      : selectProvider("skills", ["tdd-workflow", "verification-loop", "meta-theory"]);
-  const selectedAgentCreation = selectProvider("skills", ["create-agent", "agent-teams-playbook", "skill-creator"]);
-  const selectedMcpServer = selectProvider("mcpServers", ["meta-kim-runtime", "repo-mcp", "codex-config-mcp"]);
-  const selectedMcpTool = selectProvider("mcpTools", ["get_meta_runtime_capabilities", "list_meta_agents", "get_meta_agent"]);
-  const selectedCommand = selectProvider("commands", ["meta-theory", "save-progress"]);
-  const selectedRuntimeTool = selectProvider("runtimeTools", ["apply_patch", "shell_command", "Bash"]);
+  // findskill is a reference-only discovery capability consumed in model
+  // context. It may be selected for discovery, while execution providers
+  // continue through the strict reference-only filter.
+  const selectedSkillDiscovery = sortProvidersForRuntime(reusableProviders.filter((provider) =>
+    provider.type === "skills" && ["findskill", "skill-scout", "skill-stocktake"].includes(provider.id) &&
+    providerEligibleForRoute(provider, { allowReferenceOnly: true })))[0]
+    ?? reusableProviders.find((provider) => provider.type === "commands" &&
+      provider.id === "package-script:meta:capability:search" && providerEligibleForRoute(provider))
+    ?? null;
+  const selectedSkillCreation = sortProvidersForRuntime(reusableProviders.filter((provider) =>
+    provider.type === "skills" && provider.id === "meta-skill-creator" && providerEligibleForRoute(provider)))[0] ?? null;
+  const selectedSkill = usesDependencyContract ? null : wantsSkillAuthoring
+    ? selectedSkillCreation
+    : wantsDiscovery
+    ? (selectedSkillDiscovery?.type === "skills" ? selectedSkillDiscovery : selectProvider("skills", ["meta-theory"])) ?? selectedSkillCreation
+    : selectProvider("skills", ["tdd-workflow", "verification-loop", "meta-theory"]);
+  const selectedAgentCreation = selectProvider("skills", ["create-agent", "agent-teams-playbook", "meta-skill-creator"]);
+  const discoveredMcpServer = selectProvider("mcpServers", ["meta-kim-runtime", "repo-mcp", "codex-config-mcp"]);
+  const discoveredMcpTool = selectProvider("mcpTools", ["get_meta_runtime_capabilities", "list_meta_agents", "get_meta_agent"]);
+  const discoveredCommand = selectProvider("commands", ["meta-theory", "save-progress"]);
+  const selectedMcpServer = usesDependencyContract ? null : discoveredMcpServer;
+  const selectedMcpTool = usesDependencyContract ? null : discoveredMcpTool;
+  const selectedCommand = usesDependencyContract ? null : discoveredCommand;
+  const selectedRuntimeTool = selectProvider("runtimeTools", usesDependencyContract ? ["filesystem"] : ["apply_patch", "shell_command", "Bash"]);
   const blockedReasons = [];
   if (!selectedOwner) blockedReasons.push("execution owner missing");
-  if (!selectedSkill) blockedReasons.push("skill provider missing");
-  if (!selectedMcpServer && !selectedMcpTool) blockedReasons.push("MCP provider missing");
-  const routeScore = blockedReasons.length ? 49 : explicitDiscoveryRoute ? 92 : 88;
+  if (wantsSkillAuthoring && !selectedSkillCreation) blockedReasons.push("meta-skill-creator provider missing for Skill authoring");
+  if (!usesDependencyContract && !selectedSkill) blockedReasons.push("skill provider missing");
+  if (!usesDependencyContract && !selectedMcpServer && !selectedMcpTool) blockedReasons.push("MCP provider missing");
+  // Missing accepted runtime-tool evidence blocks Execution in the independent
+  // capability gate below; it must not erase the correct design-time route.
+  const routeScore = blockedReasons.length ? 49 : usesDependencyContract ? 96 : explicitDiscoveryRoute || wantsSkillAuthoring ? 92 : 88;
   return {
     id: `execution-capability-discovery:${runtime}:${osTarget}`,
     owner: selectedOwner,
     weapon: "select-execution-route",
     dependency: selectedSkill?.id ?? null,
-    dependencyProject: null,
+    dependencyProject: usesDependencyContract ? selectedAgentProvider.dependencyId : null,
     runtime,
     os: osTarget,
     verificationOwner: "meta-prism",
@@ -1631,7 +3241,7 @@ function executionCapabilityDiscoveryRoute() {
       osSupportWeight: 10,
       verificationStrengthWeight: 10,
       riskRollbackClarityWeight: 5,
-      runtimeSupport: "native",
+      runtimeSupport: activeRuntimeSupport(),
       osSupport: "supported",
       dependencyFit: selectedSkill ? 85 : 0,
     },
@@ -1643,6 +3253,7 @@ function executionCapabilityDiscoveryRoute() {
       providerEvidenceRef: "ownerDiscoveryPacket.candidateReusableCapabilityProviders",
       ownerDiscoveryRef: "ownerDiscoveryPacket",
     },
+    codexSpawnBinding: codexSpawnBindingForOwner(selectedOwner, "agent"),
     selectedCapabilityProviders: {
       agentOwner: selectedOwner,
       agent: selectedAgentProvider,
@@ -1655,7 +3266,169 @@ function executionCapabilityDiscoveryRoute() {
       command: selectedCommand,
       runtimeTool: selectedRuntimeTool,
     },
+    ...(usesDependencyContract ? {
+      providerRequirementDecisions: {
+        agent: "Source-verified external professional contract; semantic review and run-scoped binding remain required.",
+        skill: "Search performed; the role contract supplies the content workflow, so no extra Skill is selected.",
+        agentCreation: "Search performed; reuse the existing role rather than create a new agent.",
+        skillCreation: "Search performed; no missing Skill requires creation for this content task.",
+        mcp: { searched: true, candidates: [discoveredMcpServer?.id, discoveredMcpTool?.id].filter(Boolean), selected: null, reason: "No business-system operation is authorized by the read-only role contract." },
+        command: { searched: true, candidate: discoveredCommand?.id ?? null, selected: null, reason: "Content delivery needs no shell command." },
+      },
+      ownerContract: selectedAgentProvider.ownerContract,
+      invocationStatus: "selected_not_invoked",
+    } : {}),
     parallelExecutionLanes,
+    blockedReasons,
+  };
+}
+
+function goalProContractRoute() {
+  if (taskShape !== "goal_contract") return null;
+  const selectedSkill = selectProvider("skills", ["goalpro"]);
+  const dependency = dependencyRecords.find((dep) => dep.id === "goalpro") ?? null;
+  const blockedReasons = [];
+  if (!selectedSkill) blockedReasons.push("goalpro skill provider missing");
+  if (!dependency) blockedReasons.push("goalpro dependency project missing");
+  if (dependency && !dependencyExecutable(dependency)) blockedReasons.push("goalpro dependency not executable");
+  const score = blockedReasons.length ? 49 : 92;
+  return {
+    id: `goalpro-contract:${runtime}:${osTarget}`,
+    owner: "meta-conductor",
+    weapon: "goalpro",
+    dependency: selectedSkill?.id ?? "goalpro",
+    dependencyProject: "goalpro",
+    runtime,
+    os: osTarget,
+    verificationOwner: "meta-prism",
+    verificationMethod: "npm run meta:deps:compat",
+    verification: {
+      command: "npm run meta:deps:compat",
+      artifact: "config/skills.json; config/capability-index/dependency-project-registry.json",
+      passCondition: "GoalPro is registered as a prompt-only dependency skill for Goal Prompt / Loop Prompt / intent-amplification work.",
+    },
+    score,
+    scoreBand: score >= 85 ? "execute" : "blocked",
+    routeScoreBreakdown: {
+      intentFitWeight: 20,
+      ownerFitWeight: 15,
+      weaponFitWeight: 15,
+      dependencyFitWeight: 15,
+      runtimeSupportWeight: 10,
+      osSupportWeight: 10,
+      verificationStrengthWeight: 10,
+      riskRollbackClarityWeight: 5,
+      runtimeSupport: activeRuntimeSupport(),
+      osSupport: "supported",
+      dependencyFit: dependency ? 95 : 0,
+    },
+    ownerBinding: {
+      selectedOwner: "meta-conductor",
+      source: "goal_contract_task_shape",
+      existingOwnerMatched: true,
+      bindingStage: "Thinking",
+      providerEvidenceRef: "candidateDependencyProjects.goalpro",
+      ownerDiscoveryRef: "ownerDiscoveryPacket",
+    },
+    selectedCapabilityProviders: selectedSkill ? [selectedSkill] : [],
+    boundary: {
+      invokeAs: "skill",
+      executionMode: "prompt_only",
+      notExecutor: true,
+      notAutomationScheduler: true,
+    },
+    blockedReasons,
+  };
+}
+
+function kimDecisionExperienceRoute() {
+  if (!decisionAdjustmentRequested()) return null;
+  const dependency = dependencyRecords.find((dep) => dep.id === "kim-decision") ?? null;
+  const blockedReasons = [];
+  if (!dependency) blockedReasons.push("kim-decision dependency project missing");
+  const score = blockedReasons.length ? 49 : 93;
+  return {
+    id: `kim-decision-lens:${runtime}:${osTarget}`,
+    owner: "meta-warden",
+    weapon: "meta-kim-decision-patterns",
+    dependency: null,
+    dependencyProject: null,
+    decisionLensProvider: dependency?.id ?? "kim-decision",
+    runtime,
+    os: osTarget,
+    verificationOwner: "meta-prism",
+    verificationMethod: "npm run meta:route:validate",
+    verification: {
+      command: "npm run meta:route:validate",
+      artifact: "route JSON",
+      passCondition: "Decision tasks expose a Kim_Decision decision lens without promoting it to code executor, then offer GoalPro only after the decision is ready to become a goal.",
+    },
+    score,
+    scoreBand: score >= 85 ? "execute" : "blocked",
+    routeScoreBreakdown: {
+      intentFitWeight: 20,
+      ownerFitWeight: 15,
+      weaponFitWeight: 15,
+      dependencyFitWeight: 15,
+      runtimeSupportWeight: 10,
+      osSupportWeight: 10,
+      verificationStrengthWeight: 10,
+      riskRollbackClarityWeight: 5,
+      runtimeSupport: activeRuntimeSupport(),
+      osSupport: "supported",
+      dependencyFit: dependency ? 90 : 0,
+    },
+    ownerBinding: {
+      selectedOwner: "meta-warden",
+      source: "decision_adjustment_task_shape",
+      existingOwnerMatched: true,
+      bindingStage: "Thinking",
+      providerEvidenceRef: "candidateDependencyProjects.kim-decision",
+      ownerDiscoveryRef: "ownerDiscoveryPacket",
+    },
+    // Kim_Decision is a registry-backed reference lens. It may enter model
+    // context through this named lens, but its reference-only skill/provider
+    // must never be selected as an execution capability. Do not let the
+    // generic skill selector fall back to an unrelated executable skill.
+    selectedCapabilityProviders: [],
+    boundary: {
+      invokeAs: "decision_lens",
+      executionMode: "model_context",
+      notExecutor: true,
+      notImplementationWorker: true,
+      notAutomationScheduler: true,
+    },
+    decisionExperiencePlan: {
+      userVisibleActivation: "Kim_Decision decision lens",
+      scope:
+        "Decision support only during Critical, Fetch, and Thinking. It does not create a Goal, run execution, schedule automation, or start a Loop.",
+      sequence: [
+        {
+          step: "critical_decision",
+          provider: "kim-decision",
+          stage: "Critical",
+          purpose: "锁定真问题、成功标准、非目标、关键取舍和 pass/kill 判断，不急着写执行目标。",
+        },
+        {
+          step: "fetch_evidence_decision",
+          provider: "kim-decision",
+          stage: "Fetch",
+          purpose: "判断哪些证据会改变路线，哪些外部/本地事实必须先查，避免拍脑袋决策。",
+        },
+        {
+          step: "thinking_path_decision",
+          provider: "kim-decision",
+          stage: "Thinking",
+          purpose: "比较候选路径，选择最小 MVP / 最小验证 / 执行路线，并记录为什么不走其他路。",
+        },
+      ],
+      goalProBoundary:
+        "GoalPro is not triggered by this route. It is selected only when the user explicitly asks for Goal Prompt, Loop Prompt, goal contract, or prompt-only goal packaging.",
+      loopBoundary:
+        "Loop belongs after a Goal has produced a result and the user wants a next-round review/continuation prompt; it is not part of Critical, Fetch, Thinking, or Evolution writeback.",
+      evolutionBoundary:
+        "Evolution records Meta_Kim system writeback or none-with-reason; it is not the place that creates user Goals.",
+    },
     blockedReasons,
   };
 }
@@ -1768,7 +3541,7 @@ function subjectiveUiDesignRoute() {
       osSupportWeight: 10,
       verificationStrengthWeight: 10,
       riskRollbackClarityWeight: 5,
-      runtimeSupport: "native",
+      runtimeSupport: activeRuntimeSupport(),
       osSupport: "supported",
       dependencyFit: missing.length ? 60 : 92,
     },
@@ -1827,7 +3600,7 @@ function subjectiveUiDesignRoute() {
 function productBuildOrchestrationRoute() {
   if (
     entryClassification.triggerReason !== "natural_language_product_build" &&
-    !entryClassification.fanoutSignals?.includes("product_build_has_multiple_execution_lanes")
+    entrySignals.productBuildIntent !== true
   ) {
     return null;
   }
@@ -2070,7 +3843,7 @@ function productBuildOrchestrationRoute() {
       osSupportWeight: 10,
       verificationStrengthWeight: 10,
       riskRollbackClarityWeight: 5,
-      runtimeSupport: "native",
+      runtimeSupport: activeRuntimeSupport(),
       osSupport: "supported",
       dependencyFit: missing.length ? 60 : 90,
     },
@@ -2113,12 +3886,107 @@ function productBuildOrchestrationRoute() {
   };
 }
 
+function localDependencyToolRoute() {
+  if (!selectedLocalScanCapability || localToolExecutionGate.status !== "ready") return null;
+  return {
+    id: `dependency-local-tool:${selectedLocalScanCapability.id}`, owner: selectedLocalScanCapability.id,
+    weapon: "local-dependency-tool", dependency: selectedLocalScanCapability.id,
+    dependencyProject: selectedLocalScanCapability.dependencyId, runtime, os: osTarget,
+    verificationOwner: "meta-prism", verificationMethod: "task-bound local scanner receipt and reported findings",
+    verification: { artifact: "local tool result receipt", passCondition: "Actual scan covers only the explicit target with bundled rules; assess task criteria separately." },
+    score: 99, scoreBand: "execute", blockedReasons: [], ownershipType: "tool",
+    selectedCapabilityProviders: { skill: selectedLocalScanCapability },
+    localToolExecutionGate,
+    parallelExecutionLanes: [{ laneId: LOCAL_DEPENDENCY_TOOL_CONTRACT.capabilityId, roleDisplayName: "test", ownerKind: "tool",
+      ownerAgent: selectedLocalScanCapability.id, ownerSource: "local_dependency_skill_contract",
+      sourceRef: selectedLocalScanCapability.sourceRef, purpose: localToolRequest.request,
+      capabilityNeed: [LOCAL_DEPENDENCY_TOOL_CONTRACT.capabilityId], capabilityProvider: selectedLocalScanCapability,
+      dependsOn: [], decisionImpact: "Read only the explicitly selected local scan target; no model or native Agent invocation." }],
+  };
+}
 const syntheticRoutes = [
+  goalProContractRoute(),
+  kimDecisionExperienceRoute(),
   productBuildOrchestrationRoute(),
   subjectiveUiDesignRoute(),
   executionCapabilityDiscoveryRoute(),
 ].filter(Boolean);
-const rankedRoutes = [...candidateWeapons.map(routeForWeapon), ...syntheticRoutes].sort((a, b) => b.score - a.score);
+const independentTaskShape = subjectiveRouteChoice
+  ? "governed_dispatch"
+  : entryClassification.path === "fast_path"
+    ? "fast_path"
+  : entrySignals.productBuildIntent === true
+    ? "product_build"
+    : taskShape === "engineering_execution"
+      ? "engineering_execution"
+      : entrySignals.explicitMetaTheory === true
+        ? "governed_dispatch"
+        : "default_executable";
+const engineeringDirectionApplies = intentDeliveryStrategy != null &&
+  ((taskShape === "engineering_execution" && entrySignals.fileOrMutationIntent === true) || entrySignals.productBuildIntent === true) &&
+  entryClassification.path !== "fast_path";
+const intentArchitectureCandidates = engineeringDirectionApplies && intentDeliveryStrategy === "long_term_extensible"
+  ? candidateProvidersForCapabilityNeed(["software-architecture-and-extension-boundaries"], ["skills"], 6)
+      .filter((entry) => entry.matchedTerms.length > 0 && runtimeMatchScore(entry.provider) < 9 &&
+        entry.provider.cacheEvidenceOnly !== true && entry.provider.executionEligible !== false &&
+        entry.provider.osSupport?.[osTarget] !== "unsupported")
+  : [];
+const intentArchitectureProvider = intentArchitectureCandidates[0]?.provider ?? null;
+const intentDirectionSelection = {
+  deliveryStrategy: intentDeliveryStrategy,
+  applies: engineeringDirectionApplies,
+  capabilityNeed: engineeringDirectionApplies && intentDeliveryStrategy === "long_term_extensible"
+    ? ["software-architecture-and-extension-boundaries"] : [],
+  selectedProvider: intentArchitectureProvider,
+  candidates: intentArchitectureCandidates.map((entry) => providerSummary(entry, intentArchitectureProvider?.id)),
+  selectionPolicy: "capability_need_runtime_match",
+  status: !engineeringDirectionApplies || intentDeliveryStrategy !== "long_term_extensible"
+    ? "not_required" : intentArchitectureProvider ? "selected_not_invoked" : "capability_gap",
+  claimBoundary: "Discovery and route selection only; no native confirmation, invocation or Permission.",
+};
+const rankedRoutes = (localToolRequest?.applies === true
+  ? [localDependencyToolRoute()].filter(Boolean)
+  : [...candidateWeapons.map(routeForWeapon), ...syntheticRoutes])
+  .map(applyAgentProfilesToRoute)
+  .map((candidateRoute) => {
+    const missingDirectionCapability = intentDirectionSelection.status === "capability_gap";
+    const requestedMethodOwner = methodContractOwners.length === 1 && methodContractOwners[0].executionBlock !== true &&
+      providerEligibleForRoute(methodContractOwners[0]) && !explicitOwnerRefusalConflict(methodContractOwners[0], actionTask)
+      ? methodContractOwners[0] : null;
+    const routeMethodOwner = candidateRoute.selectedCapabilityProviders?.agent;
+    const missingRequestedMethod = professionalMethodDemand &&
+      (!requestedMethodOwner || (methodWorkKind === "support" || requirementsContext) && !readOnlyProfessionalReview ||
+        candidateRoute.owner !== requestedMethodOwner.id || routeMethodOwner?.source !== "dependency_agent_contract" ||
+        routeMethodOwner.id !== requestedMethodOwner.id || routeMethodOwner.sourceRef !== requestedMethodOwner.sourceRef ||
+        routeMethodOwner.contentDigest !== requestedMethodOwner.contentDigest);
+    const route = {
+      ...candidateRoute,
+      intentDirectionSelection,
+      selectedCapabilityProviders: intentArchitectureProvider
+        ? { ...candidateRoute.selectedCapabilityProviders, intentArchitecture: intentArchitectureProvider }
+        : candidateRoute.selectedCapabilityProviders,
+      blockedReasons: [...(candidateRoute.blockedReasons ?? []), ...(missingDirectionCapability ? ["confirmed long-term direction lacks an eligible architecture provider"] : []),
+        ...(missingRequestedMethod ? ["explicit method demand lacks its unique eligible source-bound owner for the current operation"] : [])],
+      score: missingDirectionCapability || missingRequestedMethod ? Math.min(candidateRoute.score, 49) : candidateRoute.score,
+      scoreBand: missingDirectionCapability || missingRequestedMethod ? "blocked" : candidateRoute.scoreBand,
+    };
+    const executionCapabilityGate = evaluateRouteExecutionGate({
+      route,
+      runtime,
+      taskShape: independentTaskShape,
+      choiceRequired: subjectiveRouteChoice,
+      effectiveMatrix: runtimeMatrix,
+    });
+    return {
+      ...route,
+      requiredRuntimeCapabilities: executionCapabilityGate.requirements,
+      executionCapabilityGate: { ...executionCapabilityGate, applies: independentTaskShape !== "fast_path" },
+      executionPolicy: independentTaskShape,
+      executionEligible: false,
+      hostHandoffEligible: independentTaskShape !== "fast_path" && executionCapabilityGate.routeCompatible,
+    };
+  })
+  .sort((a, b) => b.score - a.score);
 const recommendedRoute = rankedRoutes.find((route) => route.score >= 85) ?? rankedRoutes.find((route) => route.score >= 70) ?? null;
 const capabilityGapPacket = recommendedRoute ? null : {
   gap: "No route has enough owner + weapon + dependency + runtime + OS + verification support.",
@@ -2128,6 +3996,12 @@ const capabilityGapPacket = recommendedRoute ? null : {
   ownerDiscoveryRef: "ownerDiscoveryPacket",
   missing: rankedRoutes[0]?.blockedReasons?.length ? rankedRoutes[0].blockedReasons : ["owner_weapon_dependency_route"],
   returnToStage: "Thinking",
+  ...(methodCapabilityId ? { methodRequest: { workKind: methodWorkKind, methodCapabilityId,
+    capabilityNeed: methodContext.capabilityNeed, artifactFlow: methodContext.artifactFlow } } : {}),
+  ...(requirementsContext ? { requirementsDiscovery: requirementsContext } : {}),
+  projectCapabilityProfileDecisions: [...new Map([...agentProfileSnapshots.values()]
+    .filter((entry) => entry.status === "capability_gap")
+    .map((entry) => [stableJson(entry.owner), entry])).values()],
 };
 const capabilityGapDetected = !recommendedRoute || explicitCapabilityGapRequested();
 const capabilityGapDecision = capabilityGapDetected
@@ -2220,38 +4094,348 @@ const routeTypeClassification = classifyRouteTypes(recommendedRoute, {
   gapPacket: capabilityGapPacket,
   gapBlocksExecution: capabilityGapBlocksExecution,
 });
-const userChoiceNeeded = Boolean(recommendedRoute && recommendedRoute.score >= 70 && recommendedRoute.score < 85);
-const decisionCard = userChoiceNeeded ? {
-  recommendedDefault: recommendedRoute.id,
-  reason: "Route is useful but needs confirmation or more evidence because score is 70-84.",
-  choicePolicy: choiceSurfacePolicy.choiceRequiredWhen,
-  options: rankedRoutes.slice(0, 3).map((route) => ({
-    id: route.id,
-    bestFor: route.scoreBand,
-    benefit: "Uses discovered owner, weapon, runtime, OS, and verification route.",
-    cost: "May need more evidence if score is below 85.",
-    risk: route.blockedReasons.join("; ") || "partial capability support may remain.",
-    expectedResult: "Bounded execution route.",
-    verification: route.verificationMethod ?? "manual review"
-  }))
-} : null;
+const criticalChoiceDecision = evaluateChoiceRequirement(choiceSurfacePolicy, {
+  runtime,
+  stage: "Critical",
+  routeChangingDimensions: routeChangingDimensionSignals,
+  materialBranch: subjectiveRouteChoice,
+  highRiskOperation:
+    entrySignals.destructiveOrProductionIntent === true &&
+    entrySignals.queryPreambleSignal !== true,
+  destructiveOrProductionOperation:
+    entrySignals.destructiveOrProductionTermSignal === true &&
+    (entrySignals.actionIntent === true || entrySignals.destructiveOrProductionIntent === true) &&
+    entrySignals.queryPreambleSignal !== true,
+});
+
+function checkpointChoiceOptions() {
+  const checkpoints = recommendedRoute?.subjectiveUiCapabilityAmplification?.decisionCheckpoints ?? [];
+  const checkpoint = checkpoints.find((candidate) =>
+    !hasChoiceStage(candidate?.stage) &&
+    Array.isArray(candidate?.options) &&
+    candidate.options.length >= 2,
+  ) ?? checkpoints.find((candidate) =>
+    Array.isArray(candidate?.options) &&
+    candidate.options.length >= 2,
+  );
+  if (!checkpoint) return null;
+  const options = [...new Set(
+    checkpoint.options
+      .map((option) => String(option ?? "").trim())
+      .filter(Boolean),
+  )];
+  if (options.length < 2) return null;
+  return {
+    stage: checkpoint.stage ?? "route",
+    question: checkpoint.question ?? "Choose the route-changing scope before execution.",
+    requiredBefore: checkpoint.requiredBefore ?? "Execution",
+    options: options.map((option) => ({
+      id: option,
+      label: option,
+      bestFor: option,
+      benefit: checkpoint.question ?? "Locks the user-selected route scope.",
+      cost: checkpoint.requiredBefore ?? "The selected scope determines the next stage.",
+      risk: "A different choice changes scope or acceptance.",
+      expectedResult: option,
+      verification: "Verify the selected scope at the next stage.",
+      source: `recommendedRoute.subjectiveUiCapabilityAmplification.decisionCheckpoints.${checkpoint.stage ?? "route"}`,
+    })),
+  };
+}
+
+function buildDecisionCard() {
+  if (!recommendedRoute) return null;
+  const checkpoint = checkpointChoiceOptions();
+  if (checkpoint) {
+    return {
+      recommendedDefault: checkpoint.options[0].id,
+      reason: `Route has a policy-required ${checkpoint.stage} choice before ${checkpoint.requiredBefore}.`,
+      choicePolicy: choiceSurfacePolicy.choiceRequiredWhen,
+      options: checkpoint.options,
+    };
+  }
+  return null;
+}
+
+let decisionCard = criticalChoiceDecision.required || subjectiveRouteChoice
+  ? buildDecisionCard()
+  : null;
+const thinkingChoiceDimensions = [
+  ...(subjectiveRouteChoice ? ["scope", "acceptance"] : []),
+  ...(decisionCard ? ["scope", "owner", "runtime_or_os", "dependency", "acceptance"] : []),
+];
+const thinkingChoiceDecision = evaluateChoiceRequirement(choiceSurfacePolicy, {
+  runtime,
+  stage: "Thinking",
+  routeChangingDimensions: thinkingChoiceDimensions,
+  materialBranch: subjectiveRouteChoice || Boolean(decisionCard),
+  decisionCardOptionCount: decisionCard?.options?.length ?? 0,
+});
+const entryChoiceDecision = {
+  schemaVersion: "entry-choice-decision-v1",
+  policySource: "config/governance/choice-surface-policy.json",
+  lifecycleOwner: "meta-conductor/spine",
+  choicePolicy:
+    criticalChoiceDecision.required || thinkingChoiceDecision.required
+      ? "must_ask"
+      : "no_choice_needed",
+  critical: criticalChoiceDecision,
+  thinking: thinkingChoiceDecision,
+};
+const choicePolicy = entryChoiceDecision.choicePolicy;
+const userChoiceNeeded = choicePolicy === "must_ask";
+if (userChoiceNeeded && !decisionCard) {
+  decisionCard = buildDecisionCard();
+}
+const criticalChoiceBlocksExecution =
+  criticalChoiceDecision.required && !hasChoiceStage("Critical");
+const thinkingChoiceBlocksExecution =
+  thinkingChoiceDecision.required && !hasChoiceStage("Thinking");
+const routeScoreReady =
+  Boolean(recommendedRoute && !(recommendedRoute.blockedReasons?.length));
+
+const selectedWorkerLanes =
+  recommendedRoute?.subjectiveUiCapabilityAmplification?.lanes ??
+  recommendedRoute?.parallelExecutionLanes ??
+  null;
+
+const workerTaskPacketDrafts = selectedWorkerLanes
+  ? selectedWorkerLanes.map((lane, index) => {
+      const taskPacket = {
+        taskPacketId: `worker-task:${lane.laneId}:${index + 1}`,
+        ownerKind: lane.ownerKind ?? "agent",
+        ownerAgent: lane.ownerAgent,
+        roleDisplayName: lane.roleDisplayName,
+        roleInstanceId: lane.laneId,
+        weapon: recommendedRoute.weapon,
+        dependency: lane.capabilityProvider?.id ?? recommendedRoute.dependency,
+        runtime,
+        os: osTarget,
+        verificationOwner: recommendedRoute.verificationOwner,
+        verification: recommendedRoute.verificationMethod,
+        dependsOn: lane.dependsOn ?? [],
+        dependencyEvidence: lane.dependencyEvidence ?? "unproven",
+        parallelGroup: lane.parallelGroup ?? null,
+        mergeOwner: "meta-conductor",
+        shardScope: lane.safetyEvidence?.shardScope ?? [],
+        mutationPolicy: lane.safetyEvidence?.mutationPolicy ?? "unproven",
+        workspaceIsolation: lane.safetyEvidence?.workspaceIsolation ?? "unproven",
+        externalWritePolicy: lane.safetyEvidence?.externalWritePolicy ?? "unproven",
+        collisionPolicy: lane.safetyEvidence?.collisionPolicy ?? "unproven",
+        safetyEvidence: lane.safetyEvidence ?? { status: "unproven" },
+        purpose: lane.purpose,
+        decisionImpact: lane.decisionImpact,
+        agentCapabilityProfile: lane.agentCapabilityProfile,
+        capabilityLoadout: { ...lane.agentCapabilityProfile, selectedProviders: lane.capabilityBinding?.selectedProviders ?? {} },
+      };
+      const codexSpawnBinding = codexSpawnBindingForOwner(
+        lane.ownerAgent,
+        lane.ownerKind ?? "agent",
+        lane.laneId,
+        taskPacket,
+      );
+      return {
+        ...taskPacket,
+        ownerSource: codexSpawnBinding?.ownerSource ?? null,
+        codexSpawnBinding,
+      };
+    })
+  : recommendedRoute
+    ? (() => {
+        const selectedOwner =
+          recommendedRoute.selectedCapabilityProviders?.agent?.id ??
+          recommendedRoute.owner;
+        const roleInstanceId = `exec-${selectedOwner ?? "unknown"}-1`;
+        const actions = decomposeTaskActions(String(actionTask ?? "").replace(GOVERNANCE_CHAIN_PREFIX_RE, "").trim());
+        const purpose = actions.length === 1 ? actions[0].terms : String(actionTask ?? "").trim();
+        // Recognize only a complete, narrow prohibition clause here. A phrase
+        // containing further actions remains mutation-like, never stripped.
+        const effectText = taskEffectText(purpose);
+        const requestsMutation = !currentReadOnlyOperation && /\b(?:fix|implement|build|create|refactor|rebuild|migrate|write|edit|update|modify|change|patch|delete|remove)\b|修复|修改|实现|构建|创建|重构|迁移|写入|编辑|更新|删除|移除/iu.test(effectText);
+        const requestsExternalWrite = !currentReadOnlyOperation && /\b(?:deploy|publish|release|upload|send|email)\b|部署|发布|上传|发送|邮件|代投|投递/iu.test(effectText);
+        const requestsInspection = currentReadOnlyOperation || /\b(?:check|review|inspect|audit|analy[sz]e|verify|investigate|read)\b|只读|审阅|检查|审查|审核|分析|验证|排查|读取|阅读/iu.test(effectText);
+        // Material references supply read scope as data. Their file names must
+        // never enter current-operation parsing (for example, update-plan.md).
+        const scopeFiles = requirementsContext
+          ? [...new Set(requirementsContext.evidenceRefs.flatMap((ref) => extractActionPaths(`"${ref}"`)))]
+          : actions.length === 1 ? extractActionPaths(purpose) : [];
+        const readOnly = requestsInspection && !requestsMutation && !requestsExternalWrite;
+        const proven = actions.length === 1 && scopeFiles.length > 0 && scopeFiles.every((scope) => scopeComparisonKey(scope) !== null) && !requestsExternalWrite && (readOnly || requestsMutation);
+        const safetyEvidence = {
+          status: proven ? "proven" : "unproven", evidenceBasis: proven ? "single_action_explicit_scope" : "single_action_scope_or_effect_unproven",
+          shardScope: scopeFiles, dependencyEvidence: actions.length === 1 ? "single_action_no_other_workers" : "unproven",
+          mutationPolicy: proven ? readOnly ? "read_only" : "scoped_local_writes_only" : "unproven",
+          workspaceIsolation: proven ? readOnly ? "shared_workspace_read_only" : "shared_workspace_disjoint_paths" : "unproven",
+          externalWritePolicy: requestsExternalWrite ? "requested_not_parallel_safe" : "forbidden",
+          collisionPolicy: proven ? "no_overlap" : "unproven",
+        };
+        const taskPacket = {
+          taskPacketId: `worker-task:${roleInstanceId}:1`,
+          ownerKind: "agent",
+          ownerAgent: selectedOwner,
+          roleDisplayName: roleDisplayNameForOwner(selectedOwner),
+          roleInstanceId,
+          weapon: recommendedRoute.weapon,
+          dependency: recommendedRoute.dependency,
+          runtime,
+          os: osTarget,
+          verificationOwner: recommendedRoute.verificationOwner,
+          verification: recommendedRoute.verificationMethod,
+          dependsOn: [],
+          parallelGroup: null,
+          mergeOwner: "meta-conductor",
+          scopeFiles,
+          shardScope: safetyEvidence.shardScope,
+          dependencyEvidence: safetyEvidence.dependencyEvidence,
+          mutationPolicy: safetyEvidence.mutationPolicy,
+          workspaceIsolation: safetyEvidence.workspaceIsolation,
+          externalWritePolicy: safetyEvidence.externalWritePolicy,
+          collisionPolicy: safetyEvidence.collisionPolicy,
+          safetyEvidence,
+          purpose,
+          decisionImpact: "Single-worker route selected by Thinking.",
+          agentCapabilityProfile: recommendedRoute.agentCapabilityProfile,
+          capabilityLoadout: { ...recommendedRoute.agentCapabilityProfile, selectedProviders: recommendedRoute.selectedCapabilityProviders },
+        };
+        const codexSpawnBinding = codexSpawnBindingForOwner(
+          selectedOwner,
+          "agent",
+          roleInstanceId,
+          taskPacket,
+        );
+        return [{
+          ...taskPacket,
+          ownerSource: codexSpawnBinding?.ownerSource ?? null,
+          codexSpawnBinding,
+        }];
+      })()
+    : [];
+
+const parallelGroupIds = [...new Set(
+  workerTaskPacketDrafts
+    .map((packet) => packet.parallelGroup)
+    .filter(Boolean),
+)];
+function scopesPermitConcurrentAccess(packets, { allowSharedReads = false } = {}) {
+  if (packets.some((packet) => !Array.isArray(packet.shardScope) || packet.shardScope.length === 0)) return false;
+  const ownedScopes = packets.flatMap((packet) =>
+    (packet.shardScope ?? []).map((scope) => ({
+      packetId: packet.taskPacketId,
+      readOnly: ["read_only", "read_only_target"].includes(packet.mutationPolicy),
+      scope: scopeComparisonKey(scope),
+    })),
+  );
+  if (ownedScopes.some((entry) => entry.scope === null)) return false;
+  for (let leftIndex = 0; leftIndex < ownedScopes.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < ownedScopes.length; rightIndex += 1) {
+      const left = ownedScopes[leftIndex];
+      const right = ownedScopes[rightIndex];
+      if (left.packetId === right.packetId) continue;
+      if (allowSharedReads && left.readOnly && right.readOnly) continue;
+      if (
+        !scopeKeysAreProvablyDisjoint(left.scope, right.scope)
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+const safeFanoutReady =
+  workerTaskPacketDrafts.length >= 2 &&
+  new Set(workerTaskPacketDrafts.map((packet) => packet.taskPacketId)).size === workerTaskPacketDrafts.length &&
+  new Set(workerTaskPacketDrafts.map((packet) => packet.roleInstanceId)).size === workerTaskPacketDrafts.length &&
+  parallelGroupIds.length === 1 &&
+  workerTaskPacketDrafts.every(
+    (packet) =>
+      packet.ownerAgent &&
+      packet.mergeOwner === "meta-conductor" &&
+      Array.isArray(packet.dependsOn) &&
+      packet.dependsOn.length === 0 &&
+      packet.safetyEvidence?.status === "proven" &&
+      packet.externalWritePolicy === "forbidden" &&
+      packet.collisionPolicy !== "unproven" &&
+      packet.workspaceIsolation !== "unproven",
+  ) &&
+  scopesPermitConcurrentAccess(workerTaskPacketDrafts, { allowSharedReads: true });
+// An explicitly ordered, fully scoped chain is a valid host handoff plan even
+// though it has no initial parallel wave. This establishes neither invocation
+// nor execution authorization; the host must still enforce each predecessor.
+const safeOrderedExecutionReady =
+  workerTaskPacketDrafts.length >= 2 &&
+  workerTaskPacketDrafts.every((packet, index, packets) => {
+    const expectedDependencies = packets.slice(0, index).map((previous) => previous.roleInstanceId);
+    return Boolean(
+      packet.ownerAgent &&
+      packet.mergeOwner === "meta-conductor" &&
+      packet.safetyEvidence?.status === "proven" &&
+      packet.shardScope.length > 0 &&
+      packet.externalWritePolicy === "forbidden" &&
+      packet.collisionPolicy !== "unproven" &&
+      packet.workspaceIsolation !== "unproven" &&
+      packet.dependencyEvidence === (index === 0 ? "explicit_sequence_start" : "explicit_sequence") &&
+      Array.isArray(packet.dependsOn) &&
+      packet.dependsOn.length === expectedDependencies.length &&
+      packet.dependsOn.every((dependency, dependencyIndex) => dependency === expectedDependencies[dependencyIndex]),
+    );
+  });
+const unprovenMultiLaneExecution =
+  Array.isArray(recommendedRoute?.parallelExecutionLanes) &&
+  recommendedRoute.parallelExecutionLanes.length >= 2 &&
+  !safeFanoutReady && !safeOrderedExecutionReady;
+const nativeChoicePending = criticalChoiceBlocksExecution || thinkingChoiceBlocksExecution;
+const fastPathNativeChoicePending =
+  entryClassification.path === "fast_path" && nativeChoicePending;
+const executionGateApplies = professionalMethodDemand || entryClassification.path !== "fast_path" || fastPathNativeChoicePending;
+const routeCompatibilityBlocked =
+  executionGateApplies &&
+  recommendedRoute &&
+  recommendedRoute.executionCapabilityGate?.routeCompatible !== true;
+const routePreparationBlocked =
+  !recommendedRoute ||
+  !routeScoreReady ||
+  globalInventoryFreshness.refreshRequiredBeforeExecution ||
+  capabilityGapBlocksExecution ||
+  unprovenMultiLaneExecution;
+const handoffStatus = !executionGateApplies
+  ? "not_applicable"
+  : fastPathNativeChoicePending
+    ? "awaiting_native_choice"
+  : routeCompatibilityBlocked || routePreparationBlocked
+    ? "blocked"
+    : nativeChoicePending
+      ? "awaiting_native_choice"
+      : "ready_for_host_handoff";
+const hostAction = handoffStatus === "ready_for_host_handoff"
+  ? "host_action_required"
+  : handoffStatus === "awaiting_native_choice"
+    ? "invoke_native_choice_surface"
+    : "none";
 const routeExecutionGate = {
+  applies: executionGateApplies,
   canPreviewRoute: true,
-  canEnterExecution:
-    Boolean(recommendedRoute?.score >= 85) &&
-    !globalInventoryFreshness.refreshRequiredBeforeExecution &&
-    !capabilityGapBlocksExecution &&
-    !criticalChoiceBlocksExecution &&
-    !thinkingChoiceBlocksExecution,
+  routeCompatible: !routeCompatibilityBlocked,
+  handoffStatus,
+  hostAction,
+  canHandoffToHost: ["ready_for_host_handoff", "awaiting_native_choice"].includes(handoffStatus),
+  canEnterExecution: false,
+  canEnterExecutionMeaning: "host_native_execution_has_not_occurred",
+  executionAuthorized: false,
+  authorizationOwner: "current_host_native_surfaces_and_permissions",
+  persistentAcceptanceAuthorizesExecution: false,
   blockedBy: [
     ...(!recommendedRoute ? ["missing_recommended_route"] : []),
-    ...(recommendedRoute && recommendedRoute.score < 85 ? ["route_requires_confirmation_or_more_fetch"] : []),
+    ...(recommendedRoute && !routeScoreReady ? ["route_requires_confirmation_or_more_fetch"] : []),
     ...(globalInventoryFreshness.refreshRequiredBeforeExecution ? ["global_capability_inventory_refresh_required"] : []),
     ...(capabilityGapBlocksExecution ? ["capability_gap_decision_blocks_execution"] : []),
     ...(criticalChoiceBlocksExecution ? ["native_choice_surface_required_before_execution"] : []),
     ...(thinkingChoiceBlocksExecution ? ["thinking_route_choice_required_before_execution"] : []),
+    ...(unprovenMultiLaneExecution ? ["parallel_lane_safety_not_proven"] : []),
+    ...(routeCompatibilityBlocked ? ["runtime_capability_known_unsupported"] : []),
   ],
-  returnToStage: !recommendedRoute
+  returnToStage: !executionGateApplies
+    ? null
+    : !recommendedRoute
     ? "Thinking"
     : capabilityGapBlocksExecution
       ? "Thinking"
@@ -2259,13 +4443,19 @@ const routeExecutionGate = {
       ? "Critical"
     : thinkingChoiceBlocksExecution
       ? "Thinking"
-    : recommendedRoute.score < 85 || globalInventoryFreshness.refreshRequiredBeforeExecution
+      : unprovenMultiLaneExecution
+      ? "Thinking"
+    : routeCompatibilityBlocked
+      ? "Verification"
+    : !routeScoreReady || globalInventoryFreshness.refreshRequiredBeforeExecution
       ? "Fetch"
       : null,
   refreshCommand: globalInventoryFreshness.refreshRequiredBeforeExecution ? globalInventoryFreshness.refreshCommand : null,
-  reason: !recommendedRoute
+  reason: !executionGateApplies
+    ? "Pure read-only fast-path query does not enter Execution and therefore does not require a runtime execution capability gate."
+    : !recommendedRoute
     ? "No executable route is available; Execution must not start until owner, provider, runtime, OS, and verification binding are resolved."
-    : recommendedRoute.score < 85
+    : !routeScoreReady
       ? "Route preview is available, but Execution needs confirmation or stronger provider evidence before starting."
       : capabilityGapBlocksExecution
         ? "Capability-gap decision requires approval, stronger evidence, or return to Thinking before Execution."
@@ -2273,23 +4463,39 @@ const routeExecutionGate = {
         ? "The input has a route-changing ambiguity and requires a trusted native choice-surface answer before Execution."
       : thinkingChoiceBlocksExecution
         ? "The user intent is calibrated, but the fetched capability route still has multiple product/design execution paths; Thinking needs a trusted native route choice before Execution."
+      : unprovenMultiLaneExecution
+        ? "Multiple execution lanes were drafted, but shard scope, workspace isolation, or collision boundaries are still unproven; return to Thinking instead of presenting the route as execution-ready."
       : globalInventoryFreshness.refreshRequiredBeforeExecution
         ? "Cached provider evidence is missing or older than 14 days; route preview is allowed, but Execution must refresh capability discovery first."
-        : "Cached provider evidence is fresh enough and the route has execution-grade owner/provider/verification binding.",
+      : routeCompatibilityBlocked
+        ? `Route design is available, but current ${runtime} has a known unsupported runtime capability: ${recommendedRoute?.executionCapabilityGate?.blockers?.join("; ") ?? "required runtime capabilities"}.`
+      : nativeChoicePending
+        ? `Route compatibility is ready; the ${runtime} host must invoke its native choice surface before execution.`
+        : "Route compatibility is ready; the current host must perform the selected native tool/Agent actions under its own permissions.",
   entryClassification,
+  entryChoiceDecision,
   choicePolicy,
   typeFirstPolicyRef: "typeFirstRoutePolicy",
   typeFirstDisposition: routeTypeClassification.overallDisposition,
   nativeChoiceSurface: {
-    required: choicePolicy === "must_ask",
-    primarySurface: "request_user_input",
+    required: criticalChoiceDecision.required,
+    primarySurface: runtimeChoiceSurface.surface,
+    policyRef: runtimeChoiceSurface.source,
     evidence: nativeChoiceEvidence,
     rule:
       "Branch-changing choices must be answered through the native host surface before Execution; artifact-only cards or chat text do not satisfy this gate.",
   },
+  runtimeCapabilityEvidence: {
+    profile: runtimeCapabilityState.overlayStatus.profile,
+    state: runtimeCapabilityState.overlayStatus.state,
+    applied: runtimeCapabilityState.overlayStatus.applied,
+    rejected: runtimeCapabilityState.overlayStatus.rejected,
+    issues: runtimeCapabilityState.issues,
+  },
   thinkingChoiceSurface: {
-    required: subjectiveThinkingChoiceRequired,
-    primarySurface: "request_user_input",
+    required: thinkingChoiceDecision.required,
+    primarySurface: runtimeChoiceSurface.surface,
+    policyRef: runtimeChoiceSurface.source,
     evidenceTrusted: hasChoiceStage("Thinking"),
     rule:
       "Subjective product/design work needs a second route choice after Fetch/Thinking when implementation paths have different scope, cost, and verification impact.",
@@ -2298,12 +4504,14 @@ const routeExecutionGate = {
 
 const output = {
   taskShape,
+  dependencyMethodHandoff,
   intentAmplificationPrecheck: {
     needsIntentAmplification: taskShape === "fuzzy_complex_task" || taskShape === "strategy_product_decision",
     scoreThreshold: intentContract.scoreBands?.find((band) => band.status?.includes("may_claim"))?.min ?? 90,
     reason: "Route may change based on real intent, success criteria, and userGoalDone evidence.",
   },
   entryClassification,
+  entryChoiceDecision,
   typeFirstRoutePolicy,
   routeTypeClassification,
   ownerDiscoveryPacket,
@@ -2316,54 +4524,55 @@ const output = {
     ? ["critical-real-intent-lock", "fetch-evidence-labeling", "thinking-subject-path-map", "thinking-minimum-test", "review-pass-kill-gate"]
     : [],
   candidateFoundationalCapabilities,
-  runtimeFilterResult: { requested: runtimeArg, applied: runtime, unsupported: !RUNTIMES.includes(runtime) },
-  osFilterResult: { requested: osArg, applied: osTarget, unsupported: !OS_TARGETS.includes(osTarget) },
+  runtimeFilterResult: { requested: runtimeArg, applied: runtime, unsupported: !RUNTIMES.includes(runtime), selection: runtimeSelection },
+  osFilterResult: { requested: operatingSystem.requested, applied: osTarget, host: hostOs, source: operatingSystem.source, unsupported: !OS_TARGETS.includes(osTarget) },
   rankedRoutes,
   recommendedRoute,
+  decisionExperiencePlan: recommendedRoute?.decisionExperiencePlan ?? null,
   subjectiveUiCapabilityAmplification: recommendedRoute?.subjectiveUiCapabilityAmplification ?? null,
   decisionCheckpoints: recommendedRoute?.subjectiveUiCapabilityAmplification?.decisionCheckpoints ?? [],
   capabilityGapDetected,
   capabilityGapDecision,
   routeExecutionGate,
+  localToolExecutionGate,
   userChoiceNeeded,
   decisionCard,
   dispatchBoardDraft: recommendedRoute ? {
     owner: "meta-conductor",
     route: recommendedRoute.id,
     mergeOwner: "meta-conductor",
-    parallelGroups: (recommendedRoute.subjectiveUiCapabilityAmplification?.lanes ?? recommendedRoute.parallelExecutionLanes)?.map((lane) => lane.parallelGroup) ?? [],
+    dispatchMode: safeFanoutReady
+      ? "fan_out_ready"
+      : workerTaskPacketDrafts.length >= 2
+        ? "fanout_eligible"
+        : "single_worker_ready",
+    fanoutReadiness: {
+      entryConcurrencyHintPresent: concurrentDispatchIntentPresent,
+      thinkingApproved: safeFanoutReady,
+      workerCount: workerTaskPacketDrafts.length,
+      independentLanes: safeFanoutReady,
+      collisionBoundaryDeclared: workerTaskPacketDrafts.every(
+        (packet) => packet.safetyEvidence?.status === "proven" && packet.collisionPolicy !== "unproven",
+      ),
+      shardScopesPairwiseDisjoint: scopesPermitConcurrentAccess(workerTaskPacketDrafts),
+      externalWritesForbidden: workerTaskPacketDrafts.every(
+        (packet) => packet.externalWritePolicy === "forbidden",
+      ),
+      hostInvocationBoundary: runtime === "codex"
+        ? "probe current top-level spawn_agent surface before invocation"
+        : "use the current runtime native agent surface",
+    },
+    orderedExecutionReadiness: {
+      ready: safeOrderedExecutionReady,
+      dependencyPolicy: "each_explicit_successor_waits_for_all_preceding_tasks",
+      executionAuthorized: false,
+    },
+    parallelGroups: parallelGroupIds,
     orchestratorKinds: classifyOrchestratorKinds(
       recommendedRoute.subjectiveUiCapabilityAmplification?.lanes ?? recommendedRoute.parallelExecutionLanes ?? []
     ),
   } : null,
-  workerTaskPacketDrafts: (recommendedRoute?.subjectiveUiCapabilityAmplification?.lanes ?? recommendedRoute?.parallelExecutionLanes)
-    ? (recommendedRoute.subjectiveUiCapabilityAmplification?.lanes ?? recommendedRoute.parallelExecutionLanes).map((lane) => ({
-        ownerKind: lane.ownerKind ?? "agent",
-        ownerAgent: lane.ownerAgent,
-        roleDisplayName: lane.roleDisplayName,
-        roleInstanceId: lane.laneId,
-        weapon: recommendedRoute.weapon,
-        dependency: lane.capabilityProvider?.id ?? recommendedRoute.dependency,
-        runtime,
-        os: osTarget,
-        verificationOwner: recommendedRoute.verificationOwner,
-        dependsOn: lane.dependsOn,
-        parallelGroup: lane.parallelGroup,
-        mergeOwner: "meta-conductor",
-        purpose: lane.purpose,
-        decisionImpact: lane.decisionImpact,
-      }))
-    : recommendedRoute ? [{
-        ownerAgent: recommendedRoute.owner,
-        roleDisplayName: recommendedRoute.owner?.replace(/^meta-/, "") ?? "unknown",
-        weapon: recommendedRoute.weapon,
-        dependency: recommendedRoute.dependency,
-        runtime,
-        os: osTarget,
-        verificationOwner: recommendedRoute.verificationOwner,
-        dependsOn: [],
-        mergeOwner: "meta-conductor",
-      }] : [],
+  workerTaskPacketDrafts,
   capabilityGapPacket,
   verificationPlan: {
     command: "npm run meta:route:validate",
@@ -2376,8 +4585,61 @@ const output = {
   requiredUserChoiceIfAny: userChoiceNeeded ? decisionCard : null,
 };
 
+// Publication must retain discovery evidence for the route it publishes. Only
+// select records from the discovered pools: a reference is never an inventory
+// record, and unknown references must not manufacture providers.
+function selectedProviderIdsForPublication(raw) {
+  const ids = new Set();
+  const add = (provider) => {
+    const id = typeof provider === "string" ? provider : provider?.id;
+    if (id) ids.add(id);
+  };
+  const addBinding = (binding) => {
+    if (!binding) return;
+    [binding.owner, binding.ownerAgent, binding.dependency, binding.capabilityProvider,
+      binding.runtimeTool, binding.providerMatch?.selectedProvider,
+      binding.capabilityBinding?.selectedProvider].forEach(add);
+    Object.values(binding.selectedCapabilityProviders ?? {}).forEach(add);
+    Object.values(binding.capabilityBinding?.selectedProviders ?? {}).forEach(add);
+  };
+  const route = raw.recommendedRoute;
+  addBinding(route);
+  (raw.workerTaskPacketDrafts ?? []).forEach(addBinding);
+  (route?.parallelExecutionLanes ?? []).forEach(addBinding);
+  (route?.subjectiveUiCapabilityAmplification?.lanes ?? []).forEach(addBinding);
+  (route?.subjectiveUiCapabilityAmplification?.capabilityTeamBlueprint?.rows ?? [])
+    .forEach((row) => add(row.selectedProvider));
+  return ids;
+}
+
+function boundedSelectedProviderEvidence(providers, selectedIds, limit) {
+  const selected = (provider) => selectedIds.has(typeof provider === "string" ? provider : provider?.id);
+  return [...providers.filter(selected), ...providers.filter((provider) => !selected(provider))].slice(0, limit);
+}
+
+function retainSelectedProviderEvidence(raw, selectedIds) {
+  const allProviders = uniqueById([
+    ...repoCanonicalCapabilityProviders, ...projectRuntimeCapabilityProviders,
+    ...localGlobalCapabilityProvidersAll, ...runtimeToolProviders,
+  ]);
+  return {
+    ...raw,
+    ownerDiscoveryPacket: {
+      ...raw.ownerDiscoveryPacket,
+      projectRuntimeAgents: selectRuntimeAgentEvidence(projectRuntimeAgentCandidates, 80, selectedIds),
+      repoCanonicalCapabilityProviders: boundedSelectedProviderEvidence(repoCanonicalCapabilityProviders, selectedIds, 60),
+      projectRuntimeCapabilityProviders: selectProjectRuntimeCapabilityEvidence(projectRuntimeCapabilityProviders, 80, selectedIds),
+      localGlobalCapabilityProviders: boundedSelectedProviderEvidence(localGlobalCapabilityProvidersAll, selectedIds, 120),
+      runtimeToolProviders: boundedSelectedProviderEvidence(runtimeToolProviders, selectedIds, 40),
+      candidateReusableCapabilityProviders: boundedSelectedProviderEvidence(allProviders, selectedIds, 100).map((provider) => provider.id),
+    },
+  };
+}
+
 function compactProvider(provider) {
   if (!provider || typeof provider !== "object") return provider;
+  // The local adapter re-reads these exact source hashes and the full contract.
+  if (provider.evidence?.source === "local_dependency_skill_contract") return provider;
   return Object.fromEntries(
     [
       ["id", provider.id],
@@ -2385,6 +4647,23 @@ function compactProvider(provider) {
       ["providerType", provider.providerType],
       ["source", provider.source],
       ["sourceRef", provider.sourceRef],
+      ["sourceClass", provider.sourceClass],
+      ["sourceRoot", provider.sourceRoot],
+      ["sourceKey", provider.sourceKey],
+      ["sourcePriority", provider.sourcePriority],
+      ["contentDigest", provider.contentDigest],
+      ["ownerBindingMode", provider.ownerBindingMode],
+      ["nativeAgentType", provider.nativeAgentType],
+      ["validCustomAgentDefinition", provider.validCustomAgentDefinition],
+      ["ownerContract", provider.ownerContract],
+      ["nativeIdentity", provider.nativeIdentity],
+      ["provenance", provider.provenance],
+      ["metadata", provider.metadata],
+      ["collision", provider.collision],
+      ["routeEligible", provider.routeEligible],
+      ["sourceSelectedExplicitly", provider.sourceSelectedExplicitly],
+      ["cacheEvidence", provider.cacheEvidence],
+      ["cacheEvidenceOnly", provider.cacheEvidenceOnly],
       ["platformId", provider.platformId],
       ["runtime", provider.runtime],
       ["score", provider.score],
@@ -2392,7 +4671,9 @@ function compactProvider(provider) {
       ["selected", provider.selected],
       ["reason", provider.reason],
       ["coverageStatus", provider.coverageStatus],
-    ].filter(([, value]) => value !== undefined)
+    ]
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, compactProviderMetadata(value)])
   );
 }
 
@@ -2476,7 +4757,7 @@ function countPacketArray(packet, field) {
   return Array.isArray(packet?.[field]) ? packet[field].length : 0;
 }
 
-function compactOwnerDiscoveryPacket(packet) {
+function compactOwnerDiscoveryPacket(packet, selectedIds) {
   if (!packet || typeof packet !== "object") return packet;
   return {
     discoveryPrinciple: packet.discoveryPrinciple,
@@ -2486,15 +4767,42 @@ function compactOwnerDiscoveryPacket(packet) {
     governanceStages: packet.governanceStages,
     evidenceRefs: (packet.evidenceRefs ?? []).slice(0, 80),
     repoCanonicalAgents: compactProviderCollection(packet.repoCanonicalAgents ?? [], 20),
+    projectRuntimeAgents: compactProviderCollection(selectRuntimeAgentEvidence(packet.projectRuntimeAgents ?? [], 30, selectedIds), 30),
+    localGlobalAgents: compactProviderCollection(packet.localGlobalAgents ?? [], 30),
+    dependencyAgentDiscovery: packet.dependencyAgentDiscovery ? {
+      sources: packet.dependencyAgentDiscovery.sources,
+      match: packet.dependencyAgentDiscovery.match,
+      agents: compactProviderCollection(packet.dependencyAgentDiscovery.agents.map(({ ownerContract, ...agent }) => agent), 40),
+    } : null,
     repoCanonicalSkillProviders: compactProviderCollection(
       packet.repoCanonicalSkillProviders ?? [],
       30,
     ),
-    projectRuntimeCapabilityProviders: compactProviderCollection(
-      packet.projectRuntimeCapabilityProviders ?? [],
+    projectRuntimeSkillProviders: compactProviderCollection(
+      packet.projectRuntimeSkillProviders ?? [],
       30,
     ),
+    localGlobalSkillProviders: compactProviderCollection(
+      packet.localGlobalSkillProviders ?? [],
+      40,
+    ),
+    repoCanonicalCapabilityProviders: compactProviderCollection(
+      packet.repoCanonicalCapabilityProviders ?? [],
+      40,
+    ),
+    projectRuntimeCapabilityProviders: compactProviderCollection(
+      selectProjectRuntimeCapabilityEvidence(packet.projectRuntimeCapabilityProviders ?? [], 30, selectedIds),
+      30,
+    ),
+    localGlobalCapabilityProviders: compactProviderCollection(
+      packet.localGlobalCapabilityProviders ?? [],
+      40,
+    ),
     runtimeToolProviders: compactProviderCollection(packet.runtimeToolProviders ?? [], 20),
+    capabilityProviderCoverage: packet.capabilityProviderCoverage,
+    projectProjectionPolicy: packet.projectProjectionPolicy,
+    globalInventoryFreshness: packet.globalInventoryFreshness,
+    capabilityDiscoverySearchLog: (packet.capabilityDiscoverySearchLog ?? []).slice(0, 80),
     candidateExistingExecutionOwners: (
       packet.candidateExistingExecutionOwners ?? []
     ).slice(0, 80),
@@ -2505,7 +4813,7 @@ function compactOwnerDiscoveryPacket(packet) {
     ),
     inventoryCounts: {
       repoCanonicalAgents: countPacketArray(packet, "repoCanonicalAgents"),
-      projectRuntimeAgents: countPacketArray(packet, "projectRuntimeAgents"),
+      projectRuntimeAgents: projectRuntimeAgentCandidates.length,
       localGlobalAgents: countPacketArray(packet, "localGlobalAgents"),
       repoCanonicalSkillProviders: countPacketArray(packet, "repoCanonicalSkillProviders"),
       projectRuntimeSkillProviders: countPacketArray(packet, "projectRuntimeSkillProviders"),
@@ -2518,10 +4826,10 @@ function compactOwnerDiscoveryPacket(packet) {
   };
 }
 
-function compactRouteOutput(raw) {
+function compactRouteOutput(raw, selectedIds) {
   return {
     ...raw,
-    ownerDiscoveryPacket: compactOwnerDiscoveryPacket(raw.ownerDiscoveryPacket),
+    ownerDiscoveryPacket: compactOwnerDiscoveryPacket(raw.ownerDiscoveryPacket, selectedIds),
     candidateOwners: (raw.candidateOwners ?? []).slice(0, 80),
     candidateWeapons: (raw.candidateWeapons ?? []).slice(0, 80),
     candidateDependencies: (raw.candidateDependencies ?? []).slice(0, 80),
@@ -2539,10 +4847,26 @@ function compactRouteOutput(raw) {
   };
 }
 
-const printableOutput =
-  process.argv.includes("--runner-compact") || process.argv.includes("--compact-json")
-    ? compactRouteOutput(output)
-    : output;
+const selectedPublicationProviderIds = selectedProviderIdsForPublication(output);
+const publicationOutput = retainSelectedProviderEvidence(output, selectedPublicationProviderIds);
+const outputForPublication =
+  json ||
+  process.argv.includes("--runner-compact") ||
+  process.argv.includes("--compact-json")
+    ? compactRouteOutput(publicationOutput, selectedPublicationProviderIds)
+    : publicationOutput;
+const printableOutput = sanitizeCapabilityPublicationValue(outputForPublication, {
+  repoRoot: repoPath("."),
+  homeDir: process.env.USERPROFILE ?? process.env.HOME ?? "",
+});
+// The existing runner transport must retain exact private source/target bindings
+// for re-verification. Normal route publication keeps the sanitized projection.
+if (process.argv.includes("--runner-compact") && localToolExecutionGate.applies) {
+  printableOutput.localToolExecutionGate = localToolExecutionGate;
+}
 
-if (json) console.log(JSON.stringify(printableOutput, null, 2));
+if (json) console.log(JSON.stringify(printableOutput));
 else console.log(JSON.stringify(printableOutput, null, 2));
+
+}
+await selectRouteMain();

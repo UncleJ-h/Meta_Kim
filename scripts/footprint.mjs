@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ENTRY_CLASSIFIER_HOOK_FILES } from "./runtime-hook-mapping.mjs";
 /**
  * Meta_Kim footprint scanner — shows everything Meta_Kim has written to the
  * current system, grouped by category A..I. Drives both `npm run meta:status`
@@ -35,6 +36,8 @@ import {
   resolveRuntimeHomeInfo,
   supportedTargetIds,
 } from "./meta-kim-sync-config.mjs";
+import { resolveMetaKimCliLanguage } from "./meta-kim-i18n.mjs";
+import { collectHookPromptDiagnostics, renderHookPromptDiagnostics } from "./hookprompt-diagnostics.mjs";
 
 // Intentionally NOT importing `isGlobalMetaKimManagedHookCommand` /
 // `isRepoMetaKimHookCommand` from claude-settings-merge.mjs.
@@ -81,6 +84,7 @@ function isGlobalMetaKimHookCommand(command) {
   );
 }
 const REPO_HOOK_FILES = new Set([
+  ...ENTRY_CLASSIFIER_HOOK_FILES,
   "activate-meta-theory-spine.mjs",
   "bash-readonly-whitelist.mjs",
   "enforce-agent-dispatch.mjs",
@@ -223,23 +227,7 @@ const MSG = {
 };
 
 function resolveLang(cliLang) {
-  const pick = (value) => {
-    if (!value) return null;
-    const v = String(value).toLowerCase();
-    if (v.startsWith("zh")) return "zh-CN";
-    if (v.startsWith("ja")) return "ja-JP";
-    if (v.startsWith("ko")) return "ko-KR";
-    if (v.startsWith("en")) return "en";
-    return null;
-  };
-  return (
-    pick(cliLang) ||
-    pick(process.env.METAKIM_LANG) ||
-    pick(process.env.LC_ALL) ||
-    pick(process.env.LC_MESSAGES) ||
-    pick(process.env.LANG) ||
-    "en"
-  );
+  return resolveMetaKimCliLanguage(cliLang).language;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -640,6 +628,7 @@ async function main() {
 
   const repoRoot = REPO_ROOT;
   const findings = collectFindings({ scope, repoRoot });
+  const hookPrompt = collectHookPromptDiagnostics({ scope, projectRoot: process.env.META_KIM_CALLER_CWD || process.cwd() });
 
   let manifest = null;
   if (scope === "both") {
@@ -668,12 +657,14 @@ async function main() {
           }
         : null,
       findings,
+      hookPrompt,
     };
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
 
   process.stdout.write(`${renderTree(findings, t, scope)}\n`);
+  process.stdout.write(`\n${renderHookPromptDiagnostics(hookPrompt, lang)}\n`);
   if (diff) {
     process.stdout.write(`\n${renderDiff(findings, manifest, t)}\n`);
   }

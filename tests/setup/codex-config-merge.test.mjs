@@ -1,15 +1,22 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  CODEX_DEFAULT_AGENT_MAX_THREADS,
+  CODEX_LEGACY_META_KIM_AGENT_MAX_THREADS,
   assertCodexConfigTomlMergeable,
   ensureCodexAppNativeControls,
   ensureCodexWindowsNotifyCompat,
   ensureCodexRequestUserInputFeature,
   hasCodexRequestUserInputFeature,
+  invertCodexConfigMutations,
   mergeCodexConfigAddOnly,
+  normalizeCodexConfigMutations,
+  planCodexAppNativeControls,
+  reconcileCodexConfigAfterUpstreamInstall,
+  removeMetaKimTemporaryProjectResidue,
 } from "../../scripts/codex-config-merge.mjs";
 
 function sectionBlock(configText, sectionName) {
@@ -26,7 +33,663 @@ function sectionBlock(configText, sectionName) {
   return lines.slice(start, end).join("\n");
 }
 
+function appMaterializationFixture(t, names = ["browser", "codex-app-tools"]) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "meta-kim-codex-app-materialization-"));
+  t.after(() => {
+    assert.ok(path.resolve(root).startsWith(`${path.resolve(os.tmpdir())}${path.sep}meta-kim-codex-app-materialization-`));
+    rmSync(root, { recursive: true, force: true });
+  });
+  const codexHome = path.join(root, ".codex");
+  const marketplaceRoot = path.join(codexHome, ".tmp", "bundled-marketplaces", "openai-bundled");
+  const keyPath = path.join(marketplaceRoot, ".materialization-key");
+  const marketplacePath = path.join(marketplaceRoot, ".agents", "plugins", "marketplace.json");
+  const plugins = names.map((name, index) => ({ name, version: `1.0.${index}` }));
+  const key = { version: 1, appVersion: "26.1016.51333", marketplaceName: "openai-bundled", plugins };
+  const marketplace = { name: "openai-bundled", plugins: plugins.map(({ name }) => ({ name, source: { source: "local", path: `./plugins/${name}` } })) };
+  mkdirSync(path.dirname(marketplacePath), { recursive: true });
+  writeFileSync(keyPath, JSON.stringify(key));
+  writeFileSync(marketplacePath, JSON.stringify(marketplace));
+  for (const plugin of plugins) {
+    const manifestPath = path.join(marketplaceRoot, "plugins", plugin.name, ".codex-plugin", "plugin.json");
+    mkdirSync(path.dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify(plugin));
+  }
+  const source = /^[A-Za-z]:\\/.test(marketplaceRoot) ? `\\\\?\\${marketplaceRoot}` : marketplaceRoot;
+  return { root, codexHome, marketplaceRoot, marketplacePath, keyPath, marketplace, key, source, options: { platformName: "win32", windowsAppsRoots: [], codexHome } };
+}
+
 describe("Codex config merge", () => {
+  test("Windows marketplace discovery follows declared install volumes without guessing a C drive", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const roots = ["D:\\Applications\\WindowsApps", "E:\\Native Applications\\WindowsApps"];
+    const installed = `${roots[1]}\\OpenAI.Codex_current\\app\\resources\\plugins\\openai-bundled`;
+    const visited = [];
+    const options = {
+      platformName: "win32",
+      codexHome: fixture.codexHome,
+      env: { ProgramFiles: "D:\\Applications", ProgramW6432: "E:\\Native Applications" },
+      readDirectory: (root) => {
+        visited.push(root);
+        return [{ name: "OpenAI.Codex_current", isDirectory: () => true }];
+      },
+      pathExists: (candidate) => candidate === installed,
+    };
+    const planned = planCodexAppNativeControls("", options);
+    assert.deepEqual(visited, roots);
+    assert.ok(sectionBlock(planned.text, "marketplaces.openai-bundled").includes(installed));
+
+    for (const env of [{}, { ProgramFiles: "relative", ProgramW6432: "E:relative" }]) {
+      visited.length = 0;
+      const fallback = planCodexAppNativeControls("", {
+        ...options, env, pathExists: () => true,
+      });
+      assert.deepEqual(visited, [], "missing or relative declarations must not scan an invented install root");
+      assert.ok(fallback.text.includes(fixture.source), "the current materialized source remains usable");
+    }
+
+    visited.length = 0;
+    const explicitRoot = "F:\\ExplicitApps";
+    planCodexAppNativeControls("", { ...options, windowsAppsRoots: [explicitRoot] });
+    assert.deepEqual(visited, [explicitRoot], "explicit discovery roots retain their existing priority");
+  });
+
+  test("App materialization: keeps a valid current source without a WindowsApps installation", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const sourceLine = `source = '${fixture.source}'`;
+    const input = `[marketplaces.openai-bundled]\nsource_type = "local"\n${sourceLine}\n`;
+    const planned = planCodexAppNativeControls(input, fixture.options);
+    assert.ok(planned.text.split(/\r?\n/u).includes(sourceLine), "existing valid App materialization must remain active");
+    assert.ok(!planned.mutations.some(({ locator }) => locator.table === "marketplaces.openai-bundled" && locator.key === "source"));
+    assert.ok(ensureCodexAppNativeControls(input, fixture.options).includes(sourceLine));
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+  });
+
+  test("App materialization: normal planner restores a source previously disabled by Meta_Kim", (t) => {
+    const fixture = appMaterializationFixture(t, ["browser", "codex-app-tools", "new-bundled-plugin"]);
+    const sourceLine = `source = '${fixture.source}'`;
+    const disabled = `# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: ${sourceLine}`;
+    const input = `[marketplaces.openai-bundled]\nsource_type = "local"\n${disabled}\n# keep this user note\n`;
+    const planned = planCodexAppNativeControls(input, fixture.options);
+    assert.ok(planned.text.split(/\r?\n/u).includes(sourceLine), "valid App materialization must be rediscovered from codexHome");
+    assert.doesNotMatch(planned.text, /Meta_Kim disabled conflicting \[marketplaces\.openai-bundled\]\.source/u);
+    assert.ok(planned.text.includes("# keep this user note"));
+    assert.equal(planCodexAppNativeControls(planned.text, fixture.options).text, planned.text);
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+  });
+
+  test("App materialization S1: valid fallback cannot replace an existing real user source", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const custom = path.join(fixture.root, "user-custom-marketplace");
+    mkdirSync(custom);
+    const customSource = custom.replace(/\\/gu, "/");
+    const sourceLine = `source = '${customSource}'`;
+    const input = `[marketplaces.openai-bundled]\nsource_type = "local"\n${sourceLine}\n# user owns this source\n`;
+    const planned = planCodexAppNativeControls(input, fixture.options);
+    assert.ok(planned.text.split(/\r?\n/u).includes(sourceLine), "new materialization discovery must preserve the active user source");
+    assert.ok(!planned.mutations.some(({ locator }) => locator.table === "marketplaces.openai-bundled" && locator.key === "source"));
+    assert.ok(ensureCodexAppNativeControls(input, fixture.options).split(/\r?\n/u).includes(sourceLine));
+    assert.equal(planCodexAppNativeControls(planned.text, fixture.options).text, planned.text);
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+  });
+
+  test("App materialization S2: another legal source in an owned comment is not authorization to restore", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const other = path.join(fixture.root, "user-changed-source").replace(/\\/gu, "/");
+    const disabled = `# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: source = '${other}'`;
+    const input = `[marketplaces.openai-bundled]\nsource_type = "local"\n${disabled}\n# preserve user note\n`;
+    assert.throws(() => planCodexAppNativeControls(input, fixture.options), /disabled source differs from App materialization/u);
+  });
+
+  test("App materialization S2: equivalent Windows slash case and extended prefix restore exactly", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const variants = [fixture.source, fixture.marketplaceRoot.replace(/\\/gu, "/").toUpperCase()];
+    if (/^[A-Za-z]:\\/u.test(fixture.marketplaceRoot)) variants.push(`//?/${fixture.marketplaceRoot.replace(/\\/gu, "/").toUpperCase()}/`);
+    for (const source of variants) {
+      const disabled = `# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: source = '${source}'`;
+      const input = `[marketplaces.openai-bundled]\nsource_type = "local"\n${disabled}\n# preserve user note\n`;
+      const planned = planCodexAppNativeControls(input, fixture.options);
+      assert.ok(planned.text.split(/\r?\n/u).includes(`source = '${fixture.source}'`));
+      assert.doesNotMatch(planned.text, /Meta_Kim disabled conflicting \[marketplaces\.openai-bundled\]\.source/u);
+      assert.equal(planCodexAppNativeControls(planned.text, fixture.options).text, planned.text);
+      assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+    }
+  });
+
+  test("App materialization S1: known-stale source permits fallback and explicit stable priority is unchanged", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const stale = path.join(fixture.root, "missing", "bundled-marketplaces", "openai-bundled").replace(/\\/gu, "/");
+    const input = `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = '${stale}'\n`;
+    const planned = planCodexAppNativeControls(input, fixture.options);
+    assert.ok(planned.text.split(/\r?\n/u).includes(`source = '${fixture.source}'`));
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+    const stable = path.join(fixture.root, "stable-source");
+    mkdirSync(stable);
+    const expected = /^[A-Za-z]:\\/u.test(stable) ? `\\\\?\\${stable}` : stable;
+    const existing = `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = '${fixture.root.replace(/\\/gu, "/")}'\n`;
+    const stablePlanned = planCodexAppNativeControls(existing, { ...fixture.options, bundledMarketplaceSource: stable });
+    assert.ok(stablePlanned.text.split(/\r?\n/u).includes(`source = '${expected}'`));
+  });
+
+  test("App materialization: invalid or escaping declarations are not discovered", (t) => {
+    const variants = [
+      ["missing key", fixture => rmSync(fixture.keyPath)],
+      ["malformed key", fixture => writeFileSync(fixture.keyPath, "{broken")],
+      ["unsupported key", fixture => writeFileSync(fixture.keyPath, JSON.stringify({ ...fixture.key, version: 2 }))],
+      ["wrong key name", fixture => writeFileSync(fixture.keyPath, JSON.stringify({ ...fixture.key, marketplaceName: "other" }))],
+      ["missing app version", fixture => writeFileSync(fixture.keyPath, JSON.stringify({ ...fixture.key, appVersion: "" }))],
+      ["oversized key", fixture => writeFileSync(fixture.keyPath, JSON.stringify({ ...fixture.key, padding: "x".repeat(70 * 1024) }))],
+      ["malformed marketplace", fixture => writeFileSync(fixture.marketplacePath, "{broken")],
+      ["wrong marketplace name", fixture => writeFileSync(fixture.marketplacePath, JSON.stringify({ ...fixture.marketplace, name: "other" }))],
+      ["missing key plugin", fixture => writeFileSync(fixture.keyPath, JSON.stringify({ ...fixture.key, plugins: fixture.key.plugins.slice(1) }))],
+      ["duplicate key plugin", fixture => writeFileSync(fixture.keyPath, JSON.stringify({ ...fixture.key, plugins: [fixture.key.plugins[0], fixture.key.plugins[0]] }))],
+      ["duplicate marketplace plugin", fixture => writeFileSync(fixture.marketplacePath, JSON.stringify({ ...fixture.marketplace, plugins: [fixture.marketplace.plugins[0], fixture.marketplace.plugins[0]] }))],
+      ["oversized marketplace", fixture => writeFileSync(fixture.marketplacePath, JSON.stringify({ ...fixture.marketplace, padding: "x".repeat(260 * 1024) }))],
+      ["malformed plugin manifest", fixture => writeFileSync(path.join(fixture.marketplaceRoot, "plugins", "browser", ".codex-plugin", "plugin.json"), "{broken")],
+      ["missing plugin manifest", fixture => rmSync(path.join(fixture.marketplaceRoot, "plugins", "browser", ".codex-plugin", "plugin.json"))],
+      ["mismatched version", fixture => writeFileSync(path.join(fixture.marketplaceRoot, "plugins", "browser", ".codex-plugin", "plugin.json"), JSON.stringify({ name: "browser", version: "changed" }))],
+      ["path traversal", fixture => { fixture.marketplace.plugins[0].source.path = "../outside"; writeFileSync(fixture.marketplacePath, JSON.stringify(fixture.marketplace)); }],
+      ["absolute plugin path", fixture => { fixture.marketplace.plugins[0].source.path = fixture.root; writeFileSync(fixture.marketplacePath, JSON.stringify(fixture.marketplace)); }],
+    ];
+    for (const [label, corrupt] of variants) {
+      const fixture = appMaterializationFixture(t);
+      corrupt(fixture);
+      const planned = planCodexAppNativeControls("", fixture.options);
+      assert.doesNotMatch(sectionBlock(planned.text, "marketplaces.openai-bundled"), /^source\s*=/mu, label);
+      assert.doesNotMatch(sectionBlock(ensureCodexAppNativeControls("", fixture.options), "marketplaces.openai-bundled"), /^source\s*=/mu, label);
+    }
+  });
+
+  test("App materialization: a linked plugin directory cannot escape the fixed source boundary", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const pluginRoot = path.join(fixture.marketplaceRoot, "plugins", "browser");
+    const escaped = path.join(fixture.root, "escaped-plugin");
+    assert.ok(path.resolve(pluginRoot).startsWith(`${path.resolve(fixture.root)}${path.sep}`));
+    assert.ok(path.resolve(escaped).startsWith(`${path.resolve(fixture.root)}${path.sep}`));
+    renameSync(pluginRoot, escaped);
+    try {
+      symlinkSync(escaped, pluginRoot, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error.code)) { t.skip("host does not permit fixture links"); return; }
+      throw error;
+    }
+    const planned = planCodexAppNativeControls("", fixture.options);
+    assert.doesNotMatch(sectionBlock(planned.text, "marketplaces.openai-bundled"), /^source\s*=/mu);
+  });
+
+  test("App materialization: ambiguous or malformed disabled comments are not silently rewritten", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const disabled = `# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: source = '${fixture.source}'`;
+    assert.throws(() => planCodexAppNativeControls(`[marketplaces.openai-bundled]\n${disabled}\n${disabled}\n`, fixture.options), /disabled comment is ambiguous/u);
+    assert.throws(() => planCodexAppNativeControls('[marketplaces.openai-bundled]\n# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: unrecognized text\n', fixture.options), /disabled comment drifted/u);
+  });
+
+  test("App materialization: existing unproven sources are preserved without becoming discovery authority", (t) => {
+    const fixture = appMaterializationFixture(t);
+    writeFileSync(fixture.keyPath, "not a valid App materialization key");
+    const sourceLine = `source = '${fixture.source}'`;
+    const input = `[marketplaces.openai-bundled]\nsource_type = "local"\n${sourceLine}\n`;
+    const planned = planCodexAppNativeControls(input, fixture.options);
+    assert.ok(planned.text.split(/\r?\n/u).includes(sourceLine), "an existing source is not known stale merely because validation is unavailable");
+    assert.ok(!planned.mutations.some(({ locator }) => locator.table === "marketplaces.openai-bundled" && locator.key === "source"));
+    const absent = planCodexAppNativeControls("", fixture.options);
+    assert.doesNotMatch(sectionBlock(absent.text, "marketplaces.openai-bundled"), /^source\s*=/mu);
+    const disabled = `# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: ${sourceLine}`;
+    const notRecovered = planCodexAppNativeControls(`[marketplaces.openai-bundled]\n${disabled}\n`, fixture.options);
+    assert.doesNotMatch(sectionBlock(notRecovered.text, "marketplaces.openai-bundled"), /^source\s*=/mu);
+    assert.ok(notRecovered.text.includes(disabled));
+  });
+
+  test("App materialization: explicit stable source retains priority and unrelated native configuration", (t) => {
+    const fixture = appMaterializationFixture(t);
+    const stable = path.join(fixture.root, "stable-openai-bundled");
+    mkdirSync(stable);
+    const expected = /^[A-Za-z]:\\/.test(stable) ? `\\\\?\\${stable}` : stable;
+    const input = '[mcp_servers.user_owned]\ncommand = "user-command"\n\n[agents]\nmax_threads = 3\nmax_depth = 2\n';
+    const planned = planCodexAppNativeControls(input, { ...fixture.options, bundledMarketplaceSource: stable });
+    assert.ok(planned.text.includes(`source = '${expected}'`));
+    assert.ok(planned.text.includes('command = "user-command"'));
+    assert.match(planned.text, /max_threads = 3/u);
+    assert.match(planned.text, /max_depth = 2/u);
+    assert.match(planned.text, /default_mode_request_user_input = true/u);
+    assert.match(planned.text, /js_repl = true/u);
+  });
+
+  test("resource-safe agent defaults migrate the legacy Meta_Kim value and preserve explicit overrides", () => {
+    const legacy = ensureCodexAppNativeControls(
+      `[agents]\nmax_threads = ${CODEX_LEGACY_META_KIM_AGENT_MAX_THREADS}\n`,
+      { platformName: "linux" },
+    );
+    assert.match(legacy, new RegExp(`max_threads = ${CODEX_DEFAULT_AGENT_MAX_THREADS}`));
+    assert.match(legacy, /max_depth = 1/);
+
+    const explicit = ensureCodexAppNativeControls(
+      "[agents]\nmax_threads = 3\nmax_depth = 2\n",
+      { platformName: "linux" },
+    );
+    assert.match(explicit, /max_threads = 3/);
+    assert.match(explicit, /max_depth = 2/);
+  });
+
+  test("upstream dependency output cannot resurrect deleted MCPs or temporary projects", () => {
+    const snapshot = [
+      'model = "gpt-5.6"',
+      "",
+      "[mcp_servers.user_owned]",
+      'command = "node"',
+      "",
+      '[projects.\'D:/User/RealProject\']',
+      'trust_level = "trusted"',
+      "",
+      '[projects.\'C:/Users/Kim/AppData/Local/Temp/meta-kim-context-ab-deadbeef/codex-workspace/trial\']',
+      'trust_level = "trusted"',
+      "",
+    ].join("\n");
+    const upstream = [
+      "[mcp_servers.github]",
+      'command = "npx"',
+      "",
+      "[mcp_servers.memory]",
+      'command = "npx"',
+      "",
+      "[mcp_servers.sequential-thinking]",
+      'command = "npx"',
+      "",
+      '[projects.\'C:/Temp/meta-kim-harness-fitness-lab-workspaces/run/trial\']',
+      'trust_level = "trusted"',
+      "",
+    ].join("\n");
+
+    const out = reconcileCodexConfigAfterUpstreamInstall(snapshot, upstream, {
+      platformName: "linux",
+    });
+
+    assert.match(out, /mcp_servers\.user_owned/);
+    assert.match(out, /D:\/User\/RealProject/);
+    assert.doesNotMatch(out, /mcp_servers\.(?:github|memory|sequential-thinking)/);
+    assert.doesNotMatch(out, /meta-kim-(?:context-ab|harness-fitness)/i);
+    assert.match(out, /max_threads = 2/);
+  });
+
+  test("an absent pre-install config never adopts an upstream-owned Codex config", () => {
+    const upstream = [
+      'approval_policy = "never"',
+      "[mcp_servers.github]",
+      'command = "npx"',
+      '[projects.\'C:/Temp/meta-kim-context-ab-deadbeef/workspace\']',
+      'trust_level = "trusted"',
+    ].join("\n");
+    const out = reconcileCodexConfigAfterUpstreamInstall(null, upstream, {
+      platformName: "linux",
+    });
+    assert.doesNotMatch(out, /approval_policy|mcp_servers|projects/);
+    assert.match(out, /\[agents\][\s\S]*max_threads = 2[\s\S]*max_depth = 1/);
+  });
+
+  test("temporary project residue cleanup is exact and preserves user projects", () => {
+    const input = [
+      '[projects.\'C:/Temp/meta-kim-harness-fitness-lab-workspaces/run/trial\']',
+      'trust_level = "trusted"',
+      "",
+      '[projects.\'D:/KimProject/Meta_Kim/.meta-kim/state/default/harness-fitness-lab/workspaces/run/trial\']',
+      'trust_level = "trusted"',
+      "",
+      '[projects.\'C:/Users/Kim/AppData/Local/Temp/meta-kim-p116-formal-workspaces/run/trial\']',
+      'trust_level = "trusted"',
+      "",
+      '[projects.\'D:/User/meta-kim-context-ab-not-a-temp-project\']',
+      'trust_level = "trusted"',
+      "",
+    ].join("\n");
+    const out = removeMetaKimTemporaryProjectResidue(input);
+    assert.doesNotMatch(out, /harness-fitness-lab-workspaces/);
+    assert.doesNotMatch(out, /\.meta-kim\/state\/default\/harness-fitness-lab/);
+    assert.doesNotMatch(out, /meta-kim-p116-formal-workspaces/);
+    assert.match(out, /D:\/User\/meta-kim-context-ab-not-a-temp-project/);
+  });
+
+  test("native-control planner leaves already-equal bytes untouched", () => {
+    const input = "\uFEFF[features]\r\ndefault_mode_request_user_input = true # keep\r\njs_repl = true\r\n\r\n[agents]\r\nmax_threads = 2\r\nmax_depth = 1\r\n";
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    assert.equal(planned.text, input);
+    assert.deepEqual(planned.mutations, []);
+  });
+
+  test("native-control mutations are actual deltas and invert exactly", () => {
+    const input = [
+      'model = "gpt-5.5"',
+      "",
+      "[features]",
+      "default_mode_request_user_input = false # preserve comment",
+      "js_repl = true",
+      "",
+    ].join("\r\n");
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    assert.equal(planned.mutations.length, 3);
+    assert.deepEqual(planned.mutations[0], {
+      kind: "replace",
+      locator: { table: "features", key: "default_mode_request_user_input" },
+      beforeFragment: "default_mode_request_user_input = false # preserve comment",
+      afterFragment: "default_mode_request_user_input = true # preserve comment",
+    });
+    assert.deepEqual(
+      planned.mutations.slice(1).map((mutation) => mutation.locator),
+      [
+        { table: "agents", key: "max_threads" },
+        { table: "agents", key: "max_depth" },
+      ],
+    );
+    assert.match(planned.text, /true # preserve comment\r\n/u);
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+  });
+
+  test("inverse preserves unrelated edits and rejects managed drift", () => {
+    const input = [
+      'model = "gpt-5.5"',
+      "[features]",
+      "default_mode_request_user_input = false",
+      "js_repl = true",
+      "",
+    ].join("\n");
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    const userEdited = planned.text.replace('model = "gpt-5.5"', 'model = "gpt-5.6"');
+    const inverted = invertCodexConfigMutations(userEdited, planned.mutations);
+    assert.match(inverted, /model = "gpt-5\.6"/u);
+    assert.match(inverted, /default_mode_request_user_input = false/u);
+
+    const drifted = planned.text.replace(
+      "default_mode_request_user_input = true",
+      "default_mode_request_user_input = false # user took ownership",
+    );
+    assert.throws(
+      () => invertCodexConfigMutations(drifted, planned.mutations),
+      /managed fragment drifted/u,
+    );
+  });
+
+  test("inverse keeps a newly added table header when user content makes removal ambiguous", () => {
+    const input = 'model = "gpt-5.5"\n';
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    const withUserSetting = planned.text.replace(
+      "js_repl = true",
+      "js_repl = true\nuser_feature = true",
+    );
+    const inverted = invertCodexConfigMutations(withUserSetting, planned.mutations);
+    assert.match(inverted, /\[features\]/u);
+    assert.match(inverted, /user_feature = true/u);
+    assert.doesNotMatch(inverted, /default_mode_request_user_input|js_repl/u);
+  });
+
+  test("mutation normalization compresses a contiguous locator chain", () => {
+    const inserted = {
+      kind: "insert",
+      locator: { table: "features", key: "js_repl" },
+      beforeFragment: "",
+      afterFragment: "js_repl = true\n",
+    };
+    const replaced = {
+      kind: "replace",
+      locator: { table: "features", key: "js_repl" },
+      beforeFragment: "js_repl = true",
+      afterFragment: "js_repl = false",
+    };
+    assert.deepEqual(normalizeCodexConfigMutations([inserted, replaced]), [{
+      ...inserted,
+      afterFragment: "js_repl = false\n",
+    }]);
+  });
+
+  test("mutation normalization treats an exact host-restored replay as one ownership layer", () => {
+    const replayed = {
+      kind: "replace",
+      locator: { table: "features", key: "js_repl" },
+      beforeFragment: "js_repl = false",
+      afterFragment: "js_repl = true",
+    };
+    assert.deepEqual(
+      normalizeCodexConfigMutations([replayed, structuredClone(replayed)]),
+      [replayed],
+    );
+    assert.throws(
+      () => normalizeCodexConfigMutations([
+        replayed,
+        { ...replayed, afterFragment: "js_repl = false # changed" },
+      ]),
+      /Non-contiguous Codex config mutation chain/u,
+    );
+  });
+
+  test("mutation normalization rebases a regenerated host value only when the managed result is unchanged", () => {
+    const previous = {
+      kind: "replace",
+      locator: { table: "marketplaces.openai-bundled", key: "source" },
+      beforeFragment: "source = 'host-a'",
+      afterFragment: "# disabled source",
+    };
+    const rebased = {
+      ...previous,
+      beforeFragment: "source = 'host-b'",
+    };
+    assert.deepEqual(
+      normalizeCodexConfigMutations([previous, rebased]),
+      [rebased],
+    );
+    assert.throws(
+      () => normalizeCodexConfigMutations([
+        previous,
+        { ...rebased, afterFragment: "# different managed result" },
+      ]),
+      /Non-contiguous Codex config mutation chain/u,
+    );
+  });
+
+  test("mutation normalization rebases onto a host-deleted locator instead of failing the journal", () => {
+    // Codex can regenerate config.toml and drop a whole managed table, so the
+    // next sync plans a fresh insert where the journal recorded a replace. With
+    // no chain rule for that pair the manifest flush throws and global sync
+    // cannot close even though hooks, skills, and commands were already written.
+    const previous = {
+      kind: "replace",
+      locator: { table: "features", key: "js_repl" },
+      beforeFragment: "js_repl = false",
+      afterFragment: "js_repl = true",
+    };
+    const reinserted = {
+      kind: "insert",
+      locator: { table: "features", key: "js_repl" },
+      beforeFragment: "",
+      afterFragment: '\n[features]\njs_repl = true\n',
+    };
+    assert.deepEqual(normalizeCodexConfigMutations([previous, reinserted]), [reinserted]);
+
+    // Rebasing is the only reversible choice: uninstall has to restore what the
+    // host actually holds, and the stale replace would write back a key the
+    // host itself deleted.
+    const written = 'model = "gpt-5"\n\n[features]\njs_repl = true\n';
+    const restored = invertCodexConfigMutations(written, [previous, reinserted]);
+    assert.ok(
+      !/js_repl/u.test(restored),
+      `uninstall must not leave a host-deleted key behind: ${JSON.stringify(restored)}`,
+    );
+    assert.match(restored, /model = "gpt-5"/u);
+  });
+
+  test("Windows planner journals notify marketplace and MCP semantic changes", () => {
+    const source = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_test\\app\\resources\\plugins\\openai-bundled";
+    const input = [
+      "notify = [",
+      '  "terminal-notifier",',
+      '  "done"',
+      "]",
+      "",
+      "[features]",
+      "default_mode_request_user_input = false",
+      "js_repl = true",
+      "",
+      "[marketplaces.openai-bundled]",
+      'source_type = "local"',
+      "source = 'C:\\Users\\Kim\\.codex\\.tmp\\bundled-marketplaces\\openai-bundled'",
+      "",
+      "[mcp_servers.exa]",
+      'url = "https://mcp.example"',
+      'command = "npx"',
+      "",
+    ].join("\r\n");
+    const planned = planCodexAppNativeControls(input, {
+      platformName: "win32",
+      bundledMarketplaceSource: source,
+      pathExists: (candidate) => candidate.replace(/^\\\\\?\\/u, "") === source,
+    });
+    const identities = planned.mutations.map(({ locator }) => `${locator.table}.${locator.key}`);
+    assert.ok(identities.includes(".notify"));
+    assert.ok(identities.includes("marketplaces.openai-bundled.source"));
+    assert.ok(identities.includes("mcp_servers.exa.url"));
+    assert.doesNotMatch(planned.text, /^\s*url\s*=/mu);
+    assert.doesNotMatch(planned.text, /terminal-notifier/u);
+    assert.ok(planned.text.includes(`source = '\\\\?\\${source}'`));
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+  });
+
+  test("inverse fails closed when a managed table becomes duplicated", () => {
+    const input = "[features]\ndefault_mode_request_user_input = false\njs_repl = true\n";
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    const duplicated = `${planned.text}\n[features]\nuser = true\n`;
+    assert.throws(
+      () => invertCodexConfigMutations(duplicated, planned.mutations),
+      /managed table is missing or ambiguous/u,
+    );
+  });
+
+  test("inverse fails closed when a managed table key becomes duplicated", () => {
+    const input = "[features]\ndefault_mode_request_user_input = false\njs_repl = true\n";
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    const duplicated = planned.text.replace(
+      "js_repl = true",
+      "js_repl = true\ndefault_mode_request_user_input = true",
+    );
+    assert.throws(
+      () => invertCodexConfigMutations(duplicated, planned.mutations),
+      /managed locator is ambiguous/u,
+    );
+  });
+
+  test("inverse fails closed when root notify becomes duplicated", () => {
+    const input = [
+      "notify = [",
+      '  "terminal-notifier",',
+      '  "done"',
+      "]",
+      "",
+      "[features]",
+      "default_mode_request_user_input = true",
+      "js_repl = true",
+      "",
+    ].join("\n");
+    const planned = planCodexAppNativeControls(input, { platformName: "win32" });
+    const duplicated = planned.text.replace(
+      "\n\n[features]",
+      '\nnotify = ["powershell.exe"]\n\n[features]',
+    );
+    assert.throws(
+      () => invertCodexConfigMutations(duplicated, planned.mutations),
+      /managed locator is ambiguous: \.notify/u,
+    );
+  });
+
+  test("inverse refuses a recreated active key for a disabled conflict", () => {
+    const input = [
+      "[features]",
+      "default_mode_request_user_input = true",
+      "js_repl = true",
+      "",
+      "[mcp_servers.exa]",
+      'url = "https://mcp.example"',
+      'command = "npx"',
+      "",
+    ].join("\n");
+    const planned = planCodexAppNativeControls(input, { platformName: "linux" });
+    const recreated = planned.text.replace(
+      '# Meta_Kim disabled conflicting [mcp_servers.exa].url: url = "https://mcp.example"',
+      '# Meta_Kim disabled conflicting [mcp_servers.exa].url: url = "https://mcp.example"\nurl = "https://user.example"',
+    );
+    assert.throws(
+      () => invertCodexConfigMutations(recreated, planned.mutations),
+      /disabled locator was recreated or duplicated/u,
+    );
+  });
+
+  test("planner collapses an adjacent stale disabled comment when its active key reappears", () => {
+    const source = String.raw`\\?\C:\Users\Kim\.codex\.tmp\bundled-marketplaces\openai-bundled`;
+    const disabled = `# Meta_Kim disabled conflicting [marketplaces.openai-bundled].source: source = '${source}'`;
+    const input = [
+      "[features]",
+      "default_mode_request_user_input = true",
+      "js_repl = true",
+      "",
+      "[marketplaces.openai-bundled]",
+      'source_type = "local"',
+      `source = '${source}'`,
+      disabled,
+      "",
+    ].join("\n");
+    const planned = planCodexAppNativeControls(input, {
+      platformName: "win32",
+      windowsAppsRoots: [],
+      codexHome: String.raw`C:\Users\Kim\.codex`,
+      pathExists: () => false,
+    });
+
+    assert.equal(planned.text.split(disabled).length - 1, 1);
+    assert.doesNotMatch(planned.text, new RegExp(`^source =`, "mu"));
+    assert.equal(invertCodexConfigMutations(planned.text, planned.mutations), input);
+  });
+
+  test("planner closes prior ownership when Codex regenerates a new valid bundled source", () => {
+    const staleSource = String.raw`\\?\C:\Users\Kim\.codex\.tmp\bundled-marketplaces\openai-bundled`;
+    const currentSource = String.raw`C:\Program Files\WindowsApps\OpenAI.Codex_current\app\resources\plugins\openai-bundled`;
+    const original = [
+      "[marketplaces.openai-bundled]",
+      'source_type = "local"',
+      `source = '${staleSource}'`,
+      "",
+    ].join("\n");
+    const first = planCodexAppNativeControls(original, {
+      platformName: "win32",
+      windowsAppsRoots: [],
+      pathExists: () => false,
+    });
+    const disabled = first.mutations.find(({ locator }) =>
+      locator.table === "marketplaces.openai-bundled" && locator.key === "source"
+    )?.afterFragment;
+    assert.ok(disabled);
+
+    const hostRegenerated = first.text.replace(
+      disabled,
+      `source = '\\\\?\\${currentSource}'\n${disabled}`,
+    );
+    const second = planCodexAppNativeControls(hostRegenerated, {
+      platformName: "win32",
+      bundledMarketplaceSource: currentSource,
+      pathExists: (candidate) => candidate.replace(/^\\\\\?\\/u, "") === currentSource,
+    });
+
+    assert.ok(second.text.includes(`source = '\\\\?\\${currentSource}'`));
+    assert.doesNotMatch(second.text, /Meta_Kim disabled conflicting \[marketplaces\.openai-bundled\]\.source/u);
+    assert.deepEqual(
+      normalizeCodexConfigMutations([...first.mutations, ...second.mutations]),
+      first.mutations.filter(({ locator }) =>
+        !(locator.table === "marketplaces.openai-bundled" && locator.key === "source")
+      ),
+    );
+  });
+
+  test("planner fails closed on a managed multiline scalar it cannot replace", () => {
+    const input = "[features]\njs_repl = [\n  false\n]\n";
+    assert.throws(
+      () => planCodexAppNativeControls(input, { platformName: "linux" }),
+      /cannot safely locate multiline/u,
+    );
+  });
+
   test("adds features section when missing", () => {
     const out = ensureCodexRequestUserInputFeature('model = "gpt-5.5"\n');
     assert.match(out, /\[features\]\ndefault_mode_request_user_input = true/);
@@ -146,34 +809,104 @@ describe("Codex config merge", () => {
     assert.equal(out, input);
   });
 
-  test("prefers Codex computer-use helper notify on Windows when present", () => {
-    const codexHome = mkdtempSync(path.join(os.tmpdir(), "meta-kim-codex-home-"));
-    const helperPath = path.join(
+  test("Windows helper discovery uses Windows paths and the newest available directory", () => {
+    const codexHome = String.raw`C:\Users\Kim\.codex`;
+    const helperRoot = path.win32.join(
       codexHome,
       "plugins",
       "cache",
       "openai-bundled",
       "computer-use",
-      "26.602.71036",
-      "node_modules",
-      "@oai",
-      "sky",
-      "bin",
-      "windows",
-      "codex-computer-use.exe",
     );
-    mkdirSync(path.dirname(helperPath), { recursive: true });
+    const helperFor = (version) => path.win32.join(
+      helperRoot, version, "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe",
+    );
+    const helperPath = helperFor("26.602.10");
+    const readCalls = [];
+    const checkedPaths = [];
     const input = 'notify = ["terminal-notifier", "-message", "done"]\n';
-
     const out = ensureCodexWindowsNotifyCompat(input, "win32", {
       codexHome,
-      pathExists: (candidate) => candidate === helperPath,
+      readDirectory: (...args) => {
+        readCalls.push(args);
+        return [
+          { name: "26.602.9", isDirectory: () => true },
+          { name: "26.602.20", isDirectory: () => true },
+          { name: "26.602.99", isDirectory: () => false },
+          { name: "26.602.10", isDirectory: () => true },
+        ];
+      },
+      pathExists: (candidate) => {
+        checkedPaths.push(candidate);
+        return candidate === helperPath;
+      },
     });
 
+    assert.deepEqual(readCalls, [[helperRoot, { withFileTypes: true }]]);
+    assert.deepEqual(checkedPaths, [helperFor("26.602.20"), helperPath]);
     assert.doesNotMatch(out, /terminal-notifier/);
-    assert.match(out, /codex-computer-use\.exe/);
+    assert.ok(out.includes(JSON.stringify(helperPath)));
     assert.match(out, /"turn-ended"/);
     assert.doesNotMatch(out, /\$input \| Out-Null/);
+  });
+
+  test("Windows helper discovery reads a real cache fixture on the current host", () => {
+    const nativeHome = mkdtempSync(path.join(os.tmpdir(), "meta-kim-codex-home-"));
+    // Keep Windows lexical paths separate from the host filesystem. Windows CI
+    // exercises the default fs dependencies without the POSIX fixture adapter.
+    const codexHome = process.platform === "win32" ? nativeHome : String.raw`C:\Users\Kim\.codex`;
+    const helperSegments = [
+      "plugins", "cache", "openai-bundled", "computer-use", "26.602.71036",
+      "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe",
+    ];
+    const helperPath = path.win32.join(codexHome, ...helperSegments);
+    const nativeHelper = path.join(nativeHome, ...helperSegments);
+    const hostPath = (candidate) => {
+      const relative = path.win32.relative(codexHome, candidate);
+      assert.equal(path.win32.isAbsolute(relative), false);
+      assert.equal(relative.split("\\").includes(".."), false);
+      return path.join(nativeHome, ...relative.split("\\"));
+    };
+    const options = {
+      codexHome,
+      ...(process.platform === "win32" ? {} : {
+        readDirectory: (candidate, readOptions) => readdirSync(hostPath(candidate), readOptions),
+        pathExists: (candidate) => existsSync(hostPath(candidate)),
+      }),
+    };
+    try {
+      mkdirSync(path.dirname(nativeHelper), { recursive: true });
+      writeFileSync(nativeHelper, "fixture-helper");
+      const input = 'notify = ["terminal-notifier", "-message", "done"]\n';
+      const out = ensureCodexWindowsNotifyCompat(input, "win32", options);
+      assert.ok(out.includes(JSON.stringify(helperPath)));
+      assert.match(out, /"turn-ended"/);
+      assert.doesNotMatch(out, /terminal-notifier|\$input \| Out-Null/);
+
+      rmSync(nativeHelper);
+      const missing = ensureCodexWindowsNotifyCompat(input, "win32", options);
+      assert.match(missing, /\$input \| Out-Null/);
+      assert.doesNotMatch(missing, /codex-computer-use\.exe/);
+    } finally {
+      rmSync(nativeHome, { recursive: true, force: true });
+    }
+  });
+
+  test("Windows helper discovery falls back on read failure and never probes for other platforms", () => {
+    const input = 'notify = ["terminal-notifier", "-message", "done"]\n';
+    let reads = 0;
+    const options = {
+      codexHome: String.raw`C:\Users\Kim\.codex`,
+      readDirectory: () => { reads += 1; throw new Error("unreadable fixture cache"); },
+      pathExists: () => assert.fail("must not probe candidates when cache enumeration fails"),
+    };
+    const out = ensureCodexWindowsNotifyCompat(input, "win32", options);
+    assert.match(out, /\$input \| Out-Null/);
+    assert.equal(reads, 1);
+    for (const platformName of ["linux", "darwin"]) {
+      assert.equal(ensureCodexWindowsNotifyCompat(input, platformName, options), input);
+    }
+    assert.equal(reads, 1);
   });
 
   test("restores Windows Codex App native controls after ECC config overwrite", () => {
@@ -205,7 +938,7 @@ describe("Codex config merge", () => {
       "[agents.frontend]",
       'model = "gpt-5.4"',
       "",
-      '[projects."D:/KimProject/Meta_Kim"]',
+      '[projects."D:/workspace/Meta_Kim"]',
       'trust_level = "trusted"',
       "",
       "[windows]",
@@ -244,7 +977,7 @@ describe("Codex config merge", () => {
     assert.match(out, /\[mcp_servers\.github\]\ncommand = "npx"/);
     assert.match(out, /\[hooks\]\nstop = "scripts\/stop\.mjs"/);
     assert.match(out, /\[agents\.frontend\]\nmodel = "gpt-5.4"/);
-    assert.match(out, /\[projects\."D:\/KimProject\/Meta_Kim"\]\ntrust_level = "trusted"/);
+    assert.match(out, /\[projects\."D:\/workspace\/Meta_Kim"\]\ntrust_level = "trusted"/);
   });
 
   test("does not add Windows-only App plugin blocks on non-Windows platforms", () => {

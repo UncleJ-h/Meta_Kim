@@ -1,6 +1,18 @@
 # Codex Runtime Adapter
 
-In Codex, `/meta-theory` is user-visible authorization to use available subagent/delegation tools when the task has multiple independent worker lanes. A prompt that explicitly asks for subagents, parallel agents, one-agent-per-point review, or `/meta-theory` may satisfy Codex's explicit subagent trigger; a hidden governance-only inference does not. Only claim delegation when a real tool was called successfully.
+## Ordinary entry: current host produces C/F/T
+
+The current Codex AI is the producer. Node can read bound records and run the existing execution adapter; it cannot call the top-level native question tool on the host's behalf. Keep record/tool exchanges in the task's owned private directory. The user continues speaking ordinary language.
+
+1. Call `runMetaTheoryGovernedExecution({task, ...existingOptions})`, or `npm run meta:theory:run -- --task "..."`. Read the returned JSON artifact. With no host preparation it returns `needs_thinking`/Critical, not a formal plan. Read applicable context and settled answers, then supply `criticalInput` (`--critical-input <owned-file>`) using `taskHash`, current `intentDigest`, `realIntent`, `successCriteria`, `nonGoals`, `blockingUnknowns` decision IDs and actual `evidenceRefs`. Clear, bounded work may have no new questions; explain that judgment in its evidence rather than asking for ritual approval.
+2. Put important unresolved choices in the existing `requirementsDiscoveryInput.decisionItems` (`--requirements-discovery-input <owned-file>`), with question/dependency/impact/evidence and explicit `{label,tradeoff,value}` options. Unknown facts go to the host's Fetch work; routine decisions are handled by the host. `needs_input` returns the current `preDecisionOptionFrame` and `hostInvocationRequestPacket.pendingDecisions`, without workers or DAG. Do not start production from this return.
+3. For the Desktop async shape already supported by the actual official reader, use the existing `scripts/codex-desktop-human-milestone.mjs` with `--purpose plan-challenge`. Its owned `--input` contains the pending `artifactPath`, `questionId`, current `hostContext`, actual surface `activeSchema` and `expiresAt`. Use the returned question's `binding.bindingDigest` for `--host-binding-digest`, plus the current host connection and owned exchange/state paths. Preserve the official `read_thread` baseline and its unchanged call arguments/return; supply them through the existing `--reader-*` options for `prepare`. Only fresh `mayAsk=true` permits this host to call its actual exposed native question tool with the prepared payload. Read the official tool result and call `record-presented`; on a later reply call `observe`, then `consume`. Replays only observe/consume. Never pass the milestone's accept/revise mapping for an arbitrary direction choice.
+4. The actual ask and official reader run on the host tools surface; the CLI just consumes that retained chain. Files, call refs, flags and a local receipt do not authenticate a human. A synchronous question return is not automatically the Desktop async wire shape, nor an app-server callback. If the current host lacks a supported actual question/reader path, preserve `needs_input` and the concrete unavailable port; do not start another server or fabricate an answer. Keep old milestone producer guards unchanged.
+5. Resume the ordinary API with `planChallengeHostInput` (`--plan-challenge-host-input <owned-file>`) referencing the same `artifactPath`, `questionId`, `exchangeRoot`, `profileRoot` and `hostConnectionRef`. The runner rereads the bound observed/CAS state; it does not trust a supplied selected value. Use `previousPlanChallengeRunId` (`--previous-plan-challenge-run <runId>`) for the existing preparation. Read its resulting intent digest/settled decisions and explicit old-choice-to-new-intent link before producing the next host record. A changed goal/constraint needs its own Critical understanding; answering one option does not authorize that change or execution.
+6. After clear Critical, consume the returned `fetchPacket.capabilityDiscovery` inventory and actual source contracts. Produce `thinkingInput` (`--thinking-input <owned-file>`) bound to the current `taskHash`, `intentDigest`, `requirementsDigest`, `evidenceRefs`, `intentPacket`, actual `fetchPacket.capabilityDiscovery.inventoryDigest`, and existing `thinkingPacket` fields: `designFrame`, `consideredLanes`, `omittedLanesWithReason`, `workerTaskPackets`. Each work order uses the existing `roleInstanceId`, `roleDisplayName`, `todayTask`, `output`, `capabilityNeed`, `scopeFiles` (empty for non-file work), actual `shardScope`, `nonGoals`, `toolRequirements`, `acceptanceCriterionIds`, `verifySteps`, `qualityBar`, `referenceDirection`, `dependsOn`, `handoffTarget`, selection reason and `selectedCapabilityProviders`. Copy the exact chosen `agent`, `verificationAgent` and weapon/provider inventory records, including their `inventoryRef` and source/ref/hash; do not invent names or native/permission/ready claims. The existing DAG `effectClass` states the requested boundary, not authority. Explicit methods additionally retain `methodCapabilityId` and contract-shaped `methodInputs`; ordinary materials/Skills are not Agent-method requests. Use the actual prior Fetch preparation as `previousPlanChallengeRunId`.
+7. Node verifies those current bindings and forms the actual work orders, without a second keyword/role-name choice. Current host native dispatch/authorization, supported executor, claims, budget and human gates still control execution. Existing legitimate execution resume reuses its stored plan and completed results; preparation does not rewrite that run. Record source-only, actual host calls and project outcome separately. Neither a supplied Thinking packet nor planned-only output proves native work or user acceptance.
+
+In Codex, `meta-theory` / governed Meta_Kim activation is user-visible authorization for safe automatic fan-out when Thinking proves separable lanes and the host exposes a callable subagent surface. Direct subagent/delegation/parallel-agent wording, one-agent-per-point review, and structured governance-chain requests such as `Critical Thinking -> Fetch -> Deep Thinking -> Review` are strong activation examples, not exclusive gates. A native choice surface is required for branch-changing route, scope, risk, or acceptance choices; it is not required solely to permit safe parallelism after meta-theory activation. Only claim delegation when a real tool was called successfully.
 
 Codex must not self-degrade to "single-thread dispatcher" merely because it is running in Codex App. If `spawn_agent` / subagent tooling is exposed, Thinking may select it after Fetch evidence and the dispatcher must show which temporary workers were spawned. If the tool is absent or fails, record `subagentCapabilityStatus=unavailable` and a concrete `degradationReason`.
 
@@ -13,7 +25,11 @@ Codex Execution is capability-wide, not agent-only. When Thinking selects a capa
 - runtime tools such as `apply_patch`, browser, Playwright, data widgets, or other loaded tool surfaces
 - prompt/rule providers as `applied`, not as external tool calls
 
-`runtimeInvocationPlanPacket` records the selected executable families, the real invocation evidence, and missing families. `hostInvocationRequestPacket` is the adapter handoff: for each missing selected family it states the Codex action to run, the worker task refs if relevant, and the exact trusted evidence fields to return. The Node runner must not treat the request as proof; only the active Codex host or a trusted host adapter can execute `spawn_agent`, skill activation, MCP calls, slash commands, or runtime tools and then pass `hostInvocationEvidenceTrusted=true` with fresh evidence. `capabilityInvocationTruthPacket.realInvocationCoverage.status` must be `pass` for product-experience pass. `selected_not_invoked` is valid truth, but it is never completion evidence.
+The normal chat surface must render one compact capability ledger from the same strict truth rows used by the run artifact. At minimum, show Agent/subagent, Skill, Command/script, MCP, runtime tool, and Hook with: selected provider, global/project source, whether it was selected, its actual invocation state, and the next required action. Do not collapse this ledger into an Agent-only sentence. A Codex task badge or `followup_task` update remains a run-scoped host label; map it back to the professional owner and source, and never present “智能体已更新” as if a durable Agent definition changed.
+
+Every governed Codex route must also produce a `projectCustomizationPacket` before durable capability creation or upgrade. Its decision is exactly one of `use_global_directly`, `upgrade_existing_owner`, or `create_project_local_capability`, with reason, target path, verification, and rollback. Global reuse wins when the existing contract fits. A project-local Agent, Skill, Command, MCP merge, Hook, or runtime tool is created only after a project-specific gap is proved and the Type B lifecycle approves the native project target. The packet is a decision record, not proof that a file was written, discovered by Codex, or invoked.
+
+`runtimeInvocationPlanPacket` records selected executable bindings, externally observed evidence, and missing bindings. `hostInvocationRequestPacket` is the adapter handoff for missing work. The Node runner must not treat a request, readiness probe, fixture, self-test, or caller-supplied trust flag as proof. Only an external Codex event observer may promote a binding after matching the host call, result, run/session/event ids, provider/task binding, timestamp, and observation artifact hash. `capabilityInvocationTruthPacket.realInvocationCoverage.status` must be `pass` for product-experience pass. `selected_not_invoked` is valid truth, but it is never completion evidence.
 
 ## Honest Subagent Contract
 
@@ -23,16 +39,42 @@ If `spawn_agent` / `Agent` equivalent is unavailable:
 - record the blocked reason
 - continue only for read-only degraded analysis or ask before degraded executable work
 
-If `spawn_agent` is available and the user explicitly authorized subagents:
+If `spawn_agent` is available and meta-theory / governed Meta_Kim activation authorized safe fan-out:
 
 - use it for independent, bounded worker or review lanes after Thinking creates `workerTaskPackets`
+- treat explicit `meta-theory`, `/meta-theory`, `元理论`, and natural-language governed execution entries as fan-out authorization when the task has separable safe lanes
+- treat direct "dispatch / parallel / multiple agents" corrections as explicit fan-out authorization; enter owner discovery and build multiple agent-owned worker packets when the task has separable scopes
+- treat structured governance-chain requests such as `Critical Thinking -> Fetch -> Deep Thinking -> Review` as meta-theory activation examples; they do not need an extra "dispatch" word before Thinking can select parallel lanes
+- bind explicit fan-out worker lanes to reusable Codex global or project owners first; skills, commands, MCP tools, and runtime tools are loadout/dependency bindings, not replacements for the lane owner
+- before the live call, show or record `ownerAgent` + owner source + capability/loadout + the native `spawn_agent` task plan; the run-scoped task is an invocation of that owner contract, while `task_name` remains only a lane identifier
+- do not use "created N agents", "派 agent", or host nickname lists as the complete user-visible explanation; if Codex UI shows a temporary nickname, map it back to `runtimeInstanceAlias` and the selected `ownerAgent` in the next dispatch/status notice
 - keep each worker's write scope disjoint when it edits files
-- size fan-out from Codex host/config capacity such as `[agents].max_threads`, current runtime capacity, task DAG, and collision boundaries instead of a fixed Meta_Kim cap
+- size fan-out from Codex host/config capacity such as `[agents].max_threads`, current runtime capacity, task DAG, and collision boundaries; Meta_Kim installs a visible resource-safe default of `2`, preserves explicit user overrides, and adds no hidden fixed cap
 - show the dispatch board before or alongside dispatch
 - distinguish temporary `runtimeInstanceAlias` from durable `roleDisplayName` and `ownerAgent`
 - do not describe the temporary subagent prompt as the created/iterated project agent
 
-`agent-teams-playbook` is the Codex fan-out adapter after Thinking, not a substitute for Thinking. Select it when there are 2+ executable `workerTaskPackets` with proven DAG, collision, workspace-isolation, and external-write safety; record `not_required` for single-lane work and partial/degraded for unsafe fan-out. A selected playbook provider is `agent_teams_playbook=selected_not_invoked` until a live Skill/Agent Team/spawn_agent call is actually attached as host evidence. Meta_Kim must not set its own maximum lower than Codex host/config capacity.
+Codex App lifecycle presentation rule: normal chat uses the actual native results from the current turn, not a runner evidence-injection API. If every `spawn_agent`, `followup_task`, or equivalent Agent call returns successfully, say called/completed. If at least one call returns and at least one call fails, is missing, or is blocked, say called with partial failures; do not collapse that mixed outcome to unavailable. A zero-success current-turn tool result must say failed, denied, or blocked according to the host result. Reserve unavailable for a genuine zero-call capability boundary such as no provider or an unsupported host surface. The Node runner exposes no lifecycle trust flag or formatter shortcut and does not promote caller-authored failure observations. Its presentation logic may render failed/denied/blocked only when the strict truth input already contains verified `failedBindings`; otherwise an offline artifact stays pending. Public host-visible names and environment hints are diagnostic only. Users never supply CLI flags, session ids, event ids, or JSON evidence. Normal chat, Markdown, and panel surfaces describe the call result, whether the run record is linked, and that an optional additional independent review does not change the calls already made. They do not expose exact-binding/live-certification terminology, provider ids, or lane terminology; strict raw rows and binding coverage stay in the audit artifact/debug surface.
+
+Trust-surface distinction: removing lifecycle and assistant-presentation trust switches does not remove the internal exact-binding validator boundary. The governed runner exposes no `hostInvocationEvidenceTrusted` input and therefore cannot promote its own caller-authored evidence. Without a separate private observer/verifier, runner-side invocation evidence remains pending. `normalizeHostInvocationEvidence` may remain exported for focused fail-closed validation tests, but caller JSON and its `trusted` option cannot satisfy the private attestation check or mint called/completed/live-certified presentation. The optional external verifier separately checks immutable observer artifacts and exact run/session/event/provider/binding/result matching after the host run. Runner-side assistant-message input is diagnostic only and always remains `host_observation_required`; current-turn Codex chat visibility is direct host truth.
+
+Codex native `spawn_agent` plus the authoritative stage DAG is sufficient for fan-out after Thinking. `agent-teams-playbook` is optional and may be selected only when it improves orchestration; record `not_required` for single-lane work and `optional_adapter_not_selected` when native fan-out is sufficient. A selected provider is `agent_teams_playbook=selected_not_invoked` until a live Skill/Agent Team/`spawn_agent` call is attached as host evidence. Meta_Kim must not set its own maximum lower than Codex host/config capacity.
+
+Capability resolution stops when a qualified existing provider is found. Missing an exact Skill or declining an optional external Skill install does not make the route degraded when an existing owner plus native `spawn_agent` can execute the lane. External discovery runs only for a proven local multi-provider gap; fallback/degraded labels require an actual host-surface, permission, or owner failure.
+
+## Codex Adaptive spawn_agent Owner Contract
+
+Inspect the active top-level `spawn_agent` schema before building the request. Every request uses these base inputs:
+
+- `task_name`: a lowercase letters/digits/underscores lane identifier derived from `roleInstanceId` or `taskPacketId`; it is not the durable `ownerAgent`
+- `message`: the bounded worker work order, including `taskPacketId`, `ownerAgent`, owner source, capability/loadout, scope, output contract, collision boundary, and merge owner
+- `fork_turns`: the smallest sufficient context window; default to `none` when the bounded message is complete, and use `all` or a positive integer string only when the lane genuinely requires parent-turn context
+
+Use exactly one `ownerBindingMode`. Select `native_custom_agent` and pass `nativeAgentType` plus the schema-confirmed `agent_type` only when the owner is discovered from a validated Codex TOML definition whose declared `name` matches the selected owner. The TOML `name` is the native identity; the filename is only inventory provenance and must be normalized to that name or rejected for native binding. Schema exposure makes the native request possible; only a successful host result makes it invoked/completed. Otherwise select `run_scoped_owner_contract`, omit `nativeAgentType`/`agent_type`, and carry the professional owner in `message`. Markdown owners, `task_name`, nicknames, badges, and `runtimeInstanceAlias` never prove native owner loading. Do not pass unsupported fields or fall back to a legacy namespaced spawn API.
+
+Normal chat and the run panel must use one truth ledger for Agent/subagent, Skill, Command/script, MCP, runtime tool, and Hook. Each row preserves provider, global/project source, selected state, actual invocation state, and next action. Show `ownerAgent` and `runtimeInstanceAlias` separately; never let a host task label impersonate the professional owner.
+
+When native `spawn_agent` is available and the run is fan-out authorized through meta-theory / governed Meta_Kim activation, direct subagent/delegation/parallel-agent wording, a structured governance-chain request, or a completed native choice surface, the Codex main thread MUST spawn all independent workers (same `parallelGroup`) in one assistant turn — not one per turn. Per-turn serial spawning in authorized `fan_out_ready` state is fake parallelism. If the route is fan-out eligible but runtime authorization or the callable host surface is missing, stop before live subagent dispatch and record the degraded/blocked state instead of silently serializing.
 
 ## Codex Durable Agent Projection
 
@@ -53,6 +95,12 @@ Durable Codex agent completion is a four-step lifecycle, not a file write:
 
 Until steps 3 and 4 are attached, `durableAgentLifecyclePacket.status` remains partial even if the file exists.
 
+## Live evidence boundary
+
+Codex highest-assurance `live-certified` acceptance must be observed outside the model process. Parse host JSONL/rollout events and require a `function_call` plus a successful matching `function_call_output`; `spawn_agent` additionally needs correlated child start and child completion events with a child thread id. Generic shell execution is runtime-tool evidence, not selected Command evidence. Join every event to the exact Thinking-selected provider/task binding after the host exits. Caller-supplied JSON, CLI trust flags, fixtures, hashes without private observer attestation, self-tests, local readiness probes, configured providers, and runner-generated worker plans cannot promote a binding to invoked. Codex CLI and Codex Desktop are separate targets; a clean CLI result never proves Desktop behavior. This external attestation boundary governs the optional `live-certified` label; it is not a prerequisite for a standard release whose `meta:verify:all` run passed.
+
+Codex CLI also discovers the OS-user global `~/.agents/skills` root independently of the isolated project and `CODEX_HOME`. If that real-user root exists and the current CLI exposes no supported switch to disable it, a same-user clean-room harness must block before host invocation; changing `HOME`, `USERPROFILE`, `CODEX_HOME`, `CODEX_SKILLS_DIR`, or `--ignore-user-config` is not sufficient evidence of isolation. Use an OS-level disposable user/container or a future host-supported disable switch. Do not transfer this CLI limitation to Codex Desktop without a separate Desktop observation.
+
 Other formal tool projections follow `config/sync.json` and `config/runtime-compatibility-catalog.json`; keep `needs_probe`, `partial`, or `reference_only` statuses as evidence instead of promoting them by wording.
 
 ## Choice Surfaces
@@ -67,6 +115,8 @@ False native choice claim guard: do not announce "I used the Codex choice panel"
 
 ## Visible Status Boundary
 
+When Codex Desktop exposes `open_in_codex`, open the exact current Live URL with `target.type="browser"` and `placement="right"` in the calling conversation. Reuse the returned browser/tab reference on subsequent turns; do not navigate another conversation or repeatedly open tabs. A `queued` result remains pending until the actual panel is observed. If that tool is absent, discover the active host's documented browser surface instead of assuming Desktop support from the runtime name. Codex CLI uses concise task-change messages in stderr/session output; preserve machine-readable stdout. Neither a Hook nor a Node subprocess can invent a successful host tool call.
+
 Codex `UserPromptSubmit` hook output and `hookSpecificOutput.additionalContext` are model/developer context, not the primary product surface. `systemMessage` can appear as a UI warning or event-stream warning, but it is not a governed progress notice. For Codex App, the reliable user-visible status surface is normal assistant chat text, or a captured CLI stdout notice only when the CLI command is explicitly invoked and its stdout is shown to the user. A hook warning, hidden developer context, markdown report, or JSON artifact does not satisfy `conversationNoticeEmitted`.
 
 Therefore every governed Codex run must render localized chat notices for run start, route selected before Execution, blocker/degraded state when present, and closure. Use `request_user_input` only for branch-changing decisions; do not turn routine status into a popup.
@@ -79,7 +129,7 @@ Fetch/content evidence must precede Thinking/pre-decision option framing. Target
 
 Read-only status is not a choice-surface skip reason by itself. `queryBypass` says the run is a pure query / inspection path with no mutation, durable artifact, execution dispatch, or handoff; it does not prove that user choice is unnecessary. If a read-only analysis still has materially different routes, scopes, risks, owners, or acceptance standards, ask. If there is no branch-changing choice, record `no_branching_choice` or an explicit auto-proceed rationale instead of citing read-only status.
 
-Critical clarification is separate from execution confirmation: ask early when the user's expression fails the intent completeness framework, not because the model believes it knows the true human intent. Required dimensions are outcome, audience/value, success criteria, scope, constraints/permissions/safety, evidence freshness, and output format. If a missing or conflicting dimension changes route, scope, risk, acceptance, owner, permission, or non-goal, set `choiceSurfaceState = critical_clarification_allowed` and ask before Fetch, Thinking, or Execution. Subjective quality or non-measurable adjective requests such as "good", "bad", "beautiful", "ugly", "doesn't look good", "smooth", "not smooth", "professional", "premium", "advanced", "clean", "simple", "fast", "slow", "hard to use", "feels off", or localized equivalents require Critical clarification when the target, quality dimension, acceptance standard, or allowed scope is unclear. Ask later before executing a dispatch plan only when the plan has meaningful branches.
+Critical clarification is separate from execution confirmation: ask early when the user's expression fails the intent completeness framework, not because the model believes it knows the true human intent. Required dimensions are outcome, audience/value, success criteria, scope, constraints/permissions/safety, evidence freshness, and output format. If a missing or conflicting dimension changes the user-visible result, scope, risk, acceptance, permission, or non-goal, set `choiceSurfaceState = critical_clarification_allowed` and ask before Fetch, Thinking, or Execution. Subjective quality or non-measurable adjective requests such as "good", "bad", "beautiful", "ugly", "doesn't look good", "smooth", "not smooth", "professional", "premium", "advanced", "clean", "simple", "fast", "slow", "hard to use", "feels off", or localized equivalents require Critical clarification when the target, quality dimension, acceptance standard, or allowed scope is unclear. Ask later before executing a dispatch plan only when the plan has meaningful branches.
 
 Decision cards include: AI understanding, AI additions, Capability route, Candidate paths.
 
@@ -105,9 +155,15 @@ There is no question quota. Each visible question must change an execution branc
 
 ## Codex Multi-Option Choice Surface Rule
 
-For every required confirmation or decision surface in Codex, use `default_mode_request_user_input` and `request_user_input`. Do not show a `Preflight` block unless the user explicitly asks for debug, audit, protocol, or governance trace output. Always show the maximum viable options accepted by the active host schema, include an explicit output-language choice when language is unresolved, use the latest input language, and render Option A placeholders as resolved user-facing language instead of hardcoding any single human language. If `request_user_input` is unavailable, block instead of treating a chat card as an accepted Codex decision. Claude Code native question tool remains unchanged.
+`default_mode_request_user_input` is a host configuration feature flag, never a callable tool name. A configured flag does not override the current host's exposed schema or Plan/Default mode restriction.
 
-Choice Surface Gate states: `not_allowed`, `critical_clarification_allowed`, `execution_confirmation_allowed`, `completed`. FORBIDDEN: premature choice surface for test a popup / interactive box / popup_test_request. Critical -> Fetch -> Thinking must happen before execution confirmation. If the intent frame is missing or conflicting and the missing answer changes route, scope, risk, acceptance, owner, permission, or non-goal, ask Critical clarification and must not present execution options. `contentEvidencePacket` precedes `preDecisionOptionFrame`. No candidate paths means no execution confirmation; no Fetch evidence means Thinking is not complete; no Thinking result means no pre-Execution confirmation.
+An explicit output-language choice is useful when language is unresolved and affects delivery; an already chosen runtime/user language needs no repeated question.
+
+Render every option and placeholder as resolved user-facing language instead of hardcoding any single human language; never leave an unresolved Option A label.
+
+For every required branch-changing confirmation or decision surface in Codex, use the actual exposed native choice tool and its current schema and mode restrictions. `request_user_input` may be restricted to Plan mode by the host; a reference cannot create a tool or enable it in another mode. Do not show a `Preflight` block unless the user explicitly asks for debug, audit, protocol, or governance trace output. Show meaningful options accepted by the active host schema, resolve output language only when that choice matters, and render placeholders as user-facing language. If the required native surface is unavailable, block the dependent branch instead of treating a chat card as an accepted Codex decision. Already settled directions and safe work inside existing authorization continue without an extra confirmation. Claude Code native question tool remains unchanged.
+
+Choice Surface Gate states: `not_allowed`, `critical_clarification_allowed`, `execution_confirmation_allowed`, `completed`. FORBIDDEN: premature choice surface for test a popup / interactive box / popup_test_request. Critical -> Fetch -> Thinking must happen before execution confirmation. If the intent frame is missing or conflicting and the missing answer changes the user-visible result, scope, risk, acceptance, permission, or non-goal, ask Critical clarification and must not present execution options. `contentEvidencePacket` precedes `preDecisionOptionFrame`. No candidate paths means no execution confirmation; no Fetch evidence means Thinking is not complete; no Thinking result means no pre-Execution confirmation.
 
 Before detailed orchestration, close unresolved questions, list candidate solution paths, set `solutionChoiceState`, and only then finalize dispatch into `workerTaskPackets`.
 
@@ -120,6 +176,85 @@ Respect user choices (after questioning). Base the analysis on the user's actual
 `queryBypass` is not a general substitute for a pre-execution decision. It applies only when there is no execution branch to choose. When branch-changing options exist, use the Codex choice surface even if the evidence gathering itself is read-only.
 
 ## Hook progression
+
+The prompt Hook hands the host its existing run identity and the installed
+`governed-host-checkpoint.mjs` command. Apply the installed meta-theory skill,
+use `--inspect` and `--template <stage>` to read the current task contract, and
+record each stage's actual owner result with that command before advancing.
+Resume the same run after a turn boundary; do not start another planned-only
+runner to make the panel look active. Thinking records bounded worker work
+orders before dispatch. The checkpoint is an owner report, not native execution
+proof: worker returns, verification and user acceptance still need their own
+evidence. An ordinary Stop retains an unfinished checkpointed task; another
+conversation or worker's Stop has no authority to end it.
+
+When evidence or a capability is still missing, a `blocked` or `in_progress`
+checkpoint may contain an empty `record` and the owner's actual summary and
+evidence references. It preserves the stage and existing work orders; it cannot
+complete a stage or invent a matching capability.
+
+For review findings or feedback that requires rework, keep the same run and use
+`--return-to fetch|thinking|execution --input <project-local-JSON-file-or->`.
+First use `--inspect` to obtain `revision`, `currentStage`, and
+`currentStageStatus`; submit these as `expectedRevision`, `expectedStage`, and
+`expectedStatus`, together with the owner's summary, evidence references and
+structured `findings` (`findingId`, `summary`, optional `feedbackId`, current
+`taskPacketId`, `deliverableId`, and `contentVersion`). `--template-return` is a
+read-only input template. Foreign run/chat bindings, stale CAS values, and
+forward or same-stage returns are refused. The target and its successors lose
+their completion state; earlier prerequisites are preserved. Invalidated stage
+reports, work orders, results and lifecycle evidence remain in
+`hostRevisionHistory`; `hostRevision` identifies the current rework.
+
+Live feedback carries a public `task:<20hex>` display reference. The host must
+resolve it through the installed checkpoint adapter with the same trusted
+`--project-root`, `--run-id`, and verified `--conversation-id`:
+`--resolve-task-ref <copied-task-reference>`. This read-only command returns one
+`taskReference` containing the raw `taskPacketId`, `publicTaskRef`, owner,
+logical/replaced IDs, and the current `expectedRevision`, `expectedStage`, and
+`expectedStatus`. Use that raw ID in the finding and the returned CAS in the
+return request. `--inspect` also lists at most 32 current `taskReferences` with
+unique/ambiguous resolution status. Identical labels or owners are not identity
+evidence. Unknown, ambiguous, wrong-run/chat/project, and historical references
+are refused; an old display reference never silently resolves to a replacement.
+
+Historical verification owner reports remain visible after later unrelated
+returns, joined to their original revision, action, task, source/output IDs and
+content versions. Both spine and the bounded active-run projection retain that
+association. A previous check cannot satisfy the new revision; even a matching
+report remains `verification_unconfirmed`, not native proof or user acceptance.
+
+New revision work orders require fresh `taskPacketId` values. Link replacements
+with `replacesTaskPacketId`; `logicalTaskPacketId` preserves their original task
+identity without reusing native invocation or completion evidence. A direct
+return to Execution requires a complete, same-design replacement set with the
+same owners, scope and mapped dependencies. Changes to design belong in Thinking.
+Execution reports must answer each active finding through `revisionResponses`
+with its current task, summary and evidence references; Verification checks must
+match those finding/task/artifact-version bindings. If a new work order produces
+a new deliverable identity, `sourceDeliverableId` and `sourceContentVersion`
+bind the original finding, while `deliverableId` and `contentVersion` identify
+the revised output; the recheck must match the revised output. Same-ID revisions
+remain compatible. These append-only responses
+remain `reported_revised` owner reports. Even `verification_reported` does not
+grant native execution proof, user acceptance or public-ready authority.
+
+HookPrompt display is a separate user preference. The generated Codex adapter
+accepts an adjacent user-owned `hookprompt-display.json` with `{"mode":"full"}`
+or `{"mode":"summary"}` and passes that choice to the actual HookPrompt process.
+An explicit `HOOKPROMPT_DISPLAY_MODE` environment value takes priority. Missing,
+malformed, linked, or oversized preference files leave the installed HookPrompt
+default unchanged. Sync updates the adapter and preserves this user preference.
+Receiving context and rendering the optimized prompt in chat are separate checks;
+verify the requested visible result before calling display restored.
+`meta-kim status` (including `--json`) and `meta-kim doctor hooks --all` show
+registered runtime entry paths, the selected inner source, SHA256, and display
+precedence: environment > adjacent preference > inner default. Diagnostics read
+configuration and recognized source branches without executing hooks. They describe
+the current CLI environment, not an already-running host's environment. An unknown
+implementation, ambiguous entries, or unproven repository/version stays `unknown`;
+a declared dependency repository alone is not proof of installed source ownership.
+These commands do not change display preferences or synchronize other hosts.
 
 Codex hooks are the last fuse after preflight. Current Codex documentation describes project hooks as trusted lifecycle guardrails loaded from hook/config layers, including managed/plugin/project sources and Windows-specific command variants. Do not treat them as an exhaustive all-tool policy engine.
 
@@ -142,6 +277,10 @@ Use when Codex runtime, sandbox, approval, hooks, subagents, and choice behavior
 - relevant config, registry, script, or artifact path
 
 ## Do
+
+During Critical, the host should author `record.publicTitle`: a short, plain-language heading of at most 120 characters for the task panel. Keep technical scope in the work order. The host supplies this heading without asking the user to fill another field; do not copy sensitive paths, credentials, or a long raw request into it. The checkpoint validates and saves this explicit heading as `publicSummary.title` in the same guarded state update, so it remains readable after the full planning state is stopped. The field is optional for older callers; an omitted or blank value keeps an existing public title and never infers one from `realIntent` or raw task text. A display title does not establish execution, verification, or user acceptance.
+
+Write `workerTaskPacket.expectedOutput` as a concrete result that an ordinary user can understand; put file paths, technical IDs, and constraints in `scope` and `verification`. Begin a worker result `summary` with what changed and what still needs work; put version-reuse and native-evidence audit details in `evidenceRefs` or detailed records instead of repeatedly prefixing the summary with r3/r4 notes.
 
 - Assign an owner for each action.
 - Produce a checkable packet or artifact.

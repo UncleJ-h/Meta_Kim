@@ -536,7 +536,7 @@
           "missing_non_blocking",
           "missing_blocking"
         ],
-        "blockingRule": "If a missing or conflicting dimension changes route, scope, risk, acceptance, owner, permission, or non-goal, set choiceSurfaceState=critical_clarification_allowed and ask the fewest outcome-branching questions before Fetch/Thinking/Execution.",
+        "blockingRule": "If a missing or conflicting dimension changes the user-visible result, scope, risk, acceptance, permission, or non-goal, set choiceSurfaceState=critical_clarification_allowed and ask the fewest outcome-branching questions before Fetch/Thinking/Execution.",
         "nonBlockingRule": "If the dimension can be inferred without changing route, scope, risk, acceptance, owner, permission, or non-goal, record the defaultAssumption and proceed with correction-friendly wording.",
         "subjectiveQualitySignalPolicy": {
           "required": true,
@@ -1211,7 +1211,7 @@
         "dependencyDetection": "auto",
         "linearFormat": "sequential_questions",
         "parallelFormat": "batch_list",
-        "description": "When multiple independent questions exist, collect and present them in one interaction"
+        "description": "Optional host-supported batching for independent questions whose prerequisites were settled before this round. An active plan challenge orders the ready frontier by impact and retains selectedQuestionId for hosts that support one question. A batch cannot include questions unlocked by answers in that same batch. No batching quota or repeated settled decision is required."
       },
       "codexVisibleMultiOptionOutput": {
         "required": true,
@@ -1248,7 +1248,7 @@
           "completed"
         ],
         "defaultState": "not_allowed",
-        "criticalClarificationRule": "Allowed during Critical when the intent frame is missing or conflicting and the answer changes route, scope, risk, acceptance, owner, permission, or non-goal; may clarify outcome, audience/value, success criteria, scope, permissions, safety, evidence freshness, output format, language, or subjective quality terms such as does_not_look_good / ugly / hard_to_use when target, quality dimension, acceptance standard, or allowed scope is unclear; must not present execution options.",
+        "criticalClarificationRule": "Allowed during Critical when the intent frame is missing or conflicting and the answer changes the user-visible result, scope, risk, acceptance, permission, or non-goal; may clarify outcome, audience/value, success criteria, scope, permissions, safety, evidence freshness, output format, language, or subjective quality terms such as does_not_look_good / ugly / hard_to_use when target, quality dimension, acceptance standard, or allowed scope is unclear; must not present execution options.",
         "executionConfirmationRule": "Allowed only after contentEvidencePacket and preDecisionOptionFrame exist, before Execution; must present evidence-backed candidate paths and a recommended default.",
         "forbiddenPrematureTriggers": [
           "popup_test_request",
@@ -1262,23 +1262,32 @@
     },
     "runStatusEnvelope": {
       "enabled": true,
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "purpose": "Give users a stable answer to whether meta-theory governance is active, how far it has progressed, and which stage is current without exposing hidden protocol packets.",
       "stateFiles": {
         "activeRun": ".meta-kim/state/{profile}/active-run.json",
-        "perRunStatus": ".meta-kim/state/{profile}/runs/{runId}/status.json"
+        "perRunStatus": ".meta-kim/state/{profile}/runs/{runId}/status.json",
+        "lifecycleMigrationMarker": ".meta-kim/state/{profile}/migrations/run-status-lifecycle-v1.json",
+        "lifecycleMigrationCompletionSidecar": ".meta-kim/state/{profile}/migrations/run-status-lifecycle-v1.managed-completion.json",
+        "privateTaskIdentityKey": ".meta-kim/state/{profile}/private/task-identity-key.json"
       },
       "writer": "runtime_spine_state_adapter",
+      "supportedReadSchemaVersions": [1, 2],
+      "supportedWriteSchemaVersions": [2],
       "pathPolicy": {
         "crossPlatform": true,
         "useNodePathJoin": true,
         "mustStayWithin": ".meta-kim/state",
-        "profileSanitization": "A-Za-z0-9._- only, fallback default"
+        "profileSanitization": "Lowercase a-z0-9._- names remain readable except for the reserved derived- namespace. Any derived- input, uppercase input, unsafe input, traversal input, or overlong input receives a derived- prefixed lowercase readable base plus a deterministic case-sensitive hash suffix. Reserving derived- means a user-supplied direct safe name cannot collide with a generated profile namespace, while deterministic hashing keeps repeated routing stable and distinct on case-insensitive filesystems. External profile is always raw and normalized exactly once; internal callers that already hold a canonical result must pass it through the explicit canonicalProfile boundary, which validates without normalizing again. Empty input falls back to default."
       },
       "requiredFields": [
         "schemaVersion",
         "active",
+        "lifecycleStatus",
         "runId",
+        "taskFingerprint",
+        "taskIdentitySource",
+        "taskClassification",
         "triggeredBy",
         "currentStage",
         "currentStageKey",
@@ -1295,6 +1304,10 @@
         "publicReadyBoundary",
         "deactivatedAt",
         "deactivationReason",
+        "deactivationTrigger",
+        "supersededByRunId",
+        "archivedAt",
+        "archiveReason",
         "continuationBoundary",
         "startedAt",
         "updatedAt",
@@ -1307,6 +1320,52 @@
         "stagePurpose",
         "stagePurposeKey"
       ],
+      "lifecycleStatusEnum": [
+        "active",
+        "inactive",
+        "session_stopped",
+        "evolution_completed",
+        "superseded",
+        "archived_legacy"
+      ],
+      "deactivationReasonEnum": [
+        "session_stop",
+        "evolution_completed",
+        "superseded_by_new_prompt",
+        "legacy_reconciled"
+      ],
+      "deactivationTriggerEnum": [
+        "stop_hook_turn_boundary",
+        "prompt_supersede",
+        "state_migration"
+      ],
+      "deactivationTriggerPolicy": "deactivationTrigger names the event that retired the run and is independent of deactivationReason. session_stop is written by the Stop hook, which fires at every turn boundary rather than when a conversation ends, so readers deciding whether a chat may still be open must read the trigger and never infer it from the reason. There is deliberately no real-session-end value: no writer can produce one, and a declared-but-unreachable value invites readers to trust a branch that never runs. Records written before this field existed carry null, which means unknown and must not be widened to any declared value.",
+      "lifecycleCombinationRules": {
+        "active": { "active": true, "deactivationReason": null },
+        "inactive": { "active": false },
+        "session_stopped": { "active": false, "deactivationReason": "session_stop" },
+        "evolution_completed": { "active": false, "deactivationReason": "evolution_completed" },
+        "superseded": { "active": false, "deactivationReason": "superseded_by_new_prompt", "supersededByRunIdRequired": true },
+        "archived_legacy": { "active": false, "deactivationReason": "legacy_reconciled", "archivedAtRequired": true }
+      },
+      "taskIdentitySourceEnum": [
+        "project_profile_hmac_sha256",
+        "not_available",
+        "unrecoverable_legacy"
+      ],
+      "privacyPolicy": "Raw prompt/task text and unkeyed prompt digests are forbidden at every nested object or array depth in spine-state.json, active-run.json, per-run status.json, and CLI output. Writers recursively remove forbidden raw prompt/task keys while preserving keyed fingerprints and non-sensitive fields, then copy only JSON-safe primitives, dense arrays, and plain own-data objects into a null-prototype JSON boundary. Undefined, non-finite numbers, function, symbol, bigint, sparse or decorated arrays, accessor properties, custom prototypes, toJSON, reserved structural keys such as __proto__, and cyclic input are rejected before any state mutation; accessors and toJSON are never executed. Exact-same-prompt identity uses HMAC-SHA256 with a random project/profile-local key stored outside public envelopes under a dedicated lock and atomic 0600 write where supported. Public records expose only the HMAC digest, its source, and classification metadata; legacy identity is never guessed.",
+      "taskIdentityRecoveryPolicy": "The activator reads existing spine and active-run identity bindings before identity calculation. If either pointer is HMAC-bound, identity calculation requires the existing project/profile key. A missing or corrupt key fails closed with a localized recovery notice and leaves spine, active-run, per-run status, lifecycle, and key state unchanged. Automatic key creation is allowed only when no HMAC-bound authority/history pointer exists. Recovery requires explicitly restoring the original key; destructive reset is a separate operator action allowed only after confirming abandonment of the existing run.",
+      "runIdPolicy": "Every writer validates runId before path construction. Generated IDs combine a lowercase ISO timestamp with a cryptographically random 64-bit suffix. All new schema-v2 writes must match ^meta-[a-z0-9][a-z0-9._-]{0,115}$ and remain at most 120 characters, so case-insensitive filesystems cannot alias new run directories. Uppercase is accepted only while reading a strongly shaped schema-v1 historical record through the one-time legacy migration; it is migrated in place only when its directory name and embedded runId agree and its case-folded directory name is unique, otherwise it is preserved without mutation.",
+      "replacementPolicy": "A different prompt may replace an observed or otherwise eligible authoritative run only under the profile-scoped spine lock and expectedRunId compare-and-swap. refreshExisting is repair-only: missing, inactive, deleted, or changed authority never falls through to activation. Stop terminalization idempotently repairs the same inactive run without changing its first terminal reason and completes an interrupted Evolution deletion when requested. Managed active runs retain conservative replacement rules.",
+      "legacyReconciliationPolicy": "The one-time versioned profile-local migration acquires locks only in spine-then-migration order and runs only after a strict active spine plus a strong Meta_Kim active-run envelope agree on one safe runId. Strong schema-v1 history may omit authorityMode/publicReadyAuthority but must retain the complete legacy public-envelope provenance shape. A schema-v1 record without lifecycleStatus is valid only when active state, deactivationReason, deactivatedAt, and any reason-specific supersession/archive fields form a supported combination; active history cannot carry terminal reason/time residue. Schema-less, unknown-schema, invalid-lifecycle, malformed, unknown, terminal, and unsafe records remain untouched. Valid non-authoritative active history is normalized to complete schema v2. A marker is accepted only with marker/schema/profile/migration fields, a safe original authoritativeRunId, valid completedAt, and finite nonnegative report counts. The complete primary marker is authoritative first; when an unknown or forged primary marker must be preserved byte-for-byte, the same valid completion report is atomically persisted to the canonical managed completion sidecar and prevents later rescans. An invalid existing sidecar fails closed with completed=false and no migration mutation; a missing primary continues to use the primary marker path.",
+      "authorityAndRecoveryPolicy": {
+        "authority": "live_spine_state",
+        "projections": ["active-run.json", "runs/{runId}/status.json"],
+        "readRule": "When a valid live spine exists, readers derive status from it even if projections are missing, stale, or interrupted. An active projection without a valid live spine is never authoritative.",
+        "writeRule": "Write the authoritative spine first, then recoverable per-run and active-run projections. Multi-file atomicity is not claimed.",
+        "repairRule": "The next exact same-prompt activation refresh repairs projections only when expectedRunId still matches an active spine. Terminalization repairs interrupted inactive projections idempotently, and activation repairs an inactive predecessor projection before publishing a new run.",
+        "lockOrder": "All lifecycle migration paths acquire the profile spine lock before the migration lock; code already holding the spine lock may acquire only the migration lock helper."
+      },
       "stageOrder": [
         "Critical",
         "Fetch",
@@ -1350,7 +1409,7 @@
         ],
         "publicReadyAuthority": false,
         "continuationRule": "Inactive runs must expose deactivatedAt, deactivationReason, and continuationBoundary in active-run.json. A later prompt may preserve the user's continuation wording through HookPrompt, but it must reconcile against runtime state and choose a new governed run or offline audit when the previous run stopped.",
-        "rule": "The run status envelope reports runtime stage progress only. It must not imply summary closure, verification pass, real capability invocation, or public-ready completion. Hook-observed/advisory state is visible as observed state and must not be presented as managed runtime execution."
+        "rule": "The validated live spine is runtime status authority; active-run and per-run files are recoverable projections. The envelope reports runtime stage progress only and must not imply summary closure, verification pass, real capability invocation, or public-ready completion. Hook-observed/advisory state is visible as observed state and must not be presented as managed runtime execution."
       },
       "languagePolicy": "User-facing run status labels and stage purpose text must follow the runtime/tool selected output language first, explicit output-language choice second, and latest user input language only as fallback. The envelope may carry runtime-provided publicLabels and a resolved stagePurpose; canonical stage labels stay English. Fixed labels in any single human language are forbidden as the default public notice shell.",
       "runtimeAdapters": {
@@ -2026,6 +2085,42 @@
         ],
         "description": "Hard public-ready gate for design-time packets. blocked and partial statuses cannot be published as ready; not_applicable_with_reason is allowed only for explicitly non-applicable experience or rollback contexts."
       },
+      "contextEngineeringBudgetPublicReadyPolicy": {
+        "enabled": true,
+        "packet": "contextEngineeringBudget",
+        "statusField": "status",
+        "requiredStatus": "pass",
+        "blockedByField": "blockedBy",
+        "measurementField": "measurement",
+        "measurementRequirements": {
+          "hostObservedContextLoadField": "hostObservedContextLoad",
+          "hostObservedContextLoadRequiredValue": true,
+          "actualInputTokensField": "actualInputTokens",
+          "actualInputTokensMinimum": 0,
+          "completedChecks": [
+            {
+              "field": "duplicateRuleScanStatus",
+              "requiredValue": "pass"
+            },
+            {
+              "field": "conflictingRuleScanStatus",
+              "requiredValue": "pass"
+            },
+            {
+              "field": "omissionVerificationStatus",
+              "requiredValue": "pass"
+            }
+          ]
+        },
+        "sourceCollectionFields": ["fixedContext", "variableContext"],
+        "minimumSourceRecordsPerCollection": 1,
+        "sourceEvidenceStateField": "evidenceState",
+        "observedSourceEvidenceStates": ["host_observed_as_model_context"],
+        "sourceEvidenceRefField": "evidenceRef",
+        "publicReadyDecisionStatusField": "contextEngineeringBudgetStatus",
+        "publicReadyDecisionBlockedByField": "contextEngineeringBudgetBlockedBy",
+        "description": "Public-ready requires a host-observed context budget with measured nonnegative input tokens, completed duplicate/conflict/omission checks, no blockers, and evidence-bound observed source records. This packet remains optional for runs that make no public-ready claim."
+      },
       "compactionPacketOptional": true,
       "compactionPacketLocalOnly": true,
       "compactionPacketMustPreserveOpenFindings": true,
@@ -2425,10 +2520,31 @@
         "candidateTaskShape"
       ],
       "unresolvedQuestionRequiredFields": [
+        "questionId",
         "question",
         "questionTarget",
         "decisionImpact",
+        "impactPriority",
+        "dependsOn",
+        "evidenceRefs",
+        "recommendationState",
+        "recommendedAnswer",
+        "recommendationRationale",
+        "userAnswer",
+        "answerEvidenceRefs",
+        "invalidatedBy",
         "status"
+      ],
+      "unresolvedQuestionStatusEnum": [
+        "open",
+        "answered",
+        "skipped",
+        "invalidated"
+      ],
+      "recommendationStateEnum": [
+        "recommended",
+        "preference_only",
+        "insufficient_evidence"
       ],
       "questionTargetEnum": [
         "wrong_goal_risk",
@@ -2441,15 +2557,104 @@
       "choiceGateSkipAllowedWhen": [
         "trivial",
         "no_branching_choice",
-        "explicit_auto_proceed"
+        "explicit_auto_proceed",
+        "stopped_by_user"
       ],
       "solutionChoiceStateEnum": [
         "confirmed",
+        "pending_user_choice",
         "trivial",
         "no_branching_choice",
-        "explicit_auto_proceed"
+        "explicit_auto_proceed",
+        "stopped_by_user"
       ],
-      "description": "Thinking-stage pre-decision frame for non-trivial executable work before AskUserQuestion, native choice, or compatibility fallback. It must list unresolvedQuestions, present contentEvidence-backed candidate solution paths, and record solutionChoiceState before detailed orchestration is locked. Codex and Claude Code cannot use compatibility fallback as completion evidence for required branch-changing decisions. A skipped choice must include skipSource and skipSafetyRationale, and may only use strict skip reasons. Read-only/queryBypass is a safety and path-classification boundary, not a choice-surface skip reason by itself; use no_branching_choice only when no user answer would change route, scope, risk, owner, permission, non-goal, or acceptance. It contains candidate orchestration paths and trade-offs only; it is not a finalized dispatchEnvelopePacket, dispatchBoard, or workerTaskPacket."
+      "humanMilestonePolicy": {
+        "milestones": [
+          { "id": "direction_system_plan", "label": "方向与系统方案", "artifactKind": "system_plan", "activation": "first_or_material", "beforeImplementation": true, "triggers": ["first", "material_change", "within_accepted_scope"] },
+          { "id": "prd_mvp_scope", "label": "PRD与MVP范围", "artifactKind": "prd", "activation": "first_or_material", "beforeImplementation": true, "triggers": ["first", "material_change", "within_accepted_scope"] },
+          { "id": "key_sample", "label": "关键样稿或样片", "artifactKind": "key_sample", "activation": "first_or_material", "triggers": ["first", "material_change", "within_accepted_scope"] },
+          { "id": "real_mvp", "label": "真实MVP验收", "artifactKind": "working_mvp", "activation": "first_or_material", "triggers": ["first", "material_change", "within_accepted_scope"] },
+          { "id": "next_investment", "label": "补齐与下一投入", "artifactKind": "investment_proposal", "activation": "material_decision", "triggers": ["value_scope_cost_tradeoff"] },
+          { "id": "framework_feedback", "label": "方法与框架反哺", "artifactKind": "durable_change_proposal", "activation": "material_decision", "triggers": ["durable_change"] },
+          { "id": "release_scale", "label": "上线与扩量", "artifactKind": "release_scale_plan", "activation": "side_effect_decision", "triggers": ["external_side_effect"] }
+        ],
+        "lifecycleValues": ["first_delivery", "material_revision", "within_accepted_scope", "unknown"],
+        "requestSource": "Thinking produces normalized design.lifecycle and artifactFlow[].artifactKind from source evidence. The ordinary runner derives declarations from actual discovered design packets and producer/consumer flows; stageRunner.humanMilestones remains an explicit compatibility input. Pending requests are projected onto unresolvedQuestions. Never infer lifecycle from revision=1, task keywords or an approval flag.",
+        "materialConditions": "The last three checkpoints require a material_user_decision whose affects.artifactFlowRefs names the exact flow; release/scale additionally joins affects.sideEffectActions to the current governed sideEffectActions. Missing stage/producer/material facts return to Thinking or Fetch for affected tasks only.",
+        "inheritance": "Ordinary fixes on an accepted unchanged route add no milestone. Reuse a consumed current decision only for the same project/run/task/node and relevant evidence; unrelated logs do not invalidate it.",
+        "humanResponse": "Confirmation accepts this version; revise or return keeps affected dependencies waiting. Native observation and single CAS consumption establish a human judgement, never execution permission or publication authorization.",
+        "execution": "Only affected dependencies wait. The original host authorize, claim, budget and unresolved-effect gates still apply. Graph/task changes cannot resume the old run. Unknown host results must not prompt again automatically."
+      },
+      "planChallengeState": {
+        "requiredFields": [
+          "active",
+          "planChallengeSatisfied",
+          "authorizationRequired",
+          "sideEffectActions",
+          "executionAllowed",
+          "phase",
+          "triggerReasons",
+          "triggerEvidence",
+          "triggerEvidenceRefs",
+          "decisionEvidence",
+          "selectedQuestionId",
+          "currentQuestion",
+          "pendingUserChoice",
+          "stopRequested",
+          "stopReason",
+          "controlEvidence",
+          "sharedUnderstandingConfirmed",
+          "sharedUnderstandingEvidenceRefs",
+          "executionAuthorization",
+          "chatSummaryRef"
+        ],
+        "phaseEnum": [
+          "inactive",
+          "awaiting_fact_discovery",
+          "awaiting_user_answer",
+          "awaiting_understanding_confirmation",
+          "awaiting_execution_authorization",
+          "plan_challenge_satisfied",
+          "ready_for_execution",
+          "execution_denied",
+          "stopped_by_user"
+        ],
+        "triggerReasonEnum": [
+          "explicit_user_request",
+          "material_risk",
+          "branching_decision",
+          "evidence_contradiction",
+          "requirements_discovery"
+        ],
+        "executionAuthorizationRequiredFields": [
+          "state",
+          "source",
+          "scope"
+          ,"scopeActions"
+          ,"trusted"
+          ,"binding"
+          ,"evidenceRefs"
+          ,"scopeCoversActions"
+        ],
+        "executionAuthorizationStateEnum": [
+          "not_required",
+          "not_requested",
+          "authorized",
+          "denied"
+        ],
+        "summaryRequiredFields": [
+          "confirmedDecisions",
+          "openRisks",
+          "nextStep",
+          "visibleLines"
+        ],
+        "activationRule": "Activate when requirements exploration supplies concrete decisions, the user explicitly requests a plan challenge, or Fetch/Thinking records material risk or contradictory evidence. Requirements exploration can precede any design. Low-risk work with no branch-changing choice remains inactive.",
+        "questionSelectionRule": "Project the dependency-ready material decision frontier in impact order; selectedQuestionId remains its first item for compatibility. Facts and routine implementation choices are not user questions. Answered, skipped, and invalidated questions remain in unresolvedQuestions as history; recompute the frontier after answers without selecting unsettled dependencies.",
+        "recommendationRule": "A recommendation is optional. Preference-only questions use preference_only and evidence-insufficient questions use insufficient_evidence without inventing a recommended answer.",
+        "authorizationRule": "sharedUnderstandingConfirmed is derived only from trusted evidence bound to plan-challenge-understanding-confirmation and is never execution authorization. Mutation requires trusted evidence bound to all concrete sideEffectActions; untrusted or incomplete scope remains pending. Explicit denial enters execution_denied without another authorization prompt. Caller-supplied invalidation is ignored, and stopped runs remain executionAllowed=false.",
+        "continuationRule": "Cross-turn continuation accepts only a validator-passing prior artifact from the same governed output directory with the same task fingerprint and a pending phase. The current host verifier must bind the exact previous run id, and the runner may append at most one phase-appropriate current decision to restored history. Terminal runs cannot resume and prior artifacts cannot be overwritten."
+      },
+      "description": "Thinking-stage pre-decision frame for non-trivial executable work before AskUserQuestion, native choice, or compatibility fallback. It must list unresolvedQuestions, present contentEvidence-backed candidate solution paths, and record solutionChoiceState before detailed orchestration is locked. Its optional risk-adaptive planChallengeState reuses unresolvedQuestions as the single question ledger; it does not create a ninth stage or a parallel truth source. Codex and Claude Code cannot use compatibility fallback as completion evidence for required branch-changing decisions. A skipped choice must include skipSource and skipSafetyRationale, and may only use strict skip reasons. Read-only/queryBypass is a safety and path-classification boundary, not a choice-surface skip reason by itself; use no_branching_choice only when no user answer would change the user-visible result, scope, risk, permission, non-goal, or acceptance. It contains candidate orchestration paths and trade-offs only; it is not a finalized dispatchEnvelopePacket, dispatchBoard, or workerTaskPacket."
     },
     "intentPacket": {
       "requiredFields": [
@@ -2951,15 +3156,40 @@
           "description": "A large governance agent may stay intact only when it owns a coherent governance boundary; otherwise split supporting detail into references while preserving the agent identity boundary."
         }
       },
+      "projectCapabilityProfilePolicy": {
+        "schemaVersion": 1,
+        "path": ".meta-kim/state/default/agent-capability-profiles.json",
+        "ownership": "project_private_configuration_not_projection_or_copy_ownership",
+        "contextField": "agentCapabilityProfileContext",
+        "selectorArgument": "--agent-profile-context-json",
+        "contextFields": ["profileSelections", "fitAssessments", "approvalRefs"],
+        "ownerBindingFields": ["ownerAgent", "runtime", "scope", "source", "sourceRef", "sourceRoot", "contentDigest"],
+        "profileFields": ["capabilityProfileId", "capabilityProfileVersion", "owner", "capabilityLoadout", "projectEvidenceRefs", "referenceDirection"],
+        "profileOptionalFields": ["contentDigest", "baseProfileRef", "materialRefs"],
+        "profileIdentityPolicy": "Current profile IDs are unique. Lookup uses stable owner runtime/scope/source/ref identity, not its mutable digest; use still verifies the complete current binding. Source changes require review, and the same profile ID/version cannot change provenance or content.",
+        "referenceFields": ["ref", "contentDigest"],
+        "fitAssessmentFields": ["projectRoot", "owner", "capabilityProfileId", "capabilityProfileVersion", "profileDigest", "ownerResolution", "evidenceRefs", "rationale", "hardConflicts"],
+        "fitOptionalFields": ["fallbackProviderIds", "runLoadoutDigest"],
+        "fitOptionalFieldPolicy": "A current source-bound assessment must name any allowed default fallback; current-run loadout overrides require its exact runLoadoutDigest. These records are not caller permission grants.",
+        "slotFields": ["capabilitySlot", "bindingType", "providerId", "mode"],
+        "bindingTypes": ["skill", "mcp_tool", "command", "runtime_tool"],
+        "selectionModes": ["required", "default", "optional"],
+        "fitResolutions": ["reuse_existing_owner", "upgrade_existing_owner", "create_owner_first"],
+        "fitStatusWithoutEvidence": "not_evaluated",
+        "approvalScopes": ["project_capability_profile", "project_agent_fit"],
+        "truthBoundary": "The host Thinking assessment supplies professional judgment. Source/hash/scope checks prove current artifact bindings, never semantic fit, host approval authenticity, native invocation or permission grants.",
+        "mergeOrder": ["declared_source_defaults", "project_overrides", "run_scoped_overrides"],
+        "hardConstraints": ["owner_refusals", "current_user_constraints", "required_meta_skill_creator", "permissions", "runtime_os_provider_support"],
+        "writePolicy": "Explicit preview/apply with content-bound local approval sources, expectedOldHash and the existing project-mutation-session transaction. Same version cannot change content. Normal run/sync/install never saves this configuration.",
+        "missingPolicy": "No file preserves the old route with not_evaluated fit; a declared selection, known conflict or durable adaptation need cannot use compatibility to bypass the gap.",
+        "recoveryPolicy": "Current configuration plus version/digest and existing transaction backups only. Clone without this ignored private file is unconfigured; no reconstruction from old worker packets. Explicit reviewed adoption can restore compatible old content as a new version."
+      },
       "globalAgentReusePolicy": {
         "searchGlobalBeforeCopy": true,
         "directUseDoesNotCopyToProject": true,
         "copyToProjectOnlyWhen": [
-          "project_specific_knowledge_required",
-          "capability_boundary_must_change",
-          "skills_or_tools_must_be_persistently_added",
-          "global_agent_partial_fit_requires_iteration",
-          "recurring_project_pattern_requires_local_owner"
+          "stable_professional_judgment_or_responsibility_contract_must_change",
+          "explicit_independent_project_identity_requires_reviewed_substantive_adaptation"
         ],
         "reviewStages": [
           "Critical",
@@ -2976,7 +3206,7 @@
         ],
         "creationBlockedUntilExistingAgentsChecked": true,
         "checkedAgentsMustBeNamedInCapabilityGapPacket": true,
-        "description": "Fetch inventories global agents, project/runtime agents, skills, commands, hooks, rules/prompts, MCP capabilities, plugins, runtime tools, and capability indexes as evidence while confirming the problem and candidate solutions. Thinking resolves the owner/loadout from that evidence. Per-run discovery reads the cached global inventory plus lightweight project scans; full global scans are reserved for install, update, explicit refresh, stale/missing cache, or high-risk provider routes. A global agent or provider that already satisfies the orchestration node is used directly and is not copied into the user project. Only agents that need project-specific modification, persistent capability changes, or recurring local ownership are copied into the downstream project as project-local agents, under governance review. When the user explicitly asks to create, iterate, upgrade, or keep an agent in the project, the result must be a durable project-local abstract agent candidate or a blocked capabilityGapPacket; a temporary subagent prompt or runtime nickname cannot satisfy the deliverable. agentCopyPolicy=copy_to_project_for_modification is valid only with ownerSource=project_local and ownerResolution=upgrade_existing_owner; agentCopyPolicy=create_project_local_agent is valid only with ownerSource=project_local and ownerResolution=create_owner_first."
+        "description": "Fetch checks cached global and lightweight actual-project inventories and current project rules/dependencies. Host Thinking evaluates real owner/source and project evidence before resolving reuse_existing_owner, upgrade_existing_owner or create_owner_first. A fitting global identity remains global; knowledge, methods and stable default providers first belong in the independent project capability profile, never an automatic identity copy. Stable responsibility/refusal/input/output changes require reviewed substantive Type B adaptation; a real long-term professional owner gap may justify Type B creation on the first Fetch. Explicit independent project identity changes the deliverable but does not waive adaptation or host evidence. Copies remain preparation until adapted. Actual capabilityBindings stay run_scoped; a temporary worker or runtime nickname cannot satisfy a durable identity deliverable. copy_to_project_for_modification requires project_local/upgrade_existing_owner; create_project_local_agent requires project_local/create_owner_first. Full global scanning remains limited to install/update/explicit refresh or evidenced cache/probe needs."
       },
       "durableProjectAgentPolicy": {
         "appliesWhenUserRequestsAgentCreationOrIteration": true,
@@ -3410,7 +3640,10 @@
           "no_overlap",
           "merge_by_owner",
           "lock_required",
-          "sequentialize"
+          "sequentialize",
+          "deny_writes_outside_shard_scope_and_merge_through_meta_conductor",
+          "single_worker_bounded_scope",
+          "unproven"
         ],
         "sameOwnerParallelGroupRequiresUnifiedMergeOwner": true,
         "description": "The same ownerAgent may run multiple parallel instances, but each instance must have a short English business roleDisplayName, a unique roleInstanceId, explicit shardKey / shardScope, workspaceIsolation, artifactNamespace, collisionPolicy, and one unified mergeOwner. Parallel instances of the same ownerAgent that share a parallelGroup must point to the same mergeOwner. Repeated ownerAgent entries without those fields or merge rules are pseudo-parallelism."
@@ -3597,6 +3830,12 @@
         "sourceProjects",
         "deliveryShellsUsed",
         "blockedBy"
+      ],
+      "planChallengeSummaryFields": [
+        "confirmedDecisions",
+        "openRisks",
+        "nextStep",
+        "visibleLines"
       ]
     },
     "compactionPacket": {

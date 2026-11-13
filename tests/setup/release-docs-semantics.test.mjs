@@ -1,7 +1,9 @@
 import { describe, test } from "node:test";
+import { resolveNpmCliJsPath } from "../../scripts/runtime-cli-invocation.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +16,9 @@ describe("release documentation semantics", () => {
     "README.ja-JP.md",
     "README.ko-KR.md",
   ];
+  const retiredGuides = readmeFiles.map(
+    (file) => `docs/${file.replace("README", "technical-notes")}`,
+  );
 
   const currentChangelogSection = (raw) => {
     const nextReleaseIndex = raw.search(/\n## \[[^\]]+\] - \d{4}-\d{2}-\d{2}/);
@@ -36,6 +41,8 @@ describe("release documentation semantics", () => {
       ".codex/",
       ".agents/",
       ".cursor/",
+      ".gemini/",
+      ".zcode/",
       "openclaw/",
       "codex/",
       ".mcp.json",
@@ -49,6 +56,49 @@ describe("release documentation semantics", () => {
         ),
         `package.json files must not include ${forbiddenSource}`,
       );
+    }
+  });
+
+  test("npm dry-run package manifest preserves runtime boundaries and localized public guidance", () => {
+    const npmCli = resolveNpmCliJsPath();
+    assert.equal(existsSync(npmCli), true, `npm CLI not found: ${npmCli}`);
+
+    const cacheDir = mkdtempSync(path.join(tmpdir(), "meta-kim-npm-pack-cache-"));
+    try {
+      const raw = execFileSync(
+        process.execPath,
+        [npmCli, "pack", "--dry-run", "--ignore-scripts", "--offline", "--json"],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, npm_config_cache: cacheDir },
+        },
+      );
+      const manifest = JSON.parse(raw);
+      const packageFiles = new Set(manifest[0]?.files?.map((entry) => entry.path) ?? []);
+      for (const requiredFile of [
+        "canonical/runtime-assets/shared/lib/deliverable-type-profile.mjs",
+        "canonical/runtime-assets/shared/lib/gate-dispatcher.mjs",
+        "canonical/runtime-assets/shared/lib/intent-verb-lexicon.mjs",
+        "canonical/runtime-assets/shared/lib/policy-registry.mjs",
+        "config/contracts/deliverable-type-profiles.json",
+        "CHANGELOG.md",
+        "CHANGELOG.zh-CN.md",
+        "CHANGELOG.ja-JP.md",
+        "CHANGELOG.ko-KR.md",
+        ...readmeFiles,
+      ]) {
+        assert.equal(packageFiles.has(requiredFile), true, `package missing ${requiredFile}`);
+      }
+      for (const retiredFile of [
+        "canonical/runtime-assets/shared/lib/validator.mjs",
+        "tests/poc-design-gate/RESULTS.md",
+        ...retiredGuides,
+      ]) {
+        assert.equal(packageFiles.has(retiredFile), false, `package retained ${retiredFile}`);
+      }
+    } finally {
+      rmSync(cacheDir, { recursive: true, force: true });
     }
   });
 
@@ -112,32 +162,34 @@ describe("release documentation semantics", () => {
       }
     }
 
-    assert.match(
-      readFileSync(path.join(root, "README.md"), "utf8"),
-      /Dependency-project install targets are handled by those upstream projects/,
-    );
-    assert.match(
-      readFileSync(path.join(root, "README.zh-CN.md"), "utf8"),
-      /依赖项目自己的安装目标由上游项目维护/,
-    );
-    assert.match(
-      readFileSync(path.join(root, "README.ja-JP.md"), "utf8"),
-      /依存プロジェクト側の install target は upstream project で管理される/,
-    );
-    assert.match(
-      readFileSync(path.join(root, "README.ko-KR.md"), "utf8"),
-      /의존 프로젝트의 install target은 upstream project에서 관리/,
-    );
+    const dependencyGuidance = [
+      /Dependency projects maintain their own client support/,
+      /依赖项目自己的客户端支持由上游维护/,
+      /依存プロジェクトの対応クライアントは各上流プロジェクトが管理/,
+      /의존 프로젝트의 지원 클라이언트는 해당 상위 프로젝트가 관리/,
+    ];
+    readmeFiles.forEach((file, index) => {
+      assert.match(readFileSync(path.join(root, file), "utf8"), dependencyGuidance[index], file);
+    });
   });
 
-  test("public current docs expose formal projections and candidate compatibility probes without overpromoting them", () => {
-    const candidateNames = [
-      "Qoder",
-      "Trae",
-      "Kiro",
-      "Cline",
-      "Roo",
-      "Continue",
+  test("localized product overviews explain client use and output review inline", () => {
+    const betaNames = ["DSH", "Qoder", "Trae"];
+    const taskResultScope = [
+      /(?:check|review|verify)[\s\S]*(?:outputs|delivered|deliverables)/iu,
+      /(?:检查|核对|验收)[\s\S]*(?:实际产物|交付文件|成果)/u,
+      /(?:確認|検証|受け入れ)[\s\S]*(?:実際の成果物|成果物|納品)/u,
+      /(?:확인|검증|검토)[\s\S]*(?:실제 결과물|산출물|결과물)/u,
+    ];
+    const removedPublicCandidatePatterns = [
+      /\bKiro\b/u,
+      /Windsurf/u,
+      /Devin Desktop/u,
+      /\bCline\b/u,
+      /Roo Code/u,
+      /Candidate compatibility probes/u,
+      /候选兼容 probe/u,
+      /candidate-Qoder/u,
     ];
     const overbroadMappingPatterns = [
       /any project that supports agents and agent-to-agent communication/,
@@ -152,37 +204,45 @@ describe("release documentation semantics", () => {
       /\*\*Cursor\*\*\s*\|\s*완전 지원/,
     ];
 
-    for (const file of readmeFiles) {
+    // The package may be an unreleased source candidate. Current-release links
+    // follow the latest dated release entry, not that candidate version.
+    const releasedVersion = readFileSync(path.join(root, "CHANGELOG.md"), "utf8")
+      .match(/^## \[([^\]]+)\] - \d{4}-\d{2}-\d{2}/m)?.[1];
+    assert.ok(releasedVersion, "The changelog must identify a dated release");
+
+    for (const [index, file] of readmeFiles.entries()) {
       const raw = readFileSync(path.join(root, file), "utf8");
 
-      assert.match(raw, /alt="Projection tiers"/, file);
-      assert.match(raw, /alt="Candidate compatibility probes"/, file);
-      assert.match(
-        raw,
-        /default-Claude%20Code%20%7C%20Codex%20%2B%20compat-OpenClaw%20%7C%20Cursor/,
-        file,
-      );
-      assert.match(raw, /Qoder%20%7C%20Trae%20%7C%20Kiro%20%7C%20Cascade%20%7C%20Cline%20%7C%20Roo%20%7C%20Continue/, file);
+      for (const client of ["Codex", "Claude Code", "Cursor", "OpenClaw", "Gemini CLI", "ZCode"]) assert.match(raw, new RegExp(client), `${file} missing requested client ${client}`);
+      assert.ok(raw.includes(`[v${releasedVersion}](https://github.com/KimYx0207/Meta_Kim/releases/tag/v${releasedVersion})`), `${file} must label and link the current released version`);
+      assert.doesNotMatch(raw, /\]\([^)]*technical-notes[^)]*\)/u, `${file} must keep common usage guidance on the page`);
+      assert.match(raw, taskResultScope[index], `${file} must explain checking the actual task deliverable`);
+      for (const operation of ["install", "check", "update", "uninstall"]) {
+        assert.ok(raw.includes(`node bin/meta-kim.mjs dsh ${operation}`), `${file} must use the Meta_Kim CLI for DSH ${operation}`);
+      }
+      for (const betaName of betaNames) {
+        const clientRow = raw.split(/\n\s*\n/u).find((paragraph) => paragraph.includes(betaName) && /\bBeta\b/iu.test(paragraph));
+        assert.ok(clientRow, `${file} missing ${betaName} client guidance`);
+        assert.match(clientRow, /\bBeta\b/iu, `${file} must label ${betaName} as Beta`);
+        if (betaName === "Qoder" || betaName === "Trae") {
+          assert.match(clientRow, /compatibility|adapters?|兼容|适配|互換|アダプタ|호환|어댑터/iu, `${file} must distinguish ${betaName} compatibility adapters`);
+        }
+      }
       assert.doesNotMatch(raw, /alt="Runtime"/, file);
       assert.doesNotMatch(raw, /runtime-Claude%20Code%20%7C%20Codex%20%7C%20OpenClaw%20%7C%20Cursor/, file);
 
-      for (const candidateName of candidateNames) {
-        assert.match(raw, new RegExp(candidateName), `${file} missing ${candidateName}`);
-      }
-      for (const pattern of overbroadMappingPatterns) {
-        assert.doesNotMatch(raw, pattern, `${file} has overbroad mapping claim`);
-      }
-      for (const pattern of staleFullSupportRows) {
-        assert.doesNotMatch(raw, pattern, `${file} overpromotes compatibility projection`);
+      for (const [documentFile, document] of [[file, raw]]) {
+        for (const pattern of removedPublicCandidatePatterns) {
+          assert.doesNotMatch(document, pattern, `${documentFile} still publishes a research-only candidate`);
+        }
+        for (const pattern of overbroadMappingPatterns) {
+          assert.doesNotMatch(document, pattern, `${documentFile} has overbroad mapping claim`);
+        }
+        for (const pattern of staleFullSupportRows) {
+          assert.doesNotMatch(document, pattern, `${documentFile} overpromotes compatibility projection`);
+        }
       }
     }
-
-    assert.match(readFileSync(path.join(root, "README.md"), "utf8"), /Default formal projections/);
-    assert.match(readFileSync(path.join(root, "README.md"), "utf8"), /Non-default compatibility projections/);
-    assert.match(readFileSync(path.join(root, "README.md"), "utf8"), /Candidate compatibility probes/);
-    assert.match(readFileSync(path.join(root, "README.zh-CN.md"), "utf8"), /默认正式投影/);
-    assert.match(readFileSync(path.join(root, "README.zh-CN.md"), "utf8"), /非默认兼容投影/);
-    assert.match(readFileSync(path.join(root, "README.zh-CN.md"), "utf8"), /候选兼容 probe/);
   });
 
   test("change readiness checklist covers P1 and P2 release review lanes", () => {
@@ -197,6 +257,10 @@ describe("release documentation semantics", () => {
     const combined = `${checklist}\n${pullRequestTemplate}`;
 
     assert.match(combined, /Host State Impact Matrix/);
+    assert.match(combined, /Installed-User Compatibility Gate/);
+    assert.match(combined, /Historical-version update/);
+    assert.match(combined, /Partial or failed prior install/);
+    assert.match(combined, /fresh install is not enough/);
     assert.match(combined, /Existing host state/);
     assert.match(combined, /Rollback path/);
     assert.match(combined, /Hook \/ Prompt Protocol Flow/);
@@ -262,7 +326,7 @@ describe("release documentation semantics", () => {
     for (const file of readmeFiles) {
       const raw = readFileSync(path.join(root, file), "utf8");
 
-      assert.match(raw, /license-Apache--2\.0/);
+      assert.match(raw, /\[Apache License 2\.0\]\(LICENSE\)/);
       assert.match(raw, /Apache License 2\.0/);
       assert.match(raw, /NOTICE/);
       assert.match(raw, /Meta_Kim by KimYx0207/);

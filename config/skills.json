@@ -5,58 +5,67 @@
   "skills": [
     {
       "id": "agent-teams-playbook",
-      "repo": "${skillOwner}/agent-teams-playbook",
-      "installMethod": "gitCloneInstallScript",
+      "repo": "${skillOwner}/Kim_Service",
+      "installMethod": "subdirExtraction",
       "targets": [
         "claude",
         "codex",
         "openclaw",
         "cursor"
-      ]
+      ],
+      "subdir": "skills/agent-teams-playbook",
+      "defaultSelected": false
     },
     {
       "id": "findskill",
-      "repo": "${skillOwner}/findskill",
+      "repo": "${skillOwner}/Kim_Service",
       "installMethod": "subdirExtraction",
-      "subdirTemplate": "{platform}",
-      "subdirMapping": {
-        "win32": "windows",
-        "default": "original"
-      },
-      "legacyNames": ["find-skills"],
+      "legacyNames": [
+        "find-skills"
+      ],
       "targets": [
         "claude",
         "codex",
         "openclaw",
         "cursor"
-      ]
+      ],
+      "subdir": "skills/find-skill",
+      "defaultSelected": false
     },
     {
       "id": "hookprompt",
-      "repo": "${skillOwner}/HookPrompt",
-      "installMethod": "manual",
+      "repo": "${skillOwner}/Kim_Service",
+      "installMethod": "subdirExtraction",
       "capabilities": [
         "prompt-submission-optimization"
       ],
       "platformSupport": {
         "claude": {
           "status": "native",
-          "events": ["UserPromptSubmit"],
+          "events": [
+            "UserPromptSubmit"
+          ],
           "adapter": "claude-settings-hook"
         },
         "codex": {
           "status": "adapter-required",
-          "events": ["UserPromptSubmit"],
+          "events": [
+            "UserPromptSubmit"
+          ],
           "adapter": "codex-hookprompt-adapter"
         },
         "openclaw": {
           "status": "degraded",
-          "events": ["command:new"],
+          "events": [
+            "command:new"
+          ],
           "adapter": "openclaw-workspace-instruction"
         },
         "cursor": {
           "status": "adapter-required",
-          "events": ["beforeSubmitPrompt"],
+          "events": [
+            "beforeSubmitPrompt"
+          ],
           "adapter": "cursor-hookprompt-adapter"
         }
       },
@@ -65,25 +74,37 @@
         "cursor": "Use Cursor beforeSubmitPrompt through the Meta_Kim adapter; do not reuse Claude hook output directly."
       },
       "globalHookSubdirs": {
-        "claude": ["~/.claude/hooks/meta-kim"]
+        "claude": [
+          "~/.claude/hooks/meta-kim"
+        ]
       },
       "hookExtraFiles": {
         "claude": [
-          { "src": ".claude/prompt-optimizer-meta.md", "dest": "prompt-optimizer-meta.md" }
+          {
+            "src": "hooks/hookprompt/.claude/prompt-optimizer-meta.md",
+            "dest": "prompt-optimizer-meta.md"
+          }
         ]
       },
       "hookSettingsMerge": {
         "claude": {
           "event": "UserPromptSubmit",
           "hookFile": "user-prompt-submit.js",
-          "timeout": 10000
+          "timeout": 60
         }
       },
       "targets": [
         "claude",
         "codex",
         "cursor"
-      ]
+      ],
+      "subdir": "hooks/hookprompt",
+      "hookSubdirs": {
+        "claude": [
+          "hooks/hookprompt/.claude/hooks"
+        ]
+      },
+      "defaultSelected": false
     },
     {
       "id": "superpowers",
@@ -91,6 +112,16 @@
       "claudePlugin": "superpowers@superpowers-marketplace",
       "codexPlugin": "superpowers",
       "cursorPlugin": "superpowers",
+      "marketplace": {
+        "id": "superpowers-marketplace",
+        "repository": "obra/superpowers-marketplace"
+      },
+      "versionSource": {
+        "provider": "github-contents",
+        "repository": "obra/superpowers",
+        "manifestPath": ".claude-plugin/marketplace.json",
+        "pluginName": "superpowers"
+      },
       "installMethod": "pluginMarketplace",
       "fallbackContentDir": "skills",
       "targets": [
@@ -99,27 +130,71 @@
         "openclaw",
         "cursor",
         "opencode"
-      ]
+      ],
+      "defaultSelected": false
     },
     {
       "id": "ecc",
       "repo": "affaan-m/ECC",
       "claudePlugin": "ecc@ecc",
+      "marketplace": {
+        "id": "ecc",
+        "repository": "affaan-m/ECC"
+      },
+      "versionSource": {
+        "provider": "github-contents",
+        "repository": "affaan-m/ECC",
+        "manifestPath": ".claude-plugin/marketplace.json",
+        "pluginName": "ecc"
+      },
       "installMethod": "upstreamCli",
-      "upstreamPackage": "ecc-universal@latest",
+      "upstreamPackage": "ecc-universal@2.2.3",
       "upstreamProfile": "core",
-      "legacyNames": ["everything-claude-code"],
+      "upstreamHookPolicy": "disabled",
+      "legacyNames": [
+        "everything-claude-code"
+      ],
       "platformSupport": {
-        "claude": { "status": "native", "adapter": "claude-plugin" },
-        "codex": { "status": "native", "adapter": "ecc-home-installer" },
-        "cursor": { "status": "native", "adapter": "ecc-project-installer" },
-        "opencode": { "status": "native", "adapter": "ecc-home-installer" },
-        "qwen": { "status": "native", "adapter": "ecc-home-installer" },
-        "zed": { "status": "native", "adapter": "ecc-project-installer" },
-        "gemini": { "status": "native", "adapter": "ecc-project-installer" },
-        "codebuddy": { "status": "native", "adapter": "ecc-project-installer" },
-        "antigravity": { "status": "native", "adapter": "ecc-project-installer" },
-        "joycode": { "status": "native", "adapter": "ecc-project-installer" }
+        "claude": {
+          "status": "native",
+          "adapter": "claude-plugin"
+        },
+        "codex": {
+          "status": "native",
+          "adapter": "ecc-home-installer"
+        },
+        "cursor": {
+          "status": "native",
+          "adapter": "ecc-project-installer"
+        },
+        "opencode": {
+          "status": "native",
+          "adapter": "ecc-home-installer"
+        },
+        "qwen": {
+          "status": "native",
+          "adapter": "ecc-home-installer"
+        },
+        "zed": {
+          "status": "native",
+          "adapter": "ecc-project-installer"
+        },
+        "gemini": {
+          "status": "native",
+          "adapter": "ecc-project-installer"
+        },
+        "codebuddy": {
+          "status": "native",
+          "adapter": "ecc-project-installer"
+        },
+        "antigravity": {
+          "status": "native",
+          "adapter": "ecc-project-installer"
+        },
+        "joycode": {
+          "status": "native",
+          "adapter": "ecc-project-installer"
+        }
       },
       "targets": [
         "claude",
@@ -132,28 +207,8 @@
         "codebuddy",
         "antigravity",
         "joycode"
-      ]
-    },
-    {
-      "id": "planning-with-files",
-      "repo": "OthmanAdi/planning-with-files",
-      "installMethod": "subdirExtraction",
-      "subdir": "skills/planning-with-files",
-      "pluginHookCompat": true,
-      "globalHookSubdirs": {
-        "codex": ["~/.codex/hooks/meta-kim"],
-        "cursor": ["~/.cursor/hooks/meta-kim"]
-      },
-      "globalHookConfigFiles": {
-        "codex": "~/.codex/hooks.json",
-        "cursor": "~/.cursor/hooks.json"
-      },
-      "targets": [
-        "claude",
-        "codex",
-        "openclaw",
-        "cursor"
-      ]
+      ],
+      "defaultSelected": false
     },
     {
       "id": "cli-anything",
@@ -171,33 +226,74 @@
       "id": "gstack",
       "repo": "garrytan/gstack",
       "installMethod": "gitCloneInstallScript",
+      "dependencyClass": "third_party_reference",
+      "installPolicy": "explicit_reference_opt_in",
       "targets": [
         "claude",
         "codex",
         "openclaw",
         "cursor"
+      ],
+      "defaultSelected": false
+    },
+    {
+      "id": "meta-skill-creator",
+      "repo": "${skillOwner}/Kim_Service",
+      "installMethod": "subdirExtraction",
+      "subdir": "skills/meta-skill-creator",
+      "capabilities": [
+        "skill-agent-tool-creation"
+      ],
+      "platformSupport": {
+        "claude": {
+          "status": "native",
+          "adapter": "claude-global-skill"
+        },
+        "codex": {
+          "status": "native",
+          "adapter": "codex-global-skill"
+        }
+      },
+      "targets": [
+        "claude",
+        "codex"
       ]
     },
     {
-      "id": "skill-creator",
-      "repo": "anthropics/skills",
+      "id": "goalpro",
+      "repo": "${skillOwner}/Kim_Service",
       "installMethod": "subdirExtraction",
-      "subdir": "skills/skill-creator",
+      "subdir": "skills/goalpro",
+      "capabilities": [
+        "goal-contract",
+        "intent-amplification",
+        "prompt-only-loop-contract"
+      ],
+      "platformSupport": {
+        "claude": {
+          "status": "native",
+          "adapter": "claude-global-skill"
+        },
+        "codex": {
+          "status": "native",
+          "adapter": "codex-global-skill"
+        },
+        "cursor": {
+          "status": "native",
+          "adapter": "cursor-global-skill"
+        },
+        "openclaw": {
+          "status": "degraded",
+          "adapter": "openclaw-global-skill"
+        }
+      },
       "targets": [
         "claude",
         "codex",
         "openclaw",
         "cursor"
-      ]
+      ],
+      "defaultSelected": false
     }
-  ],
-  "externalUrls": {
-    "claudeCodeDocs": "https://docs.anthropic.com/en/docs/claude-code",
-    "author": {
-      "website": "https://www.aiking.dev/",
-      "github": "https://github.com/KimYx0207",
-      "feishu": "https://my.feishu.cn/wiki/OhQ8wqntFihcI1kWVDlcNdpznFf",
-      "x": "https://x.com/KimYx0207"
-    }
-  }
+  ]
 }

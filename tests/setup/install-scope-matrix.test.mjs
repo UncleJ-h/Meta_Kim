@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { buildIsolatedUserHomeEnv } from "../../scripts/isolated-user-home-env.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 
@@ -10,14 +13,26 @@ function sorted(values) {
 }
 
 test("install scope verification proves global/project target boundaries", () => {
-  const result = spawnSync(process.execPath, ["scripts/verify-install-scope-matrix.mjs"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    timeout: 180_000,
-    windowsHide: true,
-  });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  const summary = JSON.parse(result.stdout);
+  const callerHome = mkdtempSync(path.join(os.tmpdir(), "meta-kim-scope-caller-home-"));
+  let summary;
+  try {
+    const result = spawnSync(process.execPath, ["scripts/verify-install-scope-matrix.mjs"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      timeout: 720_000,
+      windowsHide: true,
+      env: buildIsolatedUserHomeEnv(callerHome),
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    summary = JSON.parse(result.stdout);
+    assert.equal(
+      existsSync(path.join(callerHome, ".meta-kim", "global", "project-registry.sqlite")),
+      false,
+      "verification project cases must not register temporary projects in the caller home",
+    );
+  } finally {
+    rmSync(callerHome, { recursive: true, force: true });
+  }
   assert.equal(summary.ok, true);
   assert.equal(summary.schemaVersion, "meta-kim-install-scope-verification-v0.1");
   assert.equal(summary.globalResults[0].status, "pass");
@@ -25,22 +40,22 @@ test("install scope verification proves global/project target boundaries", () =>
   assert.deepEqual(summary.classification.projectLayer.defaultTargets, ["claude", "codex"]);
   assert.deepEqual(
     sorted(summary.classification.globalLayer.platformSupportTiers.formalProjectionTargets),
-    ["claude", "codex", "cursor", "openclaw"],
+    ["claude", "codex", "cursor", "gemini", "openclaw", "zcode"],
   );
   assert.deepEqual(
     sorted(
       summary.classification.globalLayer.platformSupportTiers
         .nonDefaultFormalProjectionTargets,
     ),
-    ["cursor", "openclaw"],
+    ["cursor", "gemini", "openclaw", "zcode"],
   );
   assert.deepEqual(
     sorted(summary.classification.globalLayer.platformSupportTiers.dependencyInstallTargets),
-    ["antigravity", "codebuddy", "gemini", "joycode", "opencode", "qwen", "zed"],
+    ["antigravity", "codebuddy", "joycode", "opencode", "qwen", "zed"],
   );
   assert.deepEqual(
     sorted(summary.classification.globalLayer.platformSupportTiers.candidateProbeTargets),
-    ["cline", "continue", "kiro", "qoder", "roo-code", "trae", "windsurf"],
+    ["cline", "continue", "kiro", "roo-code", "windsurf"],
   );
   assert.match(
     summary.classification.globalLayer.platformSupportTiers.boundary,
@@ -52,14 +67,27 @@ test("install scope verification proves global/project target boundaries", () =>
   assert.equal(globalById.get("global-default-claude-codex").checks.cursorHomeUntouched, true);
   assert.equal(globalById.get("global-default-claude-codex").checks.openclawHomeUntouched, true);
   assert.equal(globalById.get("global-default-claude-codex").checks.codexGlobalHooksJson, true);
+  assert.equal(globalById.get("global-default-claude-codex").checks.geminiHomeUntouched, true);
+  assert.equal(globalById.get("global-default-claude-codex").checks.zcodeHomeUntouched, true);
   assert.equal(globalById.get("global-all-formal-targets").status, "pass");
   assert.equal(globalById.get("global-all-formal-targets").checks.cursorSkill, true);
   assert.equal(globalById.get("global-all-formal-targets").checks.openclawSkill, true);
   assert.equal(globalById.get("global-all-formal-targets").checks.codexGlobalHooksJson, true);
+  for (const runtime of ["gemini", "zcode"]) {
+    for (const suffix of ["Skill", "Agent", "Mcp", "GlobalHooks"]) {
+      assert.equal(globalById.get("global-all-formal-targets").checks[`${runtime}${suffix}`], true);
+    }
+  }
   assert.equal(globalById.get("global-all-formal-targets").checks.cursorHomeUntouched, undefined);
   assert.equal(globalById.get("global-all-formal-targets").checks.openclawHomeUntouched, undefined);
 
   const byId = new Map(summary.projectResults.map((entry) => [entry.id, entry]));
+  for (const runtime of ["gemini", "zcode"]) {
+    assert.equal(byId.get(`project-${runtime}`).status, "pass");
+    assert.deepEqual(byId.get(`project-${runtime}`).unexpectedPresent, []);
+    assert.deepEqual(byId.get(`project-${runtime}`).globalWrites, []);
+    assert.equal(byId.get(`project-${runtime}`).postApplyPendingCount, 0);
+  }
   assert.equal(byId.get("project-claude").status, "pass");
   assert.deepEqual(byId.get("project-claude").unexpectedPresent, []);
   assert.equal(byId.get("project-codex").status, "pass");
@@ -67,6 +95,7 @@ test("install scope verification proves global/project target boundaries", () =>
   assert.equal(byId.get("project-cursor").status, "pass");
   assert.equal(byId.get("project-openclaw").status, "pass");
   assert.equal(byId.get("project-default-claude-codex").status, "pass");
+  assert.equal(byId.get("project-default-claude-codex").targetCreatedByDryRun, false);
   assert.equal(byId.get("project-default-claude-codex").postApplyDryRunStatus, "ready");
   assert.equal(byId.get("project-default-claude-codex").postApplyRequiresConfirmation, false);
   assert.equal(byId.get("project-default-claude-codex").postApplyPendingCount, 0);

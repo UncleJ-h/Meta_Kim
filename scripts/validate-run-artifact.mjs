@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { planChallengeAuthorizationBinding } from "./governed-execution/plan-challenge-policy.mjs";
+import { productDesignDigest } from "./governed-execution/product-design.mjs";
+import { normalizeHostCritical } from "./governed-execution/intent-dialogue.mjs";
+import { readCurrentTaskFacts, selectTaskDesignRoute } from "./governed-execution/task-design-dispatch.mjs";
+import { taskOutcomeDigest } from "../src/domain/governance/task-outcome.mjs";
+import { normalizeWorkContext, workBindingFor, workBindingsMatch, projectWorkReceipt } from "../src/domain/governance/work-context.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1489,14 +1496,22 @@ function validateIntentPacketWhenRequired(contract, artifact) {
   for (const field of [
     "realIntent",
     "trueUserIntent",
-    "successCriteria",
-    "nonGoals",
-    "noQuotaClarification",
   ]) {
     ensure(
       typeof intent[field] === "string" && intent[field].trim().length >= 1,
       `intentPacket.${field} must be a non-empty string.`,
     );
+  }
+  if (typeof intent.noQuotaClarification === "boolean") ensure(intent.noQuotaClarification === true, "intentPacket.noQuotaClarification must preserve the no-quota policy.");
+  else ensureString(intent.noQuotaClarification, "intentPacket.noQuotaClarification");
+  if (Array.isArray(intent.successCriteria) || Array.isArray(intent.nonGoals)) {
+    ensureObject(intent.intentBinding, "intentPacket.intentBinding");
+    normalizeHostCritical({ input: intent, task: artifact.task, dialogue: intent.intentBinding });
+  } else {
+    // Existing durable v1 artifacts used text at these two fields. New current
+    // host packets keep the validated Critical arrays instead of flattening
+    // structured acceptance conditions into a lossy display string.
+    for (const field of ["successCriteria", "nonGoals"]) ensureString(intent[field], `intentPacket.${field}`);
   }
   ensureStringArray(intent.blockingUnknowns, "intentPacket.blockingUnknowns");
   ensure(
@@ -1563,6 +1578,267 @@ function validateIntentGatePacketWhenRequired(contract, artifact) {
   }
 }
 
+/** Shared question, answer and frontier checks for preparations and formal runs. */
+function validateChallengeQuestions(contract, artifact) {
+  const packet = artifact.preDecisionOptionFrame;
+  const policy = contract.protocols.preDecisionOptionFrame;
+  ensureArray(
+    packet.unresolvedQuestions,
+    "preDecisionOptionFrame.unresolvedQuestions",
+  );
+  const questionFields = policy.unresolvedQuestionRequiredFields ?? [
+    "question",
+    "questionTarget",
+    "decisionImpact",
+    "status",
+  ];
+  const questionTargets = policy.questionTargetEnum ?? [];
+  const questionStatuses = policy.unresolvedQuestionStatusEnum ?? [
+    "open",
+    "answered",
+    "skipped",
+    "invalidated",
+  ];
+  const recommendationStates = policy.recommendationStateEnum ?? [
+    "recommended",
+    "preference_only",
+    "insufficient_evidence",
+  ];
+  const questionIds = new Set();
+  for (const [index, question] of packet.unresolvedQuestions.entries()) {
+    ensureObject(
+      question,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}]`,
+    );
+    ensureFields(
+      question,
+      questionFields,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}]`,
+    );
+    ensureString(
+      question.questionId,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].questionId`,
+    );
+    ensure(
+      !questionIds.has(question.questionId),
+      `preDecisionOptionFrame.unresolvedQuestions contains duplicate questionId ${question.questionId}.`,
+    );
+    questionIds.add(question.questionId);
+    ensureString(
+      question.question,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].question`,
+    );
+    ensureEnum(
+      question.questionTarget,
+      questionTargets,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].questionTarget`,
+    );
+    if (question.resolutionClass != null) {
+      ensureEnum(question.resolutionClass,
+        ["discoverable_fact", "routine_design_decision", "material_user_decision"],
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].resolutionClass`);
+    }
+    ensureString(
+      question.decisionImpact,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].decisionImpact`,
+    );
+    ensure(
+      !/just curious|nice to know|quota|generic/i.test(question.decisionImpact),
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].decisionImpact must explain what execution, scope, risk, owner, or acceptance branch the answer changes.`,
+    );
+    ensure(
+      questionStatuses.includes(question.status),
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].status must be ${questionStatuses.join(", ")}.`,
+    );
+    ensure(
+      Number.isInteger(question.impactPriority) && question.impactPriority >= 1,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].impactPriority must be a positive integer.`,
+    );
+    ensureStringArray(
+      question.dependsOn,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].dependsOn`,
+    );
+    ensureArray(
+      question.evidenceRefs,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].evidenceRefs`,
+    );
+    validateEvidenceRefArray(
+      artifact,
+      question.evidenceRefs,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].evidenceRefs`,
+    );
+    ensureEnum(
+      question.recommendationState,
+      recommendationStates,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].recommendationState`,
+    );
+    ensureString(
+      question.recommendationRationale,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].recommendationRationale`,
+    );
+    if (question.recommendationState === "recommended") {
+      ensureString(
+        question.recommendedAnswer,
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].recommendedAnswer`,
+      );
+    } else {
+      ensure(
+        question.recommendedAnswer === null || question.recommendedAnswer === "",
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].recommendedAnswer must be empty when recommendationState is not recommended.`,
+      );
+    }
+    if (question.status === "answered") {
+      ensureString(
+        question.userAnswer,
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].userAnswer`,
+      );
+      validateEvidenceRefArray(
+        artifact,
+        question.answerEvidenceRefs,
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].answerEvidenceRefs`,
+      );
+    }
+    if (question.status === "invalidated") {
+      ensureString(
+        question.invalidatedBy,
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].invalidatedBy`,
+      );
+      ensure(
+        question.invalidatedBy === "user_requested_summary_stop" ||
+          question.invalidatedBy.startsWith("answer:") ||
+          packet.unresolvedQuestions.some(
+            (candidate) => candidate.questionId === question.invalidatedBy,
+          ),
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].invalidatedBy must be a producer-derived answer, stop control, or dependency reference.`,
+      );
+    }
+  }
+  for (const [index, question] of packet.unresolvedQuestions.entries()) {
+    for (const dependencyId of question.dependsOn) {
+      ensure(
+        dependencyId !== question.questionId && questionIds.has(dependencyId),
+        `preDecisionOptionFrame.unresolvedQuestions[${index}].dependsOn references an unknown or self dependency ${dependencyId}.`,
+      );
+    }
+  }
+  ensureAcyclicDependencyGraph(new Map(packet.unresolvedQuestions.map(question => [question.questionId, question.dependsOn])), "preDecisionOptionFrame question dependencies");
+}
+
+function validateChallengeAnswers(artifact) {
+  const packet = artifact.preDecisionOptionFrame;
+  for (const [index, question] of packet.unresolvedQuestions.entries()) {
+    if (!["answered", "skipped"].includes(question.status)) continue;
+    ensureArray(
+      question.answerEvidenceRefs,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].answerEvidenceRefs`,
+    );
+    ensure(
+      question.answerEvidenceRefs.length > 0,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}] closed by user decision must retain evidence.`,
+    );
+    validateEvidenceRefArray(
+      artifact,
+      question.answerEvidenceRefs,
+      `preDecisionOptionFrame.unresolvedQuestions[${index}].answerEvidenceRefs`,
+    );
+    if (question.resolutionSource != null) {
+      const discovery = artifact.requirementsDiscoveryPacket;
+      let source;
+      let expectedRefs;
+      let expectedValue;
+      if (question.resolutionSource === "supplied_fact_evidence") {
+        ensure(question.resolutionClass === "discoverable_fact", "fact evidence cannot settle a material user decision.");
+        const position = discovery?.resolvedFacts?.findIndex((item) => item.questionId === question.questionId) ?? -1;
+        source = discovery?.resolvedFacts?.[position];
+        expectedRefs = source?.evidenceRefs?.map((_, i) => `requirementsDiscoveryPacket.resolvedFacts[${position}].evidenceRefs[${i}]`);
+        expectedValue = source?.value;
+      } else if (question.resolutionSource === "routine_recommendation_no_permission_granted") {
+        ensure(question.resolutionClass === "routine_design_decision", "routine recommendation cannot settle a material user decision.");
+        const position = discovery?.decisionItems?.findIndex((item) => item.questionId === question.questionId) ?? -1;
+        source = discovery?.decisionItems?.[position];
+        ensure(source?.resolutionClass === "routine_design_decision", "routine decision must match the original discovery class.");
+        expectedRefs = source?.evidenceRefs?.map((_, i) => `requirementsDiscoveryPacket.decisionItems[${position}].evidenceRefs[${i}]`);
+        expectedValue = source?.recommendedAnswer;
+      } else if (question.resolutionSource === "existing_settled_decision") {
+        const intent = packet.intentBinding;
+        ensure(intent?.status === "host_provided_understanding" &&
+          intent.taskHash === artifact.goalContractPacket?.taskHash &&
+          intent.intentDigest === artifact.goalContractPacket?.intentBinding?.intentDigest,
+        "settled decision must come from the current host-provided understanding.");
+        const position = intent?.settledDecisionRefs?.findIndex((item) => item.decisionId === question.questionId) ?? -1;
+        source = intent?.settledDecisionRefs?.[position];
+        expectedRefs = source?.evidenceRefs?.map((_, i) => `preDecisionOptionFrame.intentBinding.settledDecisionRefs[${position}].evidenceRefs[${i}]`);
+        expectedValue = source?.value;
+      } else {
+        ensure(false, "unknown dynamic question resolution source.");
+      }
+      ensure(source != null && question.status === "answered" && question.userAnswer === expectedValue &&
+        JSON.stringify(question.answerEvidenceRefs) === JSON.stringify(expectedRefs),
+      "dynamic answer must match its current source identity, value and exact evidence references.");
+      continue;
+    }
+    const expectedResponseBinding = `plan-challenge-response:${question.questionId}`;
+    ensure(
+      question.answerEvidenceRefs.some((ref) => {
+        const evidence = getPathValue(artifact, ref);
+        return (
+          (evidence?.kind === "question_response" &&
+            evidence.binding === expectedResponseBinding) ||
+          (ref === "preDecisionOptionFrame.planChallengeState.controlEvidence" &&
+            evidence?.trusted === true &&
+            ["accept_recommendation", "skip"].includes(evidence.action))
+        );
+      }),
+      `preDecisionOptionFrame.unresolvedQuestions[${index}] answer evidence must bind to its question or trusted question control.`,
+    );
+  }
+}
+
+function validateChallengeFrontier(artifact) {
+  const packet = artifact.preDecisionOptionFrame;
+  const challenge = packet.planChallengeState;
+  const eligibleOpen = packet.unresolvedQuestions
+    .filter(
+      (question) =>
+        question.status === "open" &&
+        (!question.resolutionClass || question.resolutionClass === "material_user_decision") &&
+        question.dependsOn.every(
+          (dependencyId) =>
+            packet.unresolvedQuestions.find((candidate) => candidate.questionId === dependencyId)?.status === "answered",
+        ),
+    )
+    .sort(
+      (left, right) =>
+        right.impactPriority - left.impactPriority ||
+        left.questionId.localeCompare(right.questionId),
+    );
+  ensure(
+    challenge.selectedQuestionId === (eligibleOpen[0]?.questionId ?? null),
+    "preDecisionOptionFrame.planChallengeState.selectedQuestionId must be the single highest-impact eligible open question.",
+  );
+  if (artifact.requirementsDiscoveryPacket != null) {
+    ensureArray(packet.readyDecisionFrontier, "preDecisionOptionFrame.readyDecisionFrontier");
+    ensureArray(packet.pendingFactRequests, "preDecisionOptionFrame.pendingFactRequests");
+  }
+  if (packet.readyDecisionFrontier != null) {
+    ensureArray(packet.readyDecisionFrontier, "preDecisionOptionFrame.readyDecisionFrontier");
+    ensure(
+      JSON.stringify(packet.readyDecisionFrontier.map((question) => question?.questionId)) ===
+        JSON.stringify(eligibleOpen.map((question) => question.questionId)),
+      "preDecisionOptionFrame.readyDecisionFrontier must match the dependency-ready material questions in impact order.",
+    );
+  }
+  if (packet.pendingFactRequests != null) {
+    ensureArray(packet.pendingFactRequests, "preDecisionOptionFrame.pendingFactRequests");
+    const factIds = packet.unresolvedQuestions.filter((question) => question.status === "open" && question.resolutionClass === "discoverable_fact").map((question) => question.questionId);
+    ensure(
+      JSON.stringify(packet.pendingFactRequests.map((question) => question?.questionId)) === JSON.stringify(factIds),
+      "preDecisionOptionFrame.pendingFactRequests must match the unanswered discoverable facts.",
+    );
+  }
+  return eligibleOpen;
+}
+
 function validatePreDecisionOptionFrame(contract, artifact) {
   const when =
     contract.runDiscipline.protocolFirst
@@ -1595,53 +1871,422 @@ function validatePreDecisionOptionFrame(contract, artifact) {
     packet.contentEvidenceRefs.length >= 1,
     "preDecisionOptionFrame.contentEvidenceRefs must include at least one evidence reference.",
   );
-  ensureArray(
-    packet.unresolvedQuestions,
-    "preDecisionOptionFrame.unresolvedQuestions",
-  );
-  const questionFields = policy.unresolvedQuestionRequiredFields ?? [
-    "question",
-    "questionTarget",
-    "decisionImpact",
-    "status",
-  ];
-  const questionTargets = policy.questionTargetEnum ?? [];
-  for (const [index, question] of packet.unresolvedQuestions.entries()) {
-    ensureObject(
-      question,
-      `preDecisionOptionFrame.unresolvedQuestions[${index}]`,
-    );
+  validateChallengeQuestions(contract, artifact);
+  if (packet.planChallengeState != null) {
+    const challenge = packet.planChallengeState;
+    const challengePolicy = policy.planChallengeState ?? {};
+    ensureObject(challenge, "preDecisionOptionFrame.planChallengeState");
     ensureFields(
-      question,
-      questionFields,
-      `preDecisionOptionFrame.unresolvedQuestions[${index}]`,
+      challenge,
+      challengePolicy.requiredFields ?? [],
+      "preDecisionOptionFrame.planChallengeState",
     );
-    ensureString(
-      question.question,
-      `preDecisionOptionFrame.unresolvedQuestions[${index}].question`,
+    ensure(
+      typeof challenge.active === "boolean",
+      "preDecisionOptionFrame.planChallengeState.active must be a boolean.",
+    );
+    ensure(
+      typeof challenge.planChallengeSatisfied === "boolean",
+      "preDecisionOptionFrame.planChallengeState.planChallengeSatisfied must be a boolean.",
+    );
+    ensure(
+      typeof challenge.authorizationRequired === "boolean",
+      "preDecisionOptionFrame.planChallengeState.authorizationRequired must be a boolean.",
+    );
+    ensureStringArray(
+      challenge.sideEffectActions,
+      "preDecisionOptionFrame.planChallengeState.sideEffectActions",
+    );
+    ensure(
+      new Set(challenge.sideEffectActions).size === challenge.sideEffectActions.length,
+      "preDecisionOptionFrame.planChallengeState.sideEffectActions must not contain duplicates.",
+    );
+    ensure(
+      typeof challenge.executionAllowed === "boolean",
+      "preDecisionOptionFrame.planChallengeState.executionAllowed must be a boolean.",
     );
     ensureEnum(
-      question.questionTarget,
-      questionTargets,
-      `preDecisionOptionFrame.unresolvedQuestions[${index}].questionTarget`,
+      challenge.phase,
+      challengePolicy.phaseEnum ?? [],
+      "preDecisionOptionFrame.planChallengeState.phase",
+    );
+    ensureStringArray(
+      challenge.triggerReasons,
+      "preDecisionOptionFrame.planChallengeState.triggerReasons",
+    );
+    for (const reason of challenge.triggerReasons) {
+      ensureEnum(
+        reason,
+        challengePolicy.triggerReasonEnum ?? [],
+        "preDecisionOptionFrame.planChallengeState.triggerReasons[]",
+      );
+    }
+    ensureObjectArray(
+      challenge.triggerEvidence,
+      "preDecisionOptionFrame.planChallengeState.triggerEvidence",
+    );
+    for (const [index, evidence] of challenge.triggerEvidence.entries()) {
+      ensureFields(
+        evidence,
+        ["evidenceId", "kind", "source", "excerpt", "trusted", "binding"],
+        `preDecisionOptionFrame.planChallengeState.triggerEvidence[${index}]`,
+      );
+      ensure(
+        evidence.trusted === true,
+        `preDecisionOptionFrame.planChallengeState.triggerEvidence[${index}] must be trusted producer evidence.`,
+      );
+    }
+    ensureArray(
+      challenge.triggerEvidenceRefs,
+      "preDecisionOptionFrame.planChallengeState.triggerEvidenceRefs",
+    );
+    if (challenge.active) {
+      validateEvidenceRefArray(
+        artifact,
+        challenge.triggerEvidenceRefs,
+        "preDecisionOptionFrame.planChallengeState.triggerEvidenceRefs",
+      );
+    } else {
+      ensure(
+        challenge.triggerEvidenceRefs.length === 0 && challenge.triggerEvidence.length === 0,
+        "inactive plan challenge must not claim trigger evidence.",
+      );
+    }
+    ensureObjectArray(
+      challenge.decisionEvidence,
+      "preDecisionOptionFrame.planChallengeState.decisionEvidence",
+    );
+    for (const [index, evidence] of challenge.decisionEvidence.entries()) {
+      ensureFields(
+        evidence,
+        ["evidenceId", "kind", "binding", "sourceRefs", "sequence", "historical", "trusted"],
+        `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}]`,
+      );
+      ensure(
+        evidence.trusted === false,
+        `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}] is planning evidence and must remain non-authorizing.`,
+      );
+      ensureString(
+        evidence.binding,
+        `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}].binding`,
+      );
+      ensureStringArray(
+        evidence.sourceRefs,
+        `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}].sourceRefs`,
+      );
+      ensure(
+        evidence.sourceRefs.length >= 1,
+        `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}].sourceRefs must not be empty.`,
+      );
+      if (evidence.kind === "question_response") {
+        ensure(
+          Number.isInteger(evidence.sequence) && evidence.sequence >= 1,
+          `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}].sequence must record selected-question order.`,
+        );
+        ensure(
+          typeof evidence.historical === "boolean",
+          `preDecisionOptionFrame.planChallengeState.decisionEvidence[${index}].historical must identify replayed history versus the current answer.`,
+        );
+      }
+    }
+    const decisionEvidenceIds = challenge.decisionEvidence.map((item) => item.evidenceId);
+    const questionResponseEvidence = challenge.decisionEvidence.filter(
+      (item) => item.kind === "question_response",
+    );
+    const questionResponseSequences = questionResponseEvidence.map((item) => item.sequence);
+    ensure(
+      new Set(decisionEvidenceIds).size === decisionEvidenceIds.length,
+      "plan challenge decision evidence ids must be unique.",
+    );
+    ensure(
+      new Set(questionResponseSequences).size === questionResponseSequences.length,
+      "plan challenge question response sequences must be unique.",
+    );
+    const currentResponseQuestionIds = new Set(questionResponseEvidence
+      .filter((item) => item.historical === false)
+      .map((item) => item.binding.replace(/^plan-challenge-response:/, "")));
+    for (const questionId of currentResponseQuestionIds) {
+      const question = packet.unresolvedQuestions.find((item) => item.questionId === questionId);
+      ensure(question != null, "current-run question response must bind an existing question.");
+      ensure(question?.dependsOn.every((id) => !currentResponseQuestionIds.has(id)),
+        "current-run question responses cannot consume a dependency answered in the same round.");
+    }
+    validateChallengeAnswers(artifact);
+    ensure(
+      typeof challenge.sharedUnderstandingConfirmed === "boolean",
+      "preDecisionOptionFrame.planChallengeState.sharedUnderstandingConfirmed must be a boolean.",
+    );
+    ensureStringArray(
+      challenge.sharedUnderstandingEvidenceRefs,
+      "preDecisionOptionFrame.planChallengeState.sharedUnderstandingEvidenceRefs",
+    );
+    if (challenge.sharedUnderstandingConfirmed) {
+      validateEvidenceRefArray(
+        artifact,
+        challenge.sharedUnderstandingEvidenceRefs,
+        "preDecisionOptionFrame.planChallengeState.sharedUnderstandingEvidenceRefs",
+      );
+      ensure(
+        challenge.sharedUnderstandingEvidenceRefs.every(
+          (ref) =>
+            getPathValue(artifact, ref)?.kind === "shared_understanding_confirmation" &&
+            getPathValue(artifact, ref)?.binding === "plan-challenge-understanding-confirmation",
+        ),
+        "shared understanding evidence must be trusted and bound to plan-challenge-understanding-confirmation.",
+      );
+    } else {
+      ensure(
+        challenge.sharedUnderstandingEvidenceRefs.length === 0,
+        "unconfirmed shared understanding must not claim evidence refs.",
+      );
+    }
+    ensureObject(
+      challenge.executionAuthorization,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization",
+    );
+    ensureFields(
+      challenge.executionAuthorization,
+      challengePolicy.executionAuthorizationRequiredFields ?? [],
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization",
+    );
+    ensureEnum(
+      challenge.executionAuthorization.state,
+      challengePolicy.executionAuthorizationStateEnum ?? [],
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.state",
     );
     ensureString(
-      question.decisionImpact,
-      `preDecisionOptionFrame.unresolvedQuestions[${index}].decisionImpact`,
+      challenge.executionAuthorization.source,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.source",
+    );
+    ensureString(
+      challenge.executionAuthorization.scope,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.scope",
+    );
+    ensureStringArray(
+      challenge.executionAuthorization.scopeActions,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.scopeActions",
     );
     ensure(
-      !/just curious|nice to know|quota|generic/i.test(question.decisionImpact),
-      `preDecisionOptionFrame.unresolvedQuestions[${index}].decisionImpact must explain what execution, scope, risk, owner, or acceptance branch the answer changes.`,
+      typeof challenge.executionAuthorization.trusted === "boolean",
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.trusted must be a boolean.",
+    );
+    ensureString(
+      challenge.executionAuthorization.binding,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.binding",
+    );
+    ensureStringArray(
+      challenge.executionAuthorization.evidenceRefs,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.evidenceRefs",
     );
     ensure(
-      ["open", "closed", "skipped"].includes(question.status),
-      `preDecisionOptionFrame.unresolvedQuestions[${index}].status must be open, closed, or skipped.`,
+      typeof challenge.executionAuthorization.scopeCoversActions === "boolean",
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.scopeCoversActions must be a boolean.",
     );
+    const expectedAuthorizationBinding = planChallengeAuthorizationBinding(
+      challenge.sideEffectActions,
+    );
+    ensure(
+      challenge.executionAuthorization.binding === expectedAuthorizationBinding,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.binding must match the current side-effect action set.",
+    );
+    const scopeCoversActions = challenge.sideEffectActions.every((action) =>
+      challenge.executionAuthorization.scopeActions.includes(action),
+    );
+    ensure(
+      challenge.executionAuthorization.scopeCoversActions === scopeCoversActions,
+      "preDecisionOptionFrame.planChallengeState.executionAuthorization.scopeCoversActions must match concrete action coverage.",
+    );
+    if (["authorized", "denied"].includes(challenge.executionAuthorization.state)) {
+      ensure(
+        challenge.executionAuthorization.trusted === true,
+        "authorized or denied executionAuthorization must be trusted.",
+      );
+      validateEvidenceRefArray(
+        artifact,
+        challenge.executionAuthorization.evidenceRefs,
+        "preDecisionOptionFrame.planChallengeState.executionAuthorization.evidenceRefs",
+      );
+      ensure(
+        challenge.executionAuthorization.evidenceRefs.every(
+          (ref) =>
+            getPathValue(artifact, ref)?.kind === "execution_authorization" &&
+            getPathValue(artifact, ref)?.binding === expectedAuthorizationBinding,
+        ),
+        "execution authorization evidence must be bound to the current side-effect action set.",
+      );
+    }
+    ensure(
+      challenge.executionAuthorization.state !== "authorized",
+      "pre-host artifacts cannot claim authorized executionAuthorization.",
+    );
+    ensureObject(
+      challenge.pendingUserChoice,
+      "preDecisionOptionFrame.planChallengeState.pendingUserChoice",
+    );
+    ensureEnum(
+      challenge.pendingUserChoice.status,
+      ["required_not_invoked", "not_required"],
+      "preDecisionOptionFrame.planChallengeState.pendingUserChoice.status",
+    );
+    ensureArray(
+      challenge.pendingUserChoice.controls,
+      "preDecisionOptionFrame.planChallengeState.pendingUserChoice.controls",
+    );
+    ensureString(challenge.chatSummaryRef, "preDecisionOptionFrame.planChallengeState.chatSummaryRef");
+    ensure(
+      challenge.chatSummaryRef === "summaryPacket",
+      "preDecisionOptionFrame.planChallengeState.chatSummaryRef must reference summaryPacket.",
+    );
+    ensure(
+      challenge.active === (challenge.triggerReasons.length > 0),
+      "preDecisionOptionFrame.planChallengeState.active must match whether a trigger reason exists.",
+    );
+    ensure(
+      challenge.authorizationRequired ===
+        (challenge.active && challenge.sideEffectActions.length > 0),
+      "preDecisionOptionFrame.planChallengeState.authorizationRequired must match active concrete side effects.",
+    );
+    const eligibleOpen = validateChallengeFrontier(artifact);
+    const awaitingUserInput = [
+      "awaiting_user_answer",
+      "awaiting_understanding_confirmation",
+      "awaiting_execution_authorization",
+    ].includes(challenge.phase);
+    if (challenge.phase === "awaiting_fact_discovery") {
+      ensure(eligibleOpen.length === 0 && packet.unresolvedQuestions.some((question) => question.status === "open" && question.resolutionClass),
+        "awaiting_fact_discovery requires unresolved discovery dependencies and no ready user decision.");
+    }
+    ensure(
+      challenge.pendingUserChoice.status ===
+        (awaitingUserInput ? "required_not_invoked" : "not_required"),
+      "preDecisionOptionFrame.planChallengeState.pendingUserChoice.status must match the current phase.",
+    );
+    if (awaitingUserInput) {
+      ensureObject(
+        challenge.pendingUserChoice.question,
+        "preDecisionOptionFrame.planChallengeState.pendingUserChoice.question",
+      );
+      ensureString(
+        challenge.pendingUserChoice.question.binding,
+        "preDecisionOptionFrame.planChallengeState.pendingUserChoice.question.binding",
+      );
+      ensureString(
+        challenge.pendingUserChoice.question.displayText,
+        "preDecisionOptionFrame.planChallengeState.pendingUserChoice.question.displayText",
+      );
+      ensure(
+        challenge.pendingUserChoice.controls.length >= 1,
+        "preDecisionOptionFrame.planChallengeState.pendingUserChoice.controls must expose user actions while input is pending.",
+      );
+    } else {
+      ensure(
+        challenge.pendingUserChoice.question === null,
+        "preDecisionOptionFrame.planChallengeState.pendingUserChoice.question must be null when no user choice is pending.",
+      );
+      ensure(
+        challenge.pendingUserChoice.controls.length === 0,
+        "preDecisionOptionFrame.planChallengeState.pendingUserChoice.controls must be empty when no choice is pending.",
+      );
+    }
+    ensure(
+      challenge.executionAllowed === false,
+      "preDecisionOptionFrame.planChallengeState.executionAllowed must remain false before host-native execution occurs.",
+    );
+    ensure(
+      challenge.phase !== "ready_for_execution",
+      "pre-host artifacts cannot claim ready_for_execution; use planChallengeSatisfied for non-authorizing plan closure.",
+    );
+    if (!challenge.active) {
+      ensure(
+        challenge.phase === "inactive" &&
+          challenge.authorizationRequired === false &&
+          challenge.executionAuthorization.state === "not_required",
+        "inactive plan challenge must preserve the low-risk path without an authorization gate.",
+      );
+    }
+    if (challenge.phase === "plan_challenge_satisfied") {
+      ensure(
+        challenge.selectedQuestionId === null &&
+          packet.unresolvedQuestions.every((question) => question.status !== "open"),
+        "plan_challenge_satisfied requires every challenge question to be closed and no selected question.",
+      );
+      ensure(
+        challenge.sharedUnderstandingConfirmed === true,
+        "plan_challenge_satisfied requires shared understanding confirmation.",
+      );
+      ensure(
+        challenge.planChallengeSatisfied === true,
+        "plan_challenge_satisfied phase requires planChallengeSatisfied=true.",
+      );
+    }
+    ensure(
+      challenge.planChallengeSatisfied === (challenge.phase === "plan_challenge_satisfied"),
+      "planChallengeSatisfied must match the non-authorizing plan_challenge_satisfied phase.",
+    );
+    if (challenge.executionAuthorization.state === "denied") {
+      ensure(
+        challenge.phase === "execution_denied" &&
+          challenge.executionAllowed === false &&
+          challenge.pendingUserChoice.status === "not_required",
+        "denied execution authorization must be terminal and must not ask again.",
+      );
+    }
+    if (challenge.active) {
+      ensure(
+        challenge.executionAllowed === false && artifact.status !== "pass",
+        "active non-ready plan challenge must block execution and prevent a pass artifact.",
+      );
+      ensure(
+        artifact.wardenWritebackFlow?.status !== "approved-for-writeback",
+        "active non-ready plan challenge must block canonical writeback.",
+      );
+      ensure(
+        Number(artifact.projectCustomizationPacket?.execution?.appliedCount ?? 0) === 0,
+        "active non-ready plan challenge must block project capability writes.",
+      );
+      ensure(
+        artifact.coreLoop?.executionResult?.executionAllowed === false &&
+          artifact.coreLoop?.executionResult?.executionGate === "blocked_by_plan_challenge",
+        "active non-ready plan challenge must be represented as blocked in the core Execution result.",
+      );
+    }
+    if (
+      challenge.sharedUnderstandingConfirmed === true &&
+      challenge.authorizationRequired === true &&
+      !["authorized", "denied"].includes(challenge.executionAuthorization.state)
+    ) {
+      ensure(
+        challenge.phase === "plan_challenge_satisfied",
+        "shared understanding may satisfy the plan challenge but must not authorize host execution.",
+      );
+    }
+    const summaryFields = challengePolicy.summaryRequiredFields ?? [];
+    ensureFields(artifact.summaryPacket, summaryFields, "summaryPacket");
+    ensureArray(artifact.summaryPacket.confirmedDecisions, "summaryPacket.confirmedDecisions");
+    ensureArray(artifact.summaryPacket.openRisks, "summaryPacket.openRisks");
+    ensureString(artifact.summaryPacket.nextStep, "summaryPacket.nextStep");
   }
   ensureArray(packet.candidateOptions, "preDecisionOptionFrame.candidateOptions");
+  const challenge = packet.planChallengeState;
+  // A pending understanding/permission question is not a request to choose
+  // implementation routes. Preserve its separate gate without filler paths.
+  const routeChoiceRequired = packet.unresolvedQuestions.some((question) =>
+    question.status === "open" && question.questionId === "plan-challenge-route-selection") ||
+    (packet.requiresUserChoice && !challenge?.active);
+  const blockedNonRouteChallenge = challenge?.active === true &&
+    challenge.executionAllowed === false && artifact.status !== "pass" &&
+    artifact.coreLoop?.executionResult?.executionAllowed === false &&
+    artifact.coreLoop?.executionResult?.executionGate === "blocked_by_plan_challenge" &&
+    !routeChoiceRequired;
+  const currentHostRoute = artifact.selectedExecutionRoute?.recommendedRoute;
+  const explicitHostWorkWithoutProductChoice = !routeChoiceRequired && packet.requiresUserChoice === false &&
+    packet.choiceGateSkip === "no_branching_choice" && currentHostRoute?.selectionPolicy === "host_selected_current_bindings" &&
+    currentHostRoute.selectionStatus === "bindings_verified_not_invoked" && !currentHostRoute.blockedReasons?.length &&
+    /^[a-f0-9]{64}$/u.test(artifact.thinkingPacket?.inventoryDigest ?? "") &&
+    artifact.thinkingPacket?.hostProducerEvidenceRefs?.length > 0 && artifact.workerTaskPackets?.length > 0;
   ensure(
-    packet.candidateOptions.length >= 2,
-    "preDecisionOptionFrame.candidateOptions must include at least two candidate solution paths.",
+    packet.candidateOptions.length >= (routeChoiceRequired ? 2 : blockedNonRouteChallenge || explicitHostWorkWithoutProductChoice ? 0 : 1),
+    "preDecisionOptionFrame.candidateOptions must include a viable path and at least two paths for a required route choice.",
   );
   for (const [index, option] of packet.candidateOptions.entries()) {
     ensureObject(option, `preDecisionOptionFrame.candidateOptions[${index}]`);
@@ -1710,16 +2355,16 @@ function validatePreDecisionOptionFrame(contract, artifact) {
   }
   if (packet.requiresUserChoice === true) {
     ensure(
-      packet.solutionChoiceState === "confirmed",
-      "preDecisionOptionFrame.solutionChoiceState must be confirmed before dispatch artifacts are finalized when user choice is required.",
+      packet.solutionChoiceState === "pending_user_choice",
+      "preDecisionOptionFrame.solutionChoiceState must remain pending_user_choice while a host choice is required.",
     );
     ensure(
       packet.choiceGateSkip === null || packet.choiceGateSkip === undefined,
       "preDecisionOptionFrame.choiceGateSkip must be empty when user choice is required.",
     );
     ensure(
-      packet.skipSource === "user_confirmed" || packet.skipSource === "native_choice",
-      "preDecisionOptionFrame.skipSource must show user confirmation when choice is required.",
+      packet.skipSource === "pending_host_adapter",
+      "preDecisionOptionFrame.skipSource must record pending_host_adapter while the choice has not been invoked.",
     );
   }
   if (packet.solutionChoiceState === "confirmed") {
@@ -1750,7 +2395,7 @@ function validateFinalizedChoiceState(artifact, packet, context) {
   );
   ensureString(packet.finalizationGate, `${context}.finalizationGate`);
   ensure(
-    !/pending|before/i.test(packet.finalizationGate),
+    !/pending|before/i.test(packet.finalizationGate) || isBlockedWorkerPlan(artifact, packet),
     `${context}.finalizationGate must show dispatch was finalized after user choice or an allowed skip.`,
   );
 }
@@ -3126,7 +3771,56 @@ function normalizeWorkerDependency(contract, dep, context) {
   return dep.taskRef;
 }
 
+/** Unknown scopes are representable only in a visibly blocked, unexecuted plan. */
+function isBlockedWorkerPlan(artifact, packet) {
+  const result = artifact.workerResultPackets?.find((entry) => entry.taskPacketId === packet.taskPacketId);
+  return ["incomplete", "ready"].includes(packet.workOrderReadiness) && packet.finalizationGate === "blocked_before_host_handoff" &&
+    artifact.publicReady !== true && artifact.runHeader?.publicReady !== true && artifact.summaryPacket?.publicReady !== true &&
+    result?.status !== "completed" && !(result?.fileCompletionList ?? []).some((entry) => entry.status === "completed") &&
+    !(result?.executionEvidence ?? []).some((entry) => ["passed", "completed", "pass"].includes(entry.status));
+}
+
+function isIncompleteWorkerPlan(artifact, packet) {
+  return packet.workOrderReadiness === "incomplete" && isBlockedWorkerPlan(artifact, packet);
+}
+
+function hasBoundDependencyMaterialsScope(artifact, packet) {
+  const scope = packet.workOrderScope;
+  if (scope == null) return false;
+  const binding = artifact.dependencyCalculationPacket?.binding;
+  const sourceBinding = artifact.dependencyCalculationPacket?.ownerSourceBinding;
+  const selected = artifact.selectedExecutionRoute?.recommendedRoute?.selectedCapabilityProviders?.agent;
+  const stable = (value) => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])])) : value;
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  return scope.kind === "dependency_materials" && scope.runId === artifact.runId &&
+    typeof artifact.task === "string" && scope.requestSha256 === hash(artifact.task.trim()) &&
+    scope.requestSha256 === artifact.goalContractPacket?.taskHash &&
+    binding && ["requestSha256", "inputSha256", "intentDigest", "dependencyRootSha256"].every((key) => scope[key] === binding[key]) &&
+    (scope.methodInputsSha256 ?? null) === (binding.methodInputsSha256 ?? null) &&
+    (scope.methodInputsSha256 == null || /^[a-f0-9]{64}$/u.test(scope.methodInputsSha256)) &&
+    [scope.inputSha256, scope.dependencyRootSha256, scope.componentContentSha256, scope.ownerContractSha256, scope.ownerContractProjectionSha256].every((value) => /^[a-f0-9]{64}$/u.test(value ?? "")) &&
+    scope.intentDigest === (packet.intentBinding?.intentDigest ?? null) &&
+    scope.intentDigest === (artifact.preDecisionOptionFrame?.intentBinding?.intentDigest ?? null) &&
+    Number.isInteger(scope.inputBytes) && scope.inputBytes > 0 && scope.inputBytes <= 262144 &&
+    scope.inputBytes === artifact.dependencyCalculationPacket?.inputBytes &&
+    packet.ownerSource === "dependency_agent_contract" && packet.ownerBindingMode === "run_scoped_owner_contract" &&
+    selected?.id === packet.ownerAgent && selected.ownerContract?.contentDigest === packet.ownerContract?.contentDigest &&
+    selected.ownerContract?.componentContentSha256 === scope.componentContentSha256 &&
+    scope.componentContentSha256 === packet.ownerContract?.componentContentSha256 &&
+    sourceBinding?.runId === artifact.runId && sourceBinding.taskPacketId === packet.taskPacketId &&
+    sourceBinding.ownerAgent === packet.ownerAgent && sourceBinding.componentContentSha256 === scope.componentContentSha256 &&
+    sourceBinding.ownerContractSha256 === scope.ownerContractSha256 &&
+    scope.ownerContractProjectionSha256 === hash(JSON.stringify(stable(packet.ownerContract), null, 2) + "\n") &&
+    Array.isArray(packet.ownerContract?.sideEffects) && packet.ownerContract.sideEffects.length === 0 &&
+    packet.scopeFiles?.length === 0 && packet.shardScope?.length === 1 && packet.shardScope[0] === `input-sha256:${scope.inputSha256}` &&
+    packet.mutationPolicy === "read_only" && packet.externalWritePolicy === "forbidden" &&
+    packet.safetyEvidence?.status === "proven" && packet.safetyEvidence?.evidenceBasis === "verified_readonly_owner_and_bound_materials";
+}
+
 function validateWorkerWorkOrder(contract, artifact, packet, context) {
+  const boundMaterials = hasBoundDependencyMaterialsScope(artifact, packet);
+  if (packet.workOrderScope != null) ensure(boundMaterials, `${context}.workOrderScope must bind current materials, task, intent and verified owner source.`);
   for (const field of [
     "coreProblem",
     "todayTask",
@@ -3163,7 +3857,7 @@ function validateWorkerWorkOrder(contract, artifact, packet, context) {
   ]) {
     ensureStringArray(packet[field], `${context}.${field}`);
     ensure(
-      packet[field].length >= 1,
+      packet[field].length >= 1 || (field === "scopeFiles" && (isIncompleteWorkerPlan(artifact, packet) || boundMaterials)),
       `${context}.${field} must contain at least one item before the worker starts.`,
     );
   }
@@ -3378,6 +4072,13 @@ function validateWorkerPackets(contract, artifact) {
     "same_workspace_readonly_overlap",
     "isolated_worktree",
     "file_lock_required",
+    "shared_workspace_read_only",
+    "shared_workspace_disjoint_paths",
+    "shared_worktree_disjoint_files",
+    "run_scoped",
+    "isolated_workspace",
+    "single_worker",
+    "unproven",
   ]);
   for (const [index, packet] of taskPackets.entries()) {
     ensureFields(
@@ -3418,7 +4119,7 @@ function validateWorkerPackets(contract, artifact) {
     ensureString(packet.shardKey, `workerTaskPackets[${index}].shardKey`);
     ensureArray(packet.shardScope, `workerTaskPackets[${index}].shardScope`);
     ensure(
-      packet.shardScope.length >= 1,
+      packet.shardScope.length >= 1 || isIncompleteWorkerPlan(artifact, packet),
       `workerTaskPackets[${index}].shardScope must contain at least one shard.`,
     );
     ensureString(
@@ -3439,6 +4140,10 @@ function validateWorkerPackets(contract, artifact) {
     ensure(
       validWorkspaceIsolation.has(packet.workspaceIsolation),
       `workerTaskPackets[${index}].workspaceIsolation must be one of [${[...validWorkspaceIsolation].join(", ")}].`,
+    );
+    ensure(
+      ![packet.workspaceIsolation, packet.collisionPolicy].some((value) => ["unproven", "single_worker", "single_worker_bounded_scope"].includes(value)) || isIncompleteWorkerPlan(artifact, packet),
+      `workerTaskPackets[${index}] unproven isolation or collision policy is allowed only in a blocked, incomplete plan.`,
     );
     ensureArray(packet.dependsOn, `workerTaskPackets[${index}].dependsOn`);
     dependenciesByTaskId.set(packet.taskPacketId, []);
@@ -4075,12 +4780,112 @@ function validateNestedPacketConsistency(artifact, packetName) {
   );
 }
 
-function validateCoreLoopPublicReadyConsistency(artifact) {
+function validateContextEngineeringBudgetForPublicReady(contract, artifact, claims) {
+  const policy =
+    contract.runDiscipline?.runArtifactValidation
+      ?.contextEngineeringBudgetPublicReadyPolicy;
+  ensure(
+    policy?.enabled === true,
+    "runArtifactValidation.contextEngineeringBudgetPublicReadyPolicy must be enabled.",
+  );
+
+  const claimNames = claims.map(([name]) => name).join(", ");
+  const packetName = policy.packet;
+  const contextBudget = nestedPacket(artifact, packetName);
+  ensure(
+    contextBudget && typeof contextBudget === "object",
+    `${claimNames} requires ${packetName}.`,
+  );
+  ensure(
+    contextBudget[policy.statusField] === policy.requiredStatus,
+    `${claimNames} requires ${packetName}.${policy.statusField}=${policy.requiredStatus}.`,
+  );
+
+  const blockedBy = contextBudget[policy.blockedByField];
+  ensureArray(blockedBy, `${packetName}.${policy.blockedByField}`);
+  ensure(
+    blockedBy.length === 0,
+    `${claimNames} requires ${packetName}.${policy.blockedByField} to be empty.`,
+  );
+
+  const measurement = contextBudget[policy.measurementField];
+  ensure(
+    measurement && typeof measurement === "object",
+    `${claimNames} requires ${packetName}.${policy.measurementField}.`,
+  );
+  const measurementPolicy = policy.measurementRequirements;
+  const hostObservedField = measurementPolicy.hostObservedContextLoadField;
+  ensure(
+    measurement[hostObservedField] ===
+      measurementPolicy.hostObservedContextLoadRequiredValue,
+    `${claimNames} requires ${packetName}.${policy.measurementField}.${hostObservedField}=true.`,
+  );
+  const inputTokensField = measurementPolicy.actualInputTokensField;
+  ensure(
+    Number.isFinite(measurement[inputTokensField]) &&
+      measurement[inputTokensField] >= measurementPolicy.actualInputTokensMinimum,
+    `${claimNames} requires ${packetName}.${policy.measurementField}.${inputTokensField} to be a finite nonnegative number.`,
+  );
+  for (const check of measurementPolicy.completedChecks) {
+    ensure(
+      measurement[check.field] === check.requiredValue,
+      `${claimNames} requires ${packetName}.${policy.measurementField}.${check.field}=${check.requiredValue}.`,
+    );
+  }
+
+  for (const collectionField of policy.sourceCollectionFields) {
+    const records = contextBudget[collectionField];
+    ensureArray(records, `${packetName}.${collectionField}`);
+    ensure(
+      records.length >= policy.minimumSourceRecordsPerCollection,
+      `${claimNames} requires at least ${policy.minimumSourceRecordsPerCollection} ${packetName}.${collectionField} record(s).`,
+    );
+    for (const [index, source] of records.entries()) {
+      const sourcePath = `${packetName}.${collectionField}[${index}]`;
+      ensure(
+        source && typeof source === "object",
+        `${sourcePath} must be an object.`,
+      );
+      ensureEnum(
+        source[policy.sourceEvidenceStateField],
+        policy.observedSourceEvidenceStates,
+        `${sourcePath}.${policy.sourceEvidenceStateField}`,
+      );
+      ensureString(
+        source[policy.sourceEvidenceRefField],
+        `${sourcePath}.${policy.sourceEvidenceRefField}`,
+      );
+    }
+  }
+
+  const publicReadyDecision = nestedPacket(artifact, "publicReadyDecision");
+  ensure(
+    publicReadyDecision && typeof publicReadyDecision === "object",
+    `${claimNames} requires publicReadyDecision.`,
+  );
+  ensure(
+    publicReadyDecision[policy.publicReadyDecisionStatusField] ===
+      contextBudget[policy.statusField],
+    `publicReadyDecision.${policy.publicReadyDecisionStatusField} must match ${packetName}.${policy.statusField}.`,
+  );
+  ensureArray(
+    publicReadyDecision[policy.publicReadyDecisionBlockedByField],
+    `publicReadyDecision.${policy.publicReadyDecisionBlockedByField}`,
+  );
+  ensure(
+    canonicalJson(publicReadyDecision[policy.publicReadyDecisionBlockedByField]) ===
+      canonicalJson(blockedBy),
+    `publicReadyDecision.${policy.publicReadyDecisionBlockedByField} must match ${packetName}.${policy.blockedByField}.`,
+  );
+}
+
+function validateCoreLoopPublicReadyConsistency(contract, artifact) {
   for (const packetName of [
     "runtimeInvocationPlanPacket",
     "hostInvocationRequestPacket",
     "capabilityInvocationTruthPacket",
     "productExperiencePacket",
+    "contextEngineeringBudget",
     "publicReadyDecision",
   ]) {
     validateNestedPacketConsistency(artifact, packetName);
@@ -4088,6 +4893,8 @@ function validateCoreLoopPublicReadyConsistency(artifact) {
 
   const claims = publicReadyClaims(artifact);
   if (claims.length === 0) return;
+
+  validateContextEngineeringBudgetForPublicReady(contract, artifact, claims);
 
   const readinessSignals = publicReadySignals(artifact);
   const falseSignals = readinessSignals.filter(([, value]) => value === false);
@@ -4350,7 +5157,103 @@ function validateRequiredPackets(contract, artifact) {
   }
 }
 
+/** Preparations are durable Critical/Fetch handoffs, never a partial formal run.
+ * Reuse the same question/answer/frontier rules without fabricating runHeader,
+ * worker packets or execution evidence to satisfy the formal-run contract. */
+export function validatePreparationArtifact(contract, artifact) {
+  ensureObject(artifact, "host preparation");
+  ensure(artifact.schemaVersion === 1 && artifact.artifactKind === "host_preparation", "Preparation must identify its actual artifact kind.");
+  ensureFields(artifact, ["runId", "task", "taskFingerprint", "resolvedOutputLanguage", "preparation", "goalContractPacket", "intentPacket", "preDecisionOptionFrame", "fetchPacket", "thinkingPacket", "coreLoop"], "host preparation");
+  ensure(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(artifact.runId) && !artifact.runId.includes(".."), "Preparation run id must be a safe file identity.");
+  ensure(/^[A-Za-z][A-Za-z0-9-]{0,15}$/u.test(artifact.resolvedOutputLanguage), "Preparation language must be a safe file suffix.");
+  ensureString(artifact.task, "host preparation task");
+  ensureString(artifact.taskFingerprint, "host preparation taskFingerprint");
+  const taskHash = taskOutcomeDigest(artifact.task);
+  const intent = artifact.intentPacket;
+  ensure(artifact.goalContractPacket.taskHash === taskHash && intent.intentBinding?.taskHash === taskHash, "Preparation task binding mismatch.");
+  ensure((artifact.goalContractPacket.intentBinding?.intentDigest ?? null) === (intent.intentBinding.intentDigest ?? null), "Preparation intent binding mismatch.");
+  ensure(productDesignDigest(artifact.preDecisionOptionFrame.intentBinding) === productDesignDigest(intent.intentBinding), "Preparation decision frame must retain the current intent binding.");
+  ensureArray(artifact.workerTaskPackets, "preparation workerTaskPackets");
+  ensureArray(artifact.coreLoop.workerTaskPackets, "preparation coreLoop.workerTaskPackets");
+  ensure(!artifact.workerTaskPackets.length && !artifact.coreLoop.workerTaskPackets.length && !artifact.coreLoop.stageDagPacket && !artifact.runHeader,
+    "Preparation must not contain formal workers, a DAG or a runHeader.");
+  ensure(artifact.dispatchBoard === null && artifact.selectedExecutionRoute === null && artifact.thinkingPacket.status === "host_reasoning_required" &&
+    Array.isArray(artifact.thinkingPacket.workerTaskPackets) && !artifact.thinkingPacket.workerTaskPackets.length, "Preparation must not claim a selected execution route or completed Thinking.");
+  ensure(artifact.coreLoop.executionResult?.executionAllowed === false && artifact.coreLoop.executionResult?.actualWorkerExecution === false &&
+    artifact.hostInvocationRequestPacket?.executionAllowed === false && artifact.machineExecution?.status === "blocked" &&
+    Array.isArray(artifact.machineExecution.calls) && !artifact.machineExecution.calls.length && artifact.machineExecution.publicReady === false &&
+    artifact.publicReadyDecision?.publicReady === false && artifact.publicReadyDecision?.userOutcomeAccepted === false,
+  "Preparation cannot assert execution, invocation or user acceptance.");
+  const preparation = artifact.preparation;
+  ensureObject(preparation, "preparation");
+  ensureEnum(preparation.status, ["needs_input", "needs_thinking", "needs_research", "stopped_by_user"], "preparation.status");
+  ensure(artifact.status === (preparation.status === "stopped_by_user" ? "stopped_by_user" : "partial"), "Preparation must remain partial or stopped.");
+  ensure(/^[a-f0-9]{64}$/u.test(preparation.bindingDigest ?? "") && /^[a-f0-9]{64}$/u.test(preparation.markdownSha256 ?? ""), "Preparation needs bound content and paired markdown digests.");
+  ensureArray(preparation.materialBindings, "preparation.materialBindings");
+  for (const binding of preparation.materialBindings) ensure(typeof binding.sourceRef === "string" && /^[a-f0-9]{64}$/u.test(binding.sha256 ?? ""), "Preparation material binding needs a source and digest.");
+  const discovery = artifact.requirementsDiscoveryPacket;
+  if (discovery != null) {
+    ensure(discovery.taskHash === taskHash && (discovery.intentDigest ?? null) === (intent.intentBinding.intentDigest ?? null), "Preparation requirements binding mismatch.");
+    const { discoveryDigest, claimBoundary: _claim, ...content } = discovery;
+    if (content.research) {
+      const { recordRef: _ref, recordSha256: _sha, ...researchContent } = content.research;
+      content.research = researchContent;
+    }
+    ensure(productDesignDigest(content) === discoveryDigest, "Preparation requirements discovery digest mismatch.");
+  }
+  validateChallengeQuestions(contract, artifact);
+  validateChallengeAnswers(artifact);
+  ensureArray(artifact.preDecisionOptionFrame.readyDecisionFrontier, "preDecisionOptionFrame.readyDecisionFrontier");
+  ensureArray(artifact.preDecisionOptionFrame.pendingFactRequests, "preDecisionOptionFrame.pendingFactRequests");
+  validateChallengeFrontier(artifact);
+  ensure(artifact.preDecisionOptionFrame.planChallengeState?.executionAllowed === false, "Preparation questions cannot grant execution.");
+  if (artifact.governanceTaskFacts != null) {
+    const facts = readCurrentTaskFacts(artifact.governanceTaskFacts, artifact.task);
+    ensure(facts !== null && productDesignDigest(selectTaskDesignRoute(facts)) === productDesignDigest(artifact.taskDesignRoutePacket), "Preparation task design facts or route mismatch.");
+  }
+  const { stage: _stage, status: _status, intentBinding: _binding, ...plainCritical } = intent;
+  const criticalCandidates = intent.status === "host_reasoning_required" ? [null] : [plainCritical, intent];
+  if (intent.status !== "host_reasoning_required") normalizeHostCritical({ input: plainCritical, task: artifact.task, dialogue: intent.intentBinding });
+  ensure(criticalCandidates.some(critical => preparation.bindingDigest === productDesignDigest({ taskHash,
+    intentDigest: intent.intentBinding.intentDigest ?? null, requirementsDigest: discovery?.discoveryDigest ?? null,
+    projectContextDigest: artifact.projectContextPacket?.digest ?? null, critical,
+    questions: artifact.preDecisionOptionFrame.unresolvedQuestions, materialBindings: preparation.materialBindings,
+    ...(artifact.workContext ? { workBinding: workBindingFor(artifact.workContext) } : {}) })), "Preparation frame or Critical binding digest mismatch.");
+  for (const name of ["intentPacket", "fetchPacket", "thinkingPacket", "goalContractPacket", "preDecisionOptionFrame", "publicReadyDecision"]) validateNestedPacketConsistency(artifact, name);
+}
+
+function validateWorkContext(artifact) {
+  const context = normalizeWorkContext(artifact?.workContext ?? null);
+  if (!context) {
+    ensure(artifact?.workBinding == null && artifact?.workReceipt == null && artifact?.workOutcomePacket == null, "Work fields require the optional external workContext.");
+    return;
+  }
+  const binding = workBindingFor(context);
+  ensure(workBindingsMatch(artifact.workBinding, binding), "Work binding differs from current context.");
+  if (artifact.coreLoop) {
+    ensure(workBindingsMatch(workBindingFor(artifact.coreLoop.workContext), binding) && workBindingsMatch(artifact.coreLoop.workBinding, binding), "Nested Work context differs.");
+  }
+  const packets = [...(artifact.workerTaskPackets ?? []), ...(artifact.coreLoop?.thinkingPacket?.workerTaskPackets ?? []),
+    ...(artifact.sourceArtifacts?.orchestrationReport?.workerTaskPackets ?? [])];
+  for (const packet of packets) ensure(workBindingsMatch(packet.workBinding, binding) && workBindingsMatch(workBindingFor(packet.workContext), binding) && packet.workScopeRef === context.scopeRef,
+    "Worker does not belong to the current Work/scope context.");
+  for (const result of [...(artifact.workerResultPackets ?? []), ...(artifact.executionResult?.workerResultPackets ?? []),
+    ...(artifact.coreLoop?.executionResult?.workerResultPackets ?? [])]) ensure(workBindingsMatch(result.workBinding, binding), "Worker result belongs to another Work context.");
+  const projected = projectWorkReceipt(artifact);
+  ensure(productDesignDigest(artifact.workReceipt) === productDesignDigest(projected.workReceipt), "Work receipt cannot promote production/review into adoption or effect.");
+  if (artifact.coreLoop) ensure(productDesignDigest(artifact.coreLoop.workReceipt) === productDesignDigest(projected.workReceipt), "Nested Work receipt differs.");
+  for (const [actual, expected] of [[artifact.evolutionWritebackPacket, projected.evolutionWritebackPacket],
+    [artifact.coreLoop?.evolutionWritebackPacket, projected.coreLoop?.evolutionWritebackPacket]]) {
+    if (expected) ensure(productDesignDigest(actual?.workFeedback) === productDesignDigest(expected.workFeedback), "Work feedback must retain the candidate-only boundary.");
+  }
+}
+
 export function validateArtifact(contract, artifact) {
+  validateWorkContext(artifact);
+  if (artifact?.artifactKind === "host_preparation" || artifact?.preparation != null) {
+    validatePreparationArtifact(contract, artifact);
+    return;
+  }
   validateRequiredPackets(contract, artifact);
   ensureFields(
     artifact.runHeader,
@@ -4376,7 +5279,7 @@ export function validateArtifact(contract, artifact) {
   validateWorkerPackets(contract, artifact);
   validateFindingChain(contract, artifact);
   validateSummaryAndEvolution(contract, artifact);
-  validateCoreLoopPublicReadyConsistency(artifact);
+  validateCoreLoopPublicReadyConsistency(contract, artifact);
   validateCompactionPacket(contract, artifact);
   validateHardPublicReadyTodoGate(contract, artifact);
   validateHardCommentReviewGate(contract, artifact);
@@ -4387,6 +5290,13 @@ export async function validateArtifactFile(artifactFilePath) {
   const artifact = await readJson(artifactPath);
   const contract = await readJson(contractPath);
   validateArtifact(contract, artifact);
+  if (artifact.artifactKind === "host_preparation") {
+    const markdownPath = path.join(path.dirname(artifactPath), artifact.runId + "." + artifact.resolvedOutputLanguage + ".md");
+    const info = await fs.lstat(markdownPath);
+    ensure(info.isFile() && !info.isSymbolicLink() && info.size <= 1024 * 1024, "Preparation paired markdown must be a bounded regular file.");
+    ensure(createHash("sha256").update(await fs.readFile(markdownPath)).digest("hex") === artifact.preparation.markdownSha256,
+      "Preparation paired markdown digest mismatch.");
+  }
   return artifact;
 }
 
@@ -4404,7 +5314,10 @@ async function main() {
       {
         ok: true,
         artifact: path.relative(repoRoot, artifactPath).replace(/\\/g, "/"),
-        validatedPackets: contract.runDiscipline.protocolFirst.requiredPackets,
+        artifactKind: artifact.artifactKind ?? "governed_execution",
+        validatedPackets: artifact.artifactKind === "host_preparation"
+          ? ["preparation", "intentPacket", "requirementsDiscoveryPacket", "preDecisionOptionFrame", "fetchPacket"]
+          : contract.runDiscipline.protocolFirst.requiredPackets,
       },
       null,
       2,

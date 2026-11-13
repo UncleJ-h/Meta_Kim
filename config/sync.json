@@ -4,13 +4,17 @@
     "claude",
     "codex",
     "openclaw",
-    "cursor"
+    "cursor",
+    "gemini",
+    "zcode"
   ],
   "supportedTargets": [
     "claude",
     "codex",
     "openclaw",
-    "cursor"
+    "cursor",
+    "gemini",
+    "zcode"
   ],
   "defaultTargets": [
     "claude",
@@ -45,7 +49,35 @@
       ".meta-kim/cache",
       ".meta-kim/backups",
       ".meta-kim/local.overrides.json"
-    ]
+    ],
+    "existingProjectProjectionUpdate": {
+      "discoveryOrder": [
+        "explicit_project_dirs",
+        "saved_project_dirs",
+        "current_working_directory"
+      ],
+      "managedStateMarker": ".meta-kim/state/default/project-bootstrap.json",
+      "globalDistributionAction": "update_existing_project_projection",
+      "projectUpdateStrategy": "project_bootstrap_merge_delta",
+      "managedProjectionUpdate": "replace_with_transaction_backup",
+      "noManagedProjectAction": "do_not_materialize_project_projection",
+      "cleanupMode": "explicit_only"
+    },
+    "projectCapabilityOwnership": {
+      "manifestPath": ".meta-kim/state/default/project-capabilities.json",
+      "schemaVersion": "meta-kim-project-capabilities-v0.1",
+      "protectedCapabilityTypes": [
+        "agent",
+        "skill",
+        "command"
+      ],
+      "preserveOwnershipClasses": [
+        "runtime_sedimented_project_copy"
+      ],
+      "preserveDependencyUpdatePolicies": [
+        "preserve_project_copy"
+      ]
+    }
   },
   "generatedTargets": {
     "claude": [
@@ -77,6 +109,19 @@
       ".cursor/capability-index",
       ".cursor/mcp.json",
       ".cursor/rules"
+    ],
+    "gemini": [
+      ".gemini/agents",
+      ".agents/skills",
+      ".gemini/hooks",
+      ".gemini/settings.json",
+      ".gemini/capability-index"
+    ],
+    "zcode": [
+      ".zcode/agents",
+      ".zcode/skills",
+      ".zcode/config.json",
+      ".zcode/capability-index"
     ]
   }
 }

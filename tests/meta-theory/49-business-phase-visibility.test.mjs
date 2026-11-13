@@ -1,29 +1,53 @@
-import { describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import process from "node:process";
-import { runMetaTheoryGovernedExecution } from "../../scripts/run-meta-theory-governed-execution.mjs";
+import { createGovernanceRuntimeFixtureScope } from "../helpers/governance-runtime-fixture.mjs";
+import { fixtureCritical, fixtureReadWorkOrder, refreshFixtureSourcePins, runFixtureHostCli, runWithFixtureHostThinking } from "../helpers/host-reasoning-fixture.mjs";
+import { readOnlyFixtureTaskFacts } from "../helpers/task-design-facts.mjs";
 
-const naturalUserTask = "帮我做个小红书营销自动发布器";
+const naturalUserTask = "读取 package.json，记录当前版本和脚本，不修改文件";
+let fixture;
+let runMetaTheoryGovernedExecution;
+before(async () => {
+  fixture = createGovernanceRuntimeFixtureScope(null, { graph: true });
+  refreshFixtureSourcePins(fixture);
+  ({ runMetaTheoryGovernedExecution } = await fixture.import("scripts/run-meta-theory-governed-execution.mjs"));
+});
+after(() => fixture?.cleanup());
+
+function hostReasoning() {
+  const criticalInput = fixtureCritical({ task: naturalUserTask,
+    successCriteria: [{ id: "metadata-read", condition: "记录 package.json 的当前版本和脚本", evidenceRequired: "当前源文件和独立复核结果" }],
+    nonGoals: ["不修改代码，不冒充模型执行或用户验收"] });
+  return { criticalInput, governanceTaskFacts: readOnlyFixtureTaskFacts(naturalUserTask),
+    workOrders: (preparation) => [fixtureReadWorkOrder(preparation, {
+      id: "metadata-read-worker", todayTask: naturalUserTask, output: "当前项目版本和脚本的来源报告", criterionIds: ["metadata-read"],
+      taskFacts: readOnlyFixtureTaskFacts(naturalUserTask),
+    })] };
+}
 
 describe("49 - 11-phase business workflow visibility", () => {
   test("programmatic governed run records phase reasons and report-visible current phase", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-11-phase-api-"));
     try {
-      await runMetaTheoryGovernedExecution({
+      await runWithFixtureHostThinking(runMetaTheoryGovernedExecution, {
         task: naturalUserTask,
         runId: "api-phase-visibility",
         stateDir: tempDir,
         dbPath: path.join(tempDir, "runs.sqlite"),
-      });
+      }, hostReasoning());
 
       const artifact = JSON.parse(
         await readFile(path.join(tempDir, "api-phase-visibility.json"), "utf8")
       );
       assert.equal(artifact.conversationNotice.status, "not_emitted");
+      assert.equal(artifact.userExperienceNotice.status, "partial");
+      assert.equal(
+        artifact.userExperienceNotice.hostObservationStatus,
+        "host_observation_required"
+      );
       assert.equal(artifact.businessPhasePlanPacket.phaseCount, 11);
       for (const phase of artifact.businessPhasePlanPacket.phases) {
         assert.ok(["done", "skipped", "blocked", "pending"].includes(phase.status));
@@ -38,10 +62,10 @@ describe("49 - 11-phase business workflow visibility", () => {
       assert.match(artifact.businessPhasePlanPacket.closure.currentNextAction, /等待用户确认/);
 
       const markdown = await readFile(path.join(tempDir, "api-phase-visibility.zh-CN.md"), "utf8");
-      assert.match(markdown, /11 阶段业务流/u);
-      assert.match(markdown, /Reason \| Next/u);
-      assert.match(markdown, /已完成：/u);
-      assert.match(markdown, /等待：需要用户验收或反馈/u);
+      assert.match(markdown, /## 阶段进展/u);
+      assert.match(markdown, /Critical：确认目标与边界/u);
+      assert.match(markdown, /Evolution：在适合时记录可复用结论/u);
+      assert.match(markdown, /## 验证与下一步/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -50,8 +74,8 @@ describe("49 - 11-phase business workflow visibility", () => {
   test("CLI emits 11-phase status notice when explicitly requested", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-11-phase-cli-"));
     try {
-      const result = spawnSync(
-        process.execPath,
+      const result = runFixtureHostCli(
+        fixture,
         [
           "scripts/run-meta-theory-governed-execution.mjs",
           "--task",
@@ -64,27 +88,43 @@ describe("49 - 11-phase business workflow visibility", () => {
           path.join(tempDir, "runs.sqlite"),
           "--emit-conversation-notice",
         ],
-        { cwd: process.cwd(), encoding: "utf8" }
+        hostReasoning()
       );
 
       assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /^Meta_Kim 对话提示:/u);
-      assert.match(result.stdout, /11阶段状态: done=/u);
-      assert.match(result.stdout, /skipped=revision\/evolve/u);
-      assert.match(result.stdout, /blocked=none/u);
-      assert.match(result.stdout, /pending=feedback/u);
-      assert.match(result.stdout, /当前阶段: feedback=pending/u);
-      assert.match(result.stdout, /阻塞阶段: none/u);
+      JSON.parse(result.stdout);
+      assert.match(result.stderr, /Meta_Kim 对话提示:/u);
+      assert.match(result.stderr, /11阶段状态: 业务流程计划已记录/u);
+      assert.doesNotMatch(result.stderr, /done=|skipped=|blocked=|pending=/u);
+      assert.match(result.stderr, /计划状态不代表已执行或验收/u);
+      assert.match(result.stderr, /当前阶段: 反馈 · 等待/u);
+      assert.match(result.stderr, /阻塞阶段: 无/u);
       assert.doesNotMatch(
-        result.stdout,
+        result.stderr,
         /businessPhasePlanPacket|workerTaskPackets|cardPlanPacket/u
       );
 
       const artifact = JSON.parse(
         await readFile(path.join(tempDir, "cli-phase-visibility.json"), "utf8")
       );
+      const closure = artifact.conversationNotice.progressEvents.find((event) => event.stage === "Closure");
+      assert.equal(closure.details.source, "businessPhasePlanPacket");
+      assert.equal(closure.details.phaseCount, artifact.businessPhasePlanPacket.phaseCount);
+      assert.equal(closure.details.currentPhase, artifact.businessPhasePlanPacket.closure.currentPhase);
+      assert.equal(closure.details.currentStatus, artifact.businessPhasePlanPacket.closure.currentStatus);
+      assert.deepEqual(closure.details.blockedPhases, artifact.businessPhasePlanPacket.phases
+        .filter((phase) => phase.status === "blocked").map((phase) => phase.phase));
+      assert.equal(closure.details.nextAction, artifact.businessPhasePlanPacket.closure.currentNextAction);
+      assert.ok(result.stderr.includes(`下一步: ${artifact.businessPhasePlanPacket.closure.currentNextAction}`));
+      assert.equal(closure.details.executionOrAcceptanceEvidence, false);
+      assert.equal(result.stderr.split("11阶段状态:").length - 1, 1);
       assert.equal(artifact.conversationNotice.status, "emitted");
-      assert.equal(artifact.conversationNotice.evidenceKind, "adapter_emitted_notice");
+      assert.equal(artifact.conversationNotice.evidenceKind, "transport_emitted_notice");
+      assert.equal(artifact.conversationNotice.outputBoundary, "stderr_progress_channel");
+      assert.equal(
+        artifact.conversationNotice.hostObservation.status,
+        "host_observation_required"
+      );
       assert.match(
         artifact.conversationNotice.routeSummary.businessPhaseSummary.groupLine,
         /blocked=none/u
@@ -93,7 +133,13 @@ describe("49 - 11-phase business workflow visibility", () => {
         artifact.conversationNotice.routeSummary.businessPhaseSummary.currentLine,
         /feedback=pending/u
       );
-      assert.equal(artifact.userExperienceNotice.status, "ready");
+      assert.equal(artifact.userExperienceNotice.status, "partial");
+      assert.equal(artifact.userExperienceNotice.conversationNoticeEmitted, true);
+      assert.equal(artifact.userExperienceNotice.conversationNoticeObserved, false);
+      assert.equal(
+        artifact.userExperienceNotice.hostObservationStatus,
+        "host_observation_required"
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -102,8 +148,8 @@ describe("49 - 11-phase business workflow visibility", () => {
   test("CLI can still suppress conversation notice for machine-readable runs", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-11-phase-cli-quiet-"));
     try {
-      const result = spawnSync(
-        process.execPath,
+      const result = runFixtureHostCli(
+        fixture,
         [
           "scripts/run-meta-theory-governed-execution.mjs",
           "--task",
@@ -116,19 +162,40 @@ describe("49 - 11-phase business workflow visibility", () => {
           path.join(tempDir, "runs.sqlite"),
           "--no-emit-conversation-notice",
         ],
-        { cwd: process.cwd(), encoding: "utf8" }
+        hostReasoning()
       );
 
       assert.equal(result.status, 0, result.stderr);
       assert.doesNotMatch(result.stdout, /^Meta_Kim 对话提示:/u);
-      assert.match(result.stdout, /"runId": "cli-phase-quiet"/u);
+      assert.equal(JSON.parse(result.stdout).runId, "cli-phase-quiet");
       const artifact = JSON.parse(
         await readFile(path.join(tempDir, "cli-phase-quiet.json"), "utf8")
       );
       assert.equal(artifact.conversationNotice.status, "not_emitted");
       assert.equal(artifact.userExperienceNotice.status, "partial");
+      assert.equal(
+        artifact.userExperienceNotice.hostObservationStatus,
+        "host_observation_required"
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("an unelaborated product intent stays in host preparation before phase completion", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "meta-kim-11-phase-pending-"));
+    try {
+      const result = await runMetaTheoryGovernedExecution({
+        task: "帮我做个小红书营销自动发布器", runId: "product-intent-pending", stateDir: tempDir,
+        dbPath: path.join(tempDir, "runs.sqlite"),
+      });
+      const preparation = JSON.parse(await readFile(result.paths.json, "utf8"));
+      assert.equal(preparation.artifactKind, "host_preparation");
+      assert.equal(preparation.preparation.status, "needs_thinking");
+      assert.equal(preparation.hostInvocationRequestPacket.nextAction.stage, "Critical");
+      assert.deepEqual(preparation.workerTaskPackets, []);
+      assert.equal(preparation.coreLoop.stageDagPacket, undefined);
+      assert.equal(preparation.businessPhasePlanPacket, undefined);
+    } finally { await rm(tempDir, { recursive: true, force: true }); }
   });
 });

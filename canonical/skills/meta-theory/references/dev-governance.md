@@ -21,6 +21,57 @@ Meta agents govern:
 - Review sub-agent verifies quality and evidence.
 - Execution workers produce the deliverable.
 
+## Client, Model And Provider Selection
+
+Keep the method, client adapter and model/provider as separate choices. Select methods from current capability evidence. For the ordinary runner, `runtime: "auto"` (or omitted `--runtime`) resolves, in order, an explicit runtime, configured stage-runner runtime, registered host adapter, `META_KIM_RUNTIME`, declared host, observed current-host markers, then `selectionPolicy.defaultPlanningRuntime` in `config/contracts/runtime-priority-and-compatibility-contract.json`. The last is a labeled compatibility planning default, not evidence about the host. A conflicting or unknown host stays unproven. An explicit runtime that cannot be served must remain a capability gap; do not substitute another client.
+
+Formal discovery profiles come from `config/sync.json.supportedTargets` and the runtime compatibility catalog. Gemini or ZCode profiles do not imply a built-in subprocess protocol. Built-in read-only native workers currently implement the verified Codex/Claude CLI protocols; other registered clients require an explicitly injected adapter with the relevant declared action. Do not invent a MiniMax CLI or infer a model from its client name.
+
+When the user/host has configured a model, pass the exact opaque identifier as `stageRunner.model` (CLI `--stage-runner-model`). Configure it from preparation onward; a changed runtime/model starts a fresh run/Fetch instead of resuming old owner/source bindings. This setting does not start execution. Built-in adapters pass it as a separate `--model` argument. An injected registry adapter must declare `modelSelectionSupported: true` and consume the `model` request field; an unsupported explicit choice fails instead of being dropped. Keep authentication, endpoint/provider configuration and model availability with the host. Codex keeps `--ignore-user-config` isolation, so an omitted model does not prove inheritance of a parent session or user configuration.
+
+Record `runtimeSelection.source` and `modelSelection.requested/applied/observed` in preparation and results. `applied` means the parameter was sent to the selected invocation, not that a provider confirmed the served model. `scope: "current_call"` describes that call; durable `scope: "run"` includes preserved parameter records from earlier completed nodes without invoking them again. Without independent observation, `observed` remains `null` with `observationStatus: "not_observed"`. In Fetch/Verification, report unsupported adapters, missing provider access and unobserved execution honestly; do not claim automatic best-model selection.
+
+## Optional Company Work Context
+
+Use this only when the current host already supplies a company-owned, long-lived Work. A company may have one or many people; its business records and identity authority stay with that host. Preserve the existing eight-stage spine, human milestones and knowledge lifecycle. Do not create another scheduler, approval system, Work database or organization IAM.
+
+Pass `workContext` to `runMetaTheoryGovernedExecution`, or `--work-context-input <json-file>` to the same CLI:
+
+```json
+{
+  "schemaVersion": "kim-work-context-v1",
+  "organizationRef": "company:kim", "workRef": "work:launch",
+  "contextRevision": "revision:2", "scopeRef": "scope:operations",
+  "sourceRefs": ["record:brief:2"],
+  "acceptedArtifactRefs": ["artifact:brief:v1"],
+  "decisionRefs": ["decision:approve-v1"]
+}
+```
+
+These are opaque host references, not credentials or proof that their contents were fetched. In Fetch, inspect the needed current source/version through existing authorized capabilities; record unresolved sources instead of inventing facts. In Thinking, place only the relevant resolved facts in existing task evidence/method inputs. The runner binds each worker and returned delivery to the organization, Work, revision and digest. Work orders, worker prompts and method context carry the normalized reference-only snapshot, including sources, adopted versions and decisions; they do not copy the referenced private business content or resolve it outside the current host-authorized scope. Keep permission and material-change decisions with existing host mechanisms. A changed context starts a new run; it does not invalidate a still-applicable historical business decision or require its approval again.
+
+The digest uses SHA-256 over normalized JSON: object keys sorted recursively, arrays in original order, omitted reference lists normalized to `[]`. References are nonempty strings up to 500 characters without control characters; lists hold at most 64 unique references. Keep version references exact. Missing `workContext` leaves the old route unchanged; malformed supplied context and cross-Work/revision reuse are explicit errors.
+
+Summary reports `workReceipt` with four independent states: `produced` records returned execution outputs, `verified` uses the existing independent outcome review, `adopted` records the host's chosen version, and `effect` records subsequent business observations. A plan/acknowledgement is not production; a verified v2 does not replace an adopted v1. Unobserved adoption or effect stays `unknown`.
+
+Append business observations to an existing materialized run using the same `task`, `runId`, `workContext` and output directory plus `workOutcome` (CLI `--work-outcome-input`):
+
+```js
+workOutcome: {
+  schemaVersion: "kim-work-outcome-v1", runId: current.runId,
+  workBinding: current.workBinding,
+  adopted: { status: "accepted", artifactRefs: ["artifact:brief:v1"],
+    decisionRef: "decision:approve-v1", reason: "Continue using the approved version." },
+  effect: { status: "unknown" },
+  knowledgeReuse: [{ sourceRef: "knowledge:launch-checklist", disposition: "adapted",
+    reason: "Keep the useful checks; adjust them for this launch." }]
+}
+```
+
+This current observation must match the run and full Work binding; `decisionRef` may point to an earlier applicable decision without new human approval. Adoption states are `unknown`, `pending`, `accepted`, `rejected`; accepted/rejected require a decision reference, and accepted requires exact artifact references. Effect is `unknown` or `observed`, with evidence references for an observation. Reuse is `direct`, `adapted` or `not_applicable`. Preserve missing reasons as `unknown`; reasons and effect summaries accept multiline text up to 8,000 characters. The entry appends a run projection without rewriting execution files or dispatching workers. These host observations remain explicitly unverified by Meta_Kim.
+
+In Evolution, retain failed technical reviews and host adoption/effect/reuse observations as organization-scoped candidates with sources and reasons. A not-applicable result is useful feedback, not a successful reuse. Use the existing reviewed knowledge lifecycle to decide whether anything should become durable; receipt collection does not authorize canonical/public knowledge publication or automatically promote a candidate.
+
 ## Task Classes And No-Agent Exception
 
 `taskClass` categories:
@@ -50,6 +101,10 @@ Owner-resolution branches: existing owner, upgrade existing owner, create owner,
 
 Default execution route proof: for a real execution demand, the route must naturally resolve the full provider chain before mutation. Evidence must name the selected execution owner, the checked execution-agent sources, the agent creation capability or reason no creation is needed, the selected skill and checked skill sources, the skill creation capability or reason no creation is needed, the MCP provider or no-impact reason, the command/runtime tool, and the verification owner plus verification method. This proof belongs to Fetch and Thinking, not to a validator after Execution.
 
+For engineering design, implementation, configuration, build, or code review, discover and prefer a qualified shared engineering-quality method alongside the selected professional owner. The authorized host reads the selected Skill entry and necessary package-local references, binds their actual source/version/digests, then turns the relevant guidance and current project facts into the existing qualityBar, evidenceRefs, acceptanceCriteria, verifySteps, referenceDirection, and handoffContract. Give the worker the necessary content and specific use direction; a selected name, link, or packet field alone does not prove reading or application. Keep the detailed method in its package rather than copying its checklist into every role.
+
+Pure writing and factual queries do not trigger engineering execution; design and read-only review use only the relevant judgments. A method grants no tools, writes, outside-workspace reads, or permission to execute verification commands. Missing or unread packages remain explicitly not loaded; use another evidenced fitting method when allowed, or block the affected promise when a required capability or explicitly required method is missing. This default does not make one dependency package mandatory for all Meta_Kim work. Reuse existing coverage and add checks only for observable behavior or a distinct uncovered risk; stop expanding verification once the necessary checks cover the final change and no new change, finding, or uncertainty remains. Workers report actual use, conflicts, and unverified effects; independent review judges the patch and outcome separately from method selection or transport.
+
 Autonomous discovery proof: natural-language durable work must carry an `autonomousCapabilityDiscovery` record before Execution. It proves that capability discovery was triggered by entry classification and Fetch/Thinking policy, not by the user explicitly reminding the system to search agents, skills, MCP, commands, tools, or stage names. A vague product request with no stage words must still search project runtime inventory, global runtime inventory, global skills, MCP/provider configs, package scripts, runtime tools, and verification owners, then build the same candidate lanes as an explicit `critical/fetch/thinking/review` request when the intent is otherwise equivalent.
 
 Reportable provider references must be cross-runtime and machine-portable: use repo-relative refs, runtime ids, or home-relative refs such as `~/.codex`, `~/.claude`, `~/.cursor`, `~/.openclaw`, and `~/.agents`. Do not emit local absolute home paths in route reports.
@@ -62,107 +117,40 @@ User-visible agent naming: `roleDisplayName` is a short business role such as fr
 
 Parallelism rule: the same owner may run multiple instances only with shardKey, shardScope, workspaceIsolation, artifactNamespace, collisionPolicy, shared `parallelGroup`, and one `mergeOwner`. Missing shard or merge evidence is fake parallelism.
 
-## Stage 0 — Global-First Discovery Pre-Dispatch Checklist
+## Ordered Stage Barriers And Maximal Safe Internal Parallelism
 
-A dispatch is invalid unless the dispatcher (main thread or conductor) can show **evidence** that it ran a global-first owner discovery **before** the Wave 1 fan-out. "I remember the name" is not evidence. The discovery must produce a `capabilityInventory` recorded in the `dispatchEnvelopePacket`; without it, Wave 1 cannot start.
+`config/contracts/core-loop-contract.json#parallelExecutionPolicy` is the single machine authority for stage order, barriers, stage-internal parallelism, resource safety, merge authority, degradation, and invocation truth. This reference explains that contract; it does not add a pre-stage discovery gate, fixed wave model, or competing fan-out trigger.
 
-The discovery is run as **Stage 0**, before the 4-Stage Parallel Fan-out Protocol below. A run that skips Stage 0 is fake-parallel and must be rejected by Meta-Review.
+The canonical spine remains `Critical -> Fetch -> Thinking -> Execution -> Review -> Meta-Review -> Verification -> Evolution`. A stage starts only after the previous stage's merge node closes. Critical and Fetch never overlap, Review and Meta-Review never overlap, and no support lane may release the next-stage barrier by itself.
 
-### Stage 0 steps (in this order)
+Inside the active stage, schedule the maximal safe ready set from that stage's `parallelPolicy`:
 
-1. **Read capability indexes.** Read every file under `config/capability-index/` (`meta-kim-capabilities.json`, `provider-registry.json`, `weapon-registry.json`, `dependency-project-registry.json`) and record the registered provider types, weapons, and dependency projects relevant to the current task. Skip a source only with a recorded `no-impact` reason.
-2. **Scan canonical sources.** Walk `canonical/agents/`, `canonical/skills/`, `canonical/runtime-assets/` and record the 9 meta agents + every canonical skill + every runtime asset. Note the canonical owner for each capability family.
-3. **Scan global runtime homes.** For each host that this run will touch (Claude Code, Codex, Cursor, OpenClaw), list the global assets under `~/.claude/agents/`, `~/.claude/skills/`, `~/.codex/agents/`, `~/.codex/skills/`, `~/.cursor/agents/`, `~/.cursor/skills/`, `~/.openclaw/workspaces/`, `~/.openclaw/skills/`, `~/.agents/skills/`. Note specialists that could be alternative owners.
-4. **Scan runtime package providers.** Read `package.json` `scripts` block and record the candidate `meta:*` and `discover:*` commands that could be invoked as tools. Note commands that the host exposes directly.
-5. **Scan MCP and hook config.** Read `.mcp.json`, `.codex/config.toml` mcp section, `.cursor/mcp.json`, runtime hook registries. Note which MCP servers and hooks are available as providers.
-6. **Match owner.** Only now: for the current Wave's stage and role, pick the owner from the inventory. The owner must be one of the candidate names that appeared in steps 1-5. If no candidate fits, return to Critical with `capabilityGapPacket`; do not fall back to `general-purpose` or any hardcoded name.
-7. **Record the inventory.** Write `dispatchEnvelopePacket.capabilityInventory` containing the scanned sources, the candidate set per stage, the selected owner, and the rejected candidates with reasons.
+| Stage | Parallel support lanes | Unique stage authority |
+|---|---|---|
+| Critical | pain/value, success/non-goal, permission/risk, architecture/context analysis | `meta-warden` locks one intent and one consolidated user-choice request |
+| Fetch | local source/graph/memory, capability discovery, runtime/OS/dependency checks, external research, worktree boundaries | `meta-conductor` merges one `fetchPacket` and capability inventory |
+| Thinking | candidate routes, owner/loadout match, dependency/resource/runtime analysis, review/verification design | `meta-conductor` selects one route and one stage DAG |
+| Execution | every dependency-ready read node and every isolated disjoint write node | the selected `mergeOwner` closes one execution result and side-effect ledger |
+| Review | correctness, security, product/UX/accessibility, tests/consistency/redundancy | `meta-prism` issues one deduplicated review verdict |
+| Meta-Review | stage-completeness evidence, review-standard/bias analysis, public-ready/runtime-truth analysis | `meta-warden` issues the only Meta-Review/public-ready verdict |
+| Verification | isolated test/lint/type/security checks, runtime/OS probes, package/install/update/smoke, UI/acceptance checks | `verify` merges fresh results and sets the evidence-tier claim |
+| Evolution | pattern/scar extraction, capability-gap analysis, memory/docs/telemetry/writeback candidates | `meta-chrysalis` selects candidates; approved durable writes remain single-writer |
 
-### What the inventory must look like
+### Adaptive capability discovery inside Fetch
 
-`dispatchEnvelopePacket.capabilityInventory` is a structured record (machine-readable JSON or a fenced code block in markdown). The minimum fields:
+Capability discovery is a Fetch lane, not a prerequisite stage. Start from cached capability inventories and a task-scoped project scan, then widen only when the route, owner, verification path, or a proven capability gap requires it. Stop on a qualified match; cancel or record `no-impact` for searches that cannot change the route. Full global/runtime scans belong to install, update, explicit refresh, stale/missing cache, missing provider, or high-risk provider routes—not every task.
 
-- `scannedAt`: ISO timestamp of when the discovery ran.
-- `sources`: array of `{ path, status, hitCount }` for every source actually scanned (steps 1-5).
-- `candidates`: array of `{ stage, owner, source, reason }` covering every wave that will dispatch.
-- `selected`: for each wave, the chosen owner plus a one-line reason and at least one `rejected` alternative with its reason.
-- `gap`: a free-text field; if the discovery could not find a matching owner, this field contains the `capabilityGapPacket` describing the gap, and Execution is blocked until the gap is closed.
+The merged capability inventory records sources actually checked, candidates considered, the selected owner/provider, rejected alternatives that materially affected the decision, and any gap. Selected owners must come from discoverable evidence; `general-purpose`, a runtime nickname, or an invented temporary owner is not a silent fallback.
 
-### Hard rules
+### Scheduler and safety rules
 
-- **Stage 0 is mandatory.** A `dispatchEnvelopePacket` without `capabilityInventory` is not a valid dispatch. Review must reject it.
-- **No hardcoded owner names.** The selected owner in step 6 must come from the inventory. A dispatcher that writes `meta-scout` without first proving `meta-scout` appears in the candidate set is a protocol violation.
-- **No silent general-purpose fallback.** If step 6 cannot find a matching owner, the run must return to Critical with `capabilityGapPacket` and surface the gap to the user. Silently falling back to `general-purpose` is forbidden, even for Wave 3 workers, unless the Wave-3 row of the Default Owner Assignments table is the explicit default for that role.
-- **Inventory must be auditable.** Every `sources[i].path` listed in the inventory must be a real file or directory the host can read; Review may grep any of them to confirm the inventory is not a fabrication.
-- **Skipping a source requires a reason.** If the dispatcher does not read `config/capability-index/provider-registry.json`, the inventory must record `sources[i].status: "skipped"` with `sources[i].reason` explaining why. An empty reason is a protocol violation.
-
-## 4-Stage Parallel Fan-out Protocol
-
-The canonical 8-stage spine (`Critical -> Fetch -> Thinking -> Execution -> Review -> Meta-Review -> Verification -> Evolution`) is the routing order. The **governance stages** (Critical, Fetch, Thinking, Review) have an internal DAG that allows safe parallelism when their evidence, decisions, and reviews are independent. The 4-Stage Parallel Fan-out Protocol wires them into four waves, each with explicit parallel lanes and a named merge owner. The dispatching convention is **Wave N: scope**, not **Stage N: pass/fail**.
-
-This protocol is referenced from `SKILL.md` § **Global-First Owner Discovery** and § **Parallelism Boundaries**; both are read together. The hooks `enforce-agent-dispatch.mjs` and `activate-meta-theory-spine.mjs` enforce the spine but never block the safe intra-wave fan-out described here.
-
-### Wave 1 — Critical + Fetch (intent lock + evidence fan-out)
-
-- **Critical** runs on the main thread. It locks the actual user intent, the success criteria, the non-goals, the permissions, the Architecture Type, and the boundaries. It is intentionally single-threaded because every later wave depends on a stable intent lock.
-- **Fetch** runs in parallel with Critical's evidence-need surface. Inside a single run, Fetch fans out the capability-discovery sources from `SKILL.md` § **Global-First Owner Discovery** (canonical assets, capability indexes, global runtime homes, package scripts, MCP configs, external discovery) across 1-6 parallel readers when the route is visibly complex.
-- **main-thread merge**: the main thread holds the intent lock and merges the Fetch fan-out into a single `fetchPacket` + `capabilityDiscovery.searchLog`. No subagent may write the intent lock.
-
-### Wave 2 — Thinking + Planning (owner match + dispatch envelope)
-
-- **Thinking** maps the needed capabilities to owner candidates, dependencies, runtimes, and OS support. It runs on the main thread or under `meta-conductor` orchestration.
-- **Plan** (the `dispatchEnvelopePacket`, `dispatchBoard`, and `workerTaskPackets`) is produced in parallel: candidate paths are explored in parallel, owner matching is parallel across the candidate shortlist, and dependency / runtime / OS eligibility checks run in parallel.
-- **mergeOwner**: the main thread. `meta-conductor` may co-orchestrate, but the dispatch envelope is closed by a single mergeOwner with full DAG and `parallelGroup` evidence.
-
-### Wave 3 — Execution (bounded fan-out)
-
-- **Execution** dispatches `workerTaskPackets` in parallel. Each packet must carry `shardKey`, `shardScope`, `workspaceIsolation`, `artifactNamespace`, `collisionPolicy`, shared `parallelGroup`, and one `mergeOwner`. Missing shard or merge evidence is fake parallelism.
-- **mergeOwner** is the single authority that resolves collisions and produces the final deliverable chain. The main thread may also be the mergeOwner, but only when it has not also held the worker role for the same packet.
-
-### Wave 4 — Review + Meta-Review (skeptic fan-out + Warden gate)
-
-- **Review** fans out across the `meta-prism` lenses (factual reviewer, senior engineer, security expert, consistency reviewer, redundancy checker) in parallel. Each lens produces a separate `reviewLensPacket`; the main `reviewPacket` is the merge.
-- **Meta-Review** is a single-point authority on `meta-warden`. The Warden gate cannot be parallelized; it inspects the Review standard itself, not the deliverables.
-- **Verification** and **Evolution** remain strict-serial after Meta-Review. The Warden gate and the Verification stage are the only authorities that can close a run.
-
-### Default Owner Assignments
-
-These assignments are the **default** for any run that triggers the Fan-out Trigger below. They are not optional defaults; deviating requires a recorded `no_branching_choice` or an explicit user override. A dispatch that uses a different subagent type than the one named here must record why in `dispatchEnvelopePacket`.
-
-| Wave | Stage / role | Default subagent type | Reason |
-|------|--------------|------------------------|--------|
-| 1 | Fetch — capability discovery across 1-6 readers | `meta-scout` | External + cross-runtime capability scanning is `meta-scout`'s stated boundary. |
-| 1 | Fetch — graph + memory navigation | `meta-librarian` | Memory + graph + continuity is `meta-librarian`'s boundary. |
-| 2 | Thinking — owner match + dispatch envelope | `meta-conductor` | Business-flow blueprint, stage sequencing, and dispatch envelope are `meta-conductor`'s boundary. |
-| 2 | Thinking — capability loadout (skills, MCP, commands) | `meta-artisan` | Skill / MCP / tool fit is `meta-artisan`'s boundary. |
-| 3 | Execution — worker task | `general-purpose` **or a specific topic owner** | Worker tasks are the only place `general-purpose` is allowed. Topic-specific work should go to a global or runtime specialist when one exists. |
-| 4 | Review — adversarial correctness | `meta-prism` (lens: correctness) | Quality review and drift detection are `meta-prism`'s boundary. |
-| 4 | Review — adversarial security | `meta-prism` (lens: security) | Same boundary; different lens. |
-| 4 | Review — adversarial completeness | `meta-prism` (lens: completeness) | Same boundary; different lens. |
-| 4 | Meta-Review — gate approval | `meta-warden` | Coordination, arbitration, final synthesis, and the public-ready gate are `meta-warden`'s boundary. |
-| 8 | Evolution — writeback coordination | `meta-chrysalis` | Evolution signal aggregation and writeback coordination through Warden's gate are `meta-chrysalis`'s boundary. |
-
-**History note** — early runs of this protocol (v2.8.62 and earlier) defaulted every Wave-3 worker to `general-purpose` because the owner table did not exist. Wave 4 review was also done by `general-purpose` instead of `meta-prism` three-lens fan-out, and Meta-Review was done by the main thread instead of `meta-warden`. From v2.8.63 onward the assignments above are the default. This is the structural fix for the protocol-vs-runtime gap surfaced in 2026-06-29 governance review.
-
-### Wave Hard Rules
-
-- The 8-stage ordering is preserved. Parallelism exists **inside** a wave, not **across** waves.
-- No wave may skip the main-thread intent lock. Critical, the Fetch merge, the Thinking merge, and the Review merge are single-point.
-- Meta-Review, Verification, and Evolution are strict-serial. Warden is the only Meta-Review authority; Verification produces fresh evidence; Evolution writeback requires Warden approval.
-- A Wave-3 fan-out that lacks `parallelGroup` + `mergeOwner` + `collisionPolicy` is fake parallelism and must be rejected by Review, not silently serialized.
-- The `agent-teams-playbook` skill is the recommended execution pattern for Wave 3; it is selected only when the DAG and collision policy prove safe.
-- **A dispatch that picks `general-purpose` for any role that the Default Owner Assignments table names a specific owner is a protocol violation.** Review must flag it.
-
-### Fan-out Trigger
-
-The protocol activates when any of these signals appear:
-
-- explicit `/meta-theory`, `critical and fetch thinking and review`, "并行", "多个 agent", "review + fix + verify"
-- 2+ independent files, runtimes, platforms, capability families, or verification lanes
-- cross-runtime behavior, release/update/sync, hook/security/sandbox, or repeated same-type failure work
-- user feedback that the current Meta_Kim route is slow, serial, missing agents, or repeatedly corrected
-
-A run that does not trigger fan-out still walks the 8-stage spine in order, just without intra-wave parallelism.
+- Parallel readiness comes from the active stage DAG, completed dependencies, disjoint resource scopes, permission state, host capacity, and useful dispatch/merge economics—not from keywords, estimated lane counts, fixed wave numbers, or merely selecting a provider.
+- Run every safe ready lane up to active host capacity. Serialize dependency edges and conflicts involving the same file, state store, port, service, package target, or external resource unless verified isolation plus an explicit merge contract removes the conflict.
+- Read-only support lanes may fan out by default. Project writes need bounded scopes and collision policies. External or irreversible writes need the applicable approval and remain serialized unless approved, disjoint, isolated, and idempotent.
+- Each lane records owner, dependencies, resource scope, effect class, permission boundary, collision policy, evidence requirement, and merge authority. Same-owner parallel instances additionally need distinct shard scope and artifact namespace.
+- `agent-teams-playbook` is an optional adapter. Use it when it improves a safe stage DAG, but do not block native `Agent`, `Task`, or `spawn_agent` fan-out when the host surface and stage contract are already sufficient.
+- Planned lanes, dispatch packets, selected providers, and host-invocation requests are not execution proof. Completion requires exact run-and-lane-bound native host results; a concurrency claim additionally requires batched native calls or overlapping invocation intervals.
+- Capacity, permission, isolation, owner, or host-surface limits produce an explicit partial/degraded route. Never relabel degradation as parallel execution, completion, verification pass, or public-ready.
 
 ## Complexity Routing
 
@@ -226,6 +214,39 @@ Non-trivial execution needs one consolidated Decision after Fetch and Thinking, 
 
 Codex visible multi-option choice rule: visible Decisions include at least two options and a recommended default.
 
+### Risk-Adaptive Plan Challenge
+
+Plan challenge is an interaction overlay across Critical, Fetch, Thinking, and Review. It does not alter the eight-stage spine or create another approval layer.
+
+Activation:
+
+- explicit user intent such as `反证`, `帮我挑刺`, `压力测试`, or `方案拷问`
+- an irreversible or high-cost action with concrete mutation or side-effect intent
+- a permission-sensitive side effect the user is asking the run to perform
+- a material contradiction recorded by trusted Fetch or Thinking evidence that changes outcome, scope, route, risk, authorization, or acceptance
+
+Suppress it for clear, low-risk, reversible work unless the user explicitly requests it. A low-risk read-only sentence does not activate automatic challenge merely because it mentions deployment, deletion, credentials, payment, permissions, production, or another risky domain. Automatic activation requires actionable mutation/side-effect intent or trusted contradiction evidence, and begins with a short notice explaining that concrete signal rather than an internal packet dump.
+
+Question selection is impact-first. Fetch resolves discoverable facts. Critical, Thinking, or Review starts with the highest-impact unresolved user decision; independent decisions whose prerequisites are settled may share a round within the active host capability. Recompute the frontier after receiving the answers; newly unlocked questions wait until the next round. A valid question must identify what changes if the answer differs; otherwise suppress it. Do not bundle unrelated questions, repeat an answered question, or keep questioning to meet a count. If an answer invalidates dependent questions, close them without showing them.
+
+When evidence supports one route, show a recommended answer, reason, material trade-off, and uncertainty. Preference-only questions may present a neutral comparison instead. Expose five user actions in the resolved language when they are actionable: continue questioning, accept the recommendation, skip this question, summarize now, and stop. Record them as `continue`, `accept_recommendation`, `skip`, or `summarize_stop`; summary and stop share `summarize_stop` because both close the questioning immediately. Understanding and authorization phases must not show question-only controls that cannot change their state; their bound response field remains visible and `summarize_stop` remains available. That control records `stopReason=user_requested_summary_stop`, system-invalidates every remaining open question, and carries unresolved risks into the visible closure. Controls are trusted user decisions, not implicit prose guesses.
+
+Until the current runtime returns trusted user-decision evidence, the challenge remains `awaiting_user_answer`, `awaiting_understanding_confirmation`, or `awaiting_execution_authorization` as applicable. The runner emits `pendingUserChoice` for the host adapter with `required_not_invoked`; this records a required user decision, not a claimed popup. A generated card, assistant message, caller-authored JSON, CLI flag, environment variable, or report cannot mark a question answered or claim that a popup appeared. Compatibility chat may display the question, but it remains pending rather than native-choice completion.
+
+The public runner treats all serialized response, history, understanding, and authorization parameters as untrusted. It may consume at most one current-run decision only through a host-owned verifier callback capability; serialized `trusted=true` and `historical=true` fields alone have no authority. Cross-turn continuation loads the prior artifact only from the same governed output directory, validates it, requires the same task fingerprint and a still-pending phase, and requires the current host callback to bind `continuationRunId` to that exact prior run. The runner then restores the validated decision ledger and stamps only the current phase-appropriate answer, understanding confirmation, authorization/denial, or control. It never overwrites the prior artifact or replays caller-supplied history. This is a process-capability boundary, not a signature/public-key claim: if the current host does not expose a verifier adapter, keep the run pending and let the conversation host own the next decision.
+
+Keep understanding and action authority separate:
+
+- `sharedUnderstandingConfirmed`: a derived boolean backed by trusted understanding evidence bound to `plan-challenge-understanding-confirmation`.
+- `executionAuthorization`: trusted evidence of the user-authorized scope, or an explicit denial/not-required state.
+- `executionAllowed`: the single fail-closed gate consumed by every file/state mutation, global install, publish, deploy, deletion, payment, permission change, external write, or other side effect.
+
+Understanding never promotes authorization or `executionAllowed`. A single native choice surface may collect understanding and authorization only when it labels them as separate decisions and returns trusted evidence for each. Understanding confirmation itself requires trusted evidence bound to `plan-challenge-understanding-confirmation`; a naked boolean is ignored. A question response applies only when it is trusted, carries binding `plan-challenge-response:<questionId>`, records its selected-question sequence, and has non-empty evidence references. Caller-supplied booleans, status strings, unbound answers, authorization objects, or invalidation flags are untrusted input and cannot authorize execution, answer a decision, or invalidate a dependent question. Question invalidation comes only from the governed dependency resolver after a trusted answer/control transition. Explicit authorization denial is terminal for the run: show the denial summary, keep `executionAllowed=false`, and do not ask for authorization again.
+
+Do not ask for execution authorization merely to finish a read-only challenge session. When the next step has no side effect, authorization is `not_required` and the session closes after the chat summary without another acceptance step. Trusted authorization requires non-empty evidence, binding `planChallengeAuthorizationBinding(sideEffectActions)`, and scope actions covering every requested action. `executionAllowed` is true for an inactive challenge using the existing governed route, or for an active challenge only at `ready_for_execution`; all other active phases keep it false. Canonical writeback and project-copy mutation consume that same gate, while non-ready routes remain candidate/read-only. No capability-specific flag may bypass it.
+
+Closure is chat-first: confirmed decisions, unresolved risks, and the next action must be visible in the conversation. Render the question, controls, pending state, and outcome in the resolved `zh-CN`, `en-US`, `ja-JP`, or `ko-KR` locale without falling back to Chinese copy in another locale. Create a separate human-readable decision file only when the decision is long-lived and hard to reverse. Routine and reversible decisions do not justify another artifact or acceptance step.
+
 ## Interactive Execution Communication
 
 During multi-stage work, the dispatcher must communicate at natural transition points — not only at the pre-decision gate. This "communicate while working" pattern is mandatory for non-trivial tasks.
@@ -278,7 +299,7 @@ They supplement packets. They do not replace `businessFlowBlueprintPacket`, `dis
 
 ## Execution
 
-Dispatch from Thinking artifacts and selected capabilities. Execution may be parallel or sequential based on dependencies. `agent-teams-playbook` is selected only after Thinking and before Execution when there are 2+ executable worker lanes whose DAG dependencies, collision boundaries, workspace isolation, and external-write policy prove safe fan-out; fewer than 2 lanes record `not_required`, and unsafe fan-out records partial/degraded. Selection proves bounded fan-out planning, not a live Skill/Agent Team/spawn_agent call without attached host evidence.
+Dispatch from Thinking artifacts and selected capabilities. Execution schedules the maximal safe ready set from `core-loop-contract.parallelExecutionPolicy` and the Execution stage's `parallelPolicy`; dependency or resource conflicts serialize only the affected nodes. `agent-teams-playbook` may be selected as an adapter when useful, but it is not a prerequisite when the native host surface and stage DAG already support safe fan-out. Fewer than two ready lanes record `not_required`, unsafe lanes remain pending/serialized or partial, and adapter selection never counts as a live Skill/Agent Team/`spawn_agent` call without attached host evidence.
 
 Surgical hygiene: touch only files required by the task, remove only unused code caused by the change, and preserve unrelated user changes.
 
@@ -343,7 +364,7 @@ Undefined behavior defaults to silence/pause and escalates to Warden.
 
 Public display requires verified run, summary closure, single primary deliverable, closed deliverable chain, and consolidated deliverable. Do not show public-ready when verification is incomplete.
 
-Release/publication closure has two modes. Routine low-risk patch/minor releases use the maintainer smoke path: projection sync, default capability-discovery smoke, meta-theory tests, whitespace diff check, changelog/release notes, commit, tag, push, and publish. Upgrade to the stricter release-grade chain only when the change touches install/update, global sync, hooks, runtime matrix, provider registry, dependency compatibility, runtime probes, package contents, security-sensitive behavior, or the user asks for full/live evidence. Release-grade closure records all-runtime update scope, project sync evidence, global sync evidence, global hooks evidence when hooks are in scope, runtime matrix validation, provider registry validation, dependency compatibility, runtime probe evidence or blocker, real execution-demand route proof, live runtime evidence for declared live targets, changelog/release-note readiness, security audit evidence, and Warden approval.
+Release/publication closure has three assurance tiers. Routine low-risk patch/minor releases use the maintainer smoke path: projection sync, default capability-discovery smoke, meta-theory tests, whitespace diff check, changelog/release notes, commit, tag, push, and publish. Standard full releases use `meta:verify:all` when the change touches install/update, global sync, hooks, runtime matrix, provider registry, dependency compatibility, runtime probes, package contents, security-sensitive behavior, or the user asks for full verification. Standard closure records all-runtime update scope, project sync evidence, global sync evidence, global hooks evidence when hooks are in scope, runtime matrix validation, provider registry validation, dependency compatibility, runtime evaluation/probe evidence or blocker, real execution-demand route proof, changelog/release-note readiness, security audit evidence, and Warden approval; a complete passing run permits commit, tag, push, and publication. After publication, the exact annotated tag object, peeled commit/tree, clean verification report, GitHub Release, uploaded npm tgz digest, and the byte-exact npm candidate installed/tested by that clean report must be joined by `meta-kim release audit ... --require-exact`; comparing only the package manifest is not enough. Attempts are immutable and hash-chained; a failure never replaces the latest successful binding. Historical dirty or missing reports remain explicitly unbound rather than being rewritten as exact. Optional highest-assurance `meta:verify:live-certified` appends private-attested external-observer exact-binding clean-room evidence for declared live targets. Missing that external signature blocks the `live-certified` label only, not a separately passing standard release.
 
 ## Evolution
 

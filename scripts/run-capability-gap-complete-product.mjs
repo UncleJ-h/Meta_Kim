@@ -56,7 +56,7 @@ const SOURCE_LEAK_PATTERN = new RegExp(
     "wsh" + "obson",
     "anth" + "ropic",
     "skill-" + "creator",
-    "[A-Z]:[\\\\/]",
+    "(?:^|[^A-Za-z])[A-Z]:[\\\\/]",
     "Users[\\\\/]Kim",
   ].join("|"),
   "i"
@@ -150,21 +150,213 @@ function relative(filePath) {
   return relativePath;
 }
 
-function sanitizeProductReportValue(value) {
+const PUBLIC_ROUTE_START =
+  /^\/(?:api|assets|auth|docs|favicon\.ico|graphql|healthz?|oauth|readyz?|static|v\d+)(?:\/|[?#]|$)/i;
+const PATH_BOUNDARIES = new Set([
+  ",",
+  "，",
+  ";",
+  "；",
+  "。",
+  "!",
+  "?",
+  "！",
+  "？",
+  ")",
+  "）",
+  "]",
+  "}",
+  "\r",
+  "\n",
+]);
+const MATCHING_QUOTES = new Map([
+  ['"', '"'],
+  ["'", "'"],
+  ["`", "`"],
+  ["“", "”"],
+  ["‘", "’"],
+]);
+
+function firstMatchAtOrAfter(value, fromIndex, pattern, type) {
+  pattern.lastIndex = fromIndex;
+  let match = pattern.exec(value);
+  while (match) {
+    const previous = value[match.index - 1];
+    if (match.index === 0 || !/[A-Z0-9_./\\]/i.test(previous)) {
+      if (type === "posix" && PUBLIC_ROUTE_START.test(value.slice(match.index))) {
+        match = pattern.exec(value);
+        continue;
+      }
+      return { index: match.index, type, length: match[0].length };
+    }
+    match = pattern.exec(value);
+  }
+  return null;
+}
+
+function findNextAbsolutePathStart(value, fromIndex) {
+  const candidates = [
+    firstMatchAtOrAfter(
+      value,
+      fromIndex,
+      /https?:\/\/[^\s,，;；。)）}"'`]+/gi,
+      "public-url",
+    ),
+    firstMatchAtOrAfter(value, fromIndex, /file:(?:\/{1,3}|\\+)/gi, "file-uri"),
+    firstMatchAtOrAfter(value, fromIndex, /[A-Z]:[\\/]/gi, "windows"),
+    firstMatchAtOrAfter(value, fromIndex, /\\\\[^\\/\s]+[\\/]/g, "unc"),
+    firstMatchAtOrAfter(value, fromIndex, /\/(?![\/\s])/g, "posix"),
+  ].filter(Boolean);
+  if (candidates.length === 0) return null;
+  return candidates.sort((left, right) => left.index - right.index)[0];
+}
+
+function findAbsolutePathEnd(value, startIndex) {
+  const openingQuote = value[startIndex - 1];
+  const closingQuote = MATCHING_QUOTES.get(openingQuote);
+  if (closingQuote) {
+    const quotedEnd = value.indexOf(closingQuote, startIndex);
+    if (quotedEnd !== -1) return quotedEnd;
+  }
+  for (let index = startIndex; index < value.length; index += 1) {
+    if (PATH_BOUNDARIES.has(value[index])) return index;
+  }
+  return value.length;
+}
+
+function sanitizeUrlComponent(rawComponent) {
+  const directlySanitized = redactAbsolutePaths(rawComponent);
+  if (directlySanitized !== rawComponent) return directlySanitized;
+  try {
+    const decoded = decodeURIComponent(rawComponent.replaceAll("+", "%20"));
+    const sanitizedDecoded = redactAbsolutePaths(decoded);
+    if (sanitizedDecoded === decoded) return rawComponent;
+    return encodeURIComponent(sanitizedDecoded)
+      .replaceAll("%3Clocal-path%3E", "<local-path>")
+      .replaceAll("%3Cproject-root%3E", "<project-root>")
+      .replaceAll("%3Cuser-home%3E", "<user-home>");
+  } catch {
+    return rawComponent;
+  }
+}
+
+function sanitizePublicUrlSpan(urlSpan) {
+  const queryIndex = urlSpan.indexOf("?");
+  const hashIndex = urlSpan.indexOf("#");
+  const componentStarts = [queryIndex, hashIndex].filter((index) => index !== -1);
+  if (componentStarts.length === 0) return urlSpan;
+  const baseEnd = Math.min(...componentStarts);
+  const base = urlSpan.slice(0, baseEnd);
+  const queryEnd = hashIndex === -1 ? urlSpan.length : hashIndex;
+  const rawQuery = queryIndex === -1 ? null : urlSpan.slice(queryIndex + 1, queryEnd);
+  const rawHash = hashIndex === -1 ? null : urlSpan.slice(hashIndex + 1);
+  const sanitizedQuery =
+    rawQuery === null
+      ? null
+      : rawQuery
+          .split("&")
+          .map((pair) => {
+            const separator = pair.indexOf("=");
+            if (separator === -1) return sanitizeUrlComponent(pair);
+            const key = sanitizeUrlComponent(pair.slice(0, separator));
+            const entry = sanitizeUrlComponent(pair.slice(separator + 1));
+            return `${key}=${entry}`;
+          })
+          .join("&");
+  const sanitizedHash = rawHash === null ? null : sanitizeUrlComponent(rawHash);
+  if (sanitizedQuery === rawQuery && sanitizedHash === rawHash) return urlSpan;
+  return `${base}${sanitizedQuery === null ? "" : `?${sanitizedQuery}`}${
+    sanitizedHash === null ? "" : `#${sanitizedHash}`
+  }`;
+}
+
+function redactAbsolutePaths(value) {
+  let cursor = 0;
+  let output = "";
+  while (cursor < value.length) {
+    const next = findNextAbsolutePathStart(value, cursor);
+    if (!next) {
+      output += value.slice(cursor);
+      break;
+    }
+    output += value.slice(cursor, next.index);
+    if (next.type === "public-url") {
+      output += sanitizePublicUrlSpan(value.slice(next.index, next.index + next.length));
+      cursor = next.index + next.length;
+      continue;
+    }
+    output += "<local-path>";
+    cursor = findAbsolutePathEnd(value, next.index);
+  }
+  return output;
+}
+
+function sanitizeProductReportString(value) {
+  const normalizedValue = value.trim().replaceAll("\\", "/").toLowerCase();
+  const projectRoots = new Set([
+    REPO_ROOT,
+    REPO_ROOT.replaceAll("\\", "/"),
+  ]);
+  if (
+    [...projectRoots].some(
+      (root) => root.replaceAll("\\", "/").toLowerCase() === normalizedValue,
+    )
+  ) return "<project-root>";
+  const userHome = os.homedir();
+  const homeRoots = new Set([
+    userHome,
+    userHome.replaceAll("\\", "/"),
+  ]);
+  if (
+    [...homeRoots].some(
+      (root) => root.replaceAll("\\", "/").toLowerCase() === normalizedValue,
+    )
+  ) return "<user-home>";
+  const sanitized = value
+    .replace(/skill-creator/gi, "skill-provider")
+    .replace(/gstack/gi, "external-skill-provider")
+    .replace(/gbrain/gi, "external-memory-provider")
+    .replace(/wshobson/gi, "external-provider-author")
+    .replace(/anthropic/gi, "external-model-provider")
+    .replace(/Users[\\/]Kim/gi, "Users/<user>")
+    .replaceAll("route://", "route::");
+  return redactAbsolutePaths(sanitized);
+}
+
+export function sanitizeProductReportValue(value) {
   if (typeof value === "string") {
-    return value
-      .replaceAll("skill-creator", "skill-provider")
-      .replaceAll("route://", "route::");
+    return sanitizeProductReportString(value);
   }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeProductReportValue(item));
   }
   if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    const sanitizedKeys = entries.map(([key]) => sanitizeProductReportString(key));
+    const reservedKeys = new Set(sanitizedKeys);
+    const usedKeys = new Set();
+    let pathKeyOrdinal = 1;
+    let collisionKeyOrdinal = 1;
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        key,
-        sanitizeProductReportValue(entry),
-      ]),
+      entries.map(([, entry], index) => {
+        let sanitizedKey = sanitizedKeys[index];
+        if (sanitizedKey === "<local-path>") {
+          do {
+            sanitizedKey = `<local-path-key-${pathKeyOrdinal}>`;
+            pathKeyOrdinal += 1;
+          } while (reservedKeys.has(sanitizedKey) || usedKeys.has(sanitizedKey));
+        } else if (usedKeys.has(sanitizedKey)) {
+          do {
+            sanitizedKey = `<sanitized-key-${collisionKeyOrdinal}>`;
+            collisionKeyOrdinal += 1;
+          } while (reservedKeys.has(sanitizedKey) || usedKeys.has(sanitizedKey));
+        }
+        usedKeys.add(sanitizedKey);
+        return [
+          sanitizedKey,
+          sanitizeProductReportValue(entry),
+        ];
+      }),
     );
   }
   return value;
@@ -328,38 +520,71 @@ function validateGraphContract(graphContract, results = []) {
   };
 }
 
-async function buildGovernedExecutionEvidence() {
+async function buildGovernedExecutionEvidence({ task, stateDir }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-governed-product-"));
   try {
     const smokeRun = await runMetaTheoryGovernedExecution({
-      task: [
+      task: task ?? [
         "同一套 PRD review standard 需要 skill。",
         "长期 test coverage owner 需要 agent。",
         "release summary JSON 需要脚本。",
         "内部知识库需要 MCP provider 边界。",
       ].join("\n"),
-      runId: "complete-product-governed-smoke",
-      stateDir: path.join(tempDir, "smoke"),
+      stateDir: path.join(stateDir, "smoke"),
       dbPath: path.join(tempDir, "smoke.sqlite"),
     });
+    if (smokeRun.artifactKind === "host_preparation") return smokeRun;
+    // Keep the original underspecified request as a planning-boundary case.
+    // A separate explicit task proves decomposition without inventing a design
+    // or treating a larger worker count as user-goal completion.
+    const boundedRun = await runMetaTheoryGovernedExecution({
+      task: "Run meta-theory. In parallel inspect package.json; review AGENTS.md; read README.md; audit config/contracts/workflow-contract.json.",
+      stateDir: path.join(stateDir, "bounded"),
+      dbPath: path.join(tempDir, "bounded.sqlite"),
+    });
+    if (boundedRun.artifactKind === "host_preparation") return boundedRun;
+    const inventory = smokeRun.sourceArtifacts.orchestrationReport.fetchEvidence.capabilityInventory;
+    const requirementsExploration = {
+      discoveredSlots: [...new Set(inventory.map((item) => item.slot))],
+      incompleteWorkOrders: smokeRun.coreLoop.thinkingPacket.workerTaskPackets.filter((item) => item.workOrderReadiness === "incomplete").length,
+      safeForParallelFanout: smokeRun.coreLoop.agentTeamsPlaybookPacket.fanoutSafetyPacket.safeForParallelFanout,
+      actualWorkerExecution: smokeRun.coreLoop.executionResult.actualWorkerExecution,
+      publicReady: smokeRun.coreLoop.publicReadyDecision.publicReady,
+    };
+    const boundedPlanning = {
+      status: boundedRun.defaultRuntimePath.status,
+      workerTaskPackets: boundedRun.coreLoop.thinkingPacket.workerTaskPackets,
+      workerResultPackets: boundedRun.coreLoop.executionResult.workerResultPackets,
+      safeForParallelFanout: boundedRun.coreLoop.agentTeamsPlaybookPacket.fanoutSafetyPacket.safeForParallelFanout,
+      actualWorkerExecution: boundedRun.coreLoop.executionResult.actualWorkerExecution,
+      publicReady: boundedRun.coreLoop.publicReadyDecision.publicReady,
+    };
+    const approvedCandidate = await runMetaTheoryGovernedExecution({
+      task: "同一套 PRD review standard 需要 skill。",
+      stateDir: path.join(stateDir, "approval-candidate"),
+      dbPath: path.join(tempDir, "approval-candidate.sqlite"),
+      canonicalRoot: path.join(tempDir, "canonical"),
+    });
+    if (approvedCandidate.artifactKind === "host_preparation") return approvedCandidate;
     const approvedRun = await runMetaTheoryGovernedExecution({
       task: "同一套 PRD review standard 需要 skill。",
-      runId: "complete-product-warden-approved-proof",
-      stateDir: path.join(tempDir, "approved"),
+      stateDir: path.join(stateDir, "approved"),
       dbPath: path.join(tempDir, "approved.sqlite"),
       canonicalRoot: path.join(tempDir, "canonical"),
       approvalPacket: {
-        schemaVersion: "warden-approval-v0.1",
+        schemaVersion: "warden-approval-v0.2",
         approvalId: "complete-product-warden-approval-test",
         approver: "meta-warden",
         approvedAt: "2026-06-04T00:00:00.000Z",
-        scope: "complete product temporary canonical writeback proof",
-        targets: ["canonical/skills/prd-review-standard-skill/SKILL.md"],
+        scope: "canonical_reverse_sync",
+        mutationBindings: [approvedCandidate.wardenWritebackFlow.candidates[0].mutationBinding],
         diffSummary: "Create one temporary skill candidate for complete-product acceptance.",
         rollbackPlan: "Delete the temporary canonical root used by this test.",
+        riskReview: { status: "fixture_only", owner: "meta-sentinel" },
       },
       applyWriteback: true,
     });
+    if (approvedRun.artifactKind === "host_preparation") return approvedRun;
     const structuralPass =
       ["pass", "partial"].includes(smokeRun.defaultRuntimePath.status) &&
       smokeRun.runtimeProjectionEvidence.status === "pass" &&
@@ -370,6 +595,8 @@ async function buildGovernedExecutionEvidence() {
     return {
       status: structuralPass ? (fullPass ? "pass" : "partial") : "fail",
       defaultRuntimePath: smokeRun.defaultRuntimePath,
+      requirementsExploration,
+      boundedPlanning,
       runtimeProjectionEvidence: smokeRun.runtimeProjectionEvidence,
       approvedWriteback: approvedRun.wardenWritebackFlow,
       runReport: smokeRun.runReport,
@@ -378,6 +605,28 @@ async function buildGovernedExecutionEvidence() {
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+/** Keep the runner's pending identity and current host action as the authority. */
+export async function writeGovernedPreparationReport(preparation, { jsonPath, markdownPath, consumer }) {
+  if (preparation?.artifactKind !== "host_preparation") {
+    throw new Error("A host preparation result is required for a pending report");
+  }
+  const report = {
+    ...preparation,
+    nextAction: preparation.hostInvocationRequestPacket.nextAction,
+    summary: { mode: "host_preparation", consumer, preparationStatus: preparation.preparation.status },
+    evidence: { files: { json: relative(jsonPath), markdown: relative(markdownPath),
+      preparationJson: relative(preparation.paths.json), preparationMarkdown: relative(preparation.paths.markdown) } },
+  };
+  // Reuse the actual paired Markdown rather than inventing completed report
+  // sections. Its source pair remains available for the ordinary continuation.
+  const markdown = await fs.readFile(preparation.paths.markdown, "utf8");
+  await fs.mkdir(path.dirname(jsonPath), { recursive: true });
+  await fs.mkdir(path.dirname(markdownPath), { recursive: true });
+  await fs.writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  await fs.writeFile(markdownPath, markdown);
+  return report;
 }
 
 function buildAiReadableStandardsEvidence({
@@ -760,8 +1009,20 @@ function buildAcceptanceChecks({
       "默认 meta-theory orchestration runtime path",
       ["pass", "partial"].includes(governedExecutionEvidence.defaultRuntimePath.status) &&
         governedExecutionEvidence.defaultRuntimePath.entry === "meta:theory:run" &&
-        governedExecutionEvidence.defaultRuntimePath.workerTaskPackets.length >= 4,
-      `entry=${governedExecutionEvidence.defaultRuntimePath.entry}, workers=${governedExecutionEvidence.defaultRuntimePath.workerTaskPackets.length}`
+        [["agent"], ["skill"], ["command"], ["mcpServer", "mcpTool"]].every((slots) =>
+          slots.some((slot) => governedExecutionEvidence.requirementsExploration.discoveredSlots.includes(slot))) &&
+        governedExecutionEvidence.requirementsExploration.incompleteWorkOrders > 0 &&
+        governedExecutionEvidence.requirementsExploration.safeForParallelFanout === false &&
+        governedExecutionEvidence.requirementsExploration.actualWorkerExecution === false &&
+        governedExecutionEvidence.requirementsExploration.publicReady === false &&
+        governedExecutionEvidence.boundedPlanning.workerTaskPackets.length === 4 &&
+        governedExecutionEvidence.boundedPlanning.workerTaskPackets.every((packet) => packet.workOrderReadiness === "ready") &&
+        governedExecutionEvidence.boundedPlanning.safeForParallelFanout === true &&
+        governedExecutionEvidence.boundedPlanning.workerResultPackets.length === 4 &&
+        governedExecutionEvidence.boundedPlanning.workerResultPackets.every((packet) => packet.status === "planned_not_executed") &&
+        governedExecutionEvidence.boundedPlanning.actualWorkerExecution === false &&
+        governedExecutionEvidence.boundedPlanning.publicReady === false,
+      `entry=${governedExecutionEvidence.defaultRuntimePath.entry}, explorationIncomplete=${governedExecutionEvidence.requirementsExploration.incompleteWorkOrders}, boundedWorkers=${governedExecutionEvidence.boundedPlanning.workerTaskPackets.length}, boundedFanoutReady=${governedExecutionEvidence.boundedPlanning.safeForParallelFanout}, actualWorkerExecution=${governedExecutionEvidence.boundedPlanning.actualWorkerExecution}`
     ),
     check(
       "R-008",
@@ -965,7 +1226,14 @@ export async function runCapabilityGapCompleteProduct({
   markdownPath = DEFAULT_MARKDOWN_PATH,
   dbPath = DEFAULT_DB_PATH,
   task = null,
+  preparationStateDir = path.join(path.dirname(jsonPath), "governed-preparation"),
 } = {}) {
+  const governedExecutionEvidence = await buildGovernedExecutionEvidence({ task, stateDir: preparationStateDir });
+  if (governedExecutionEvidence.artifactKind === "host_preparation") {
+    return writeGovernedPreparationReport(governedExecutionEvidence, {
+      jsonPath, markdownPath, consumer: "capability_gap_complete_product",
+    });
+  }
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "meta-kim-complete-gap-"));
   const fixturePath = path.join(tempDir, "complete-product-inputs.json");
   const requireFullFixtureSet = !task;
@@ -1000,7 +1268,6 @@ export async function runCapabilityGapCompleteProduct({
   const productArtifacts = results.map((result, index) =>
     makeProductArtifact(result, scorecards[index])
   );
-  const governedExecutionEvidence = await buildGovernedExecutionEvidence();
   const evidenceFiles = {
     json: relative(jsonPath),
     markdown: relative(markdownPath),
@@ -1126,6 +1393,7 @@ async function main() {
         status: report.status,
         summary: report.summary,
         report: report.evidence.files.markdown,
+        ...(report.artifactKind === "host_preparation" ? { nextAction: report.nextAction, preparation: report.preparation.status } : {}),
       },
       null,
       2

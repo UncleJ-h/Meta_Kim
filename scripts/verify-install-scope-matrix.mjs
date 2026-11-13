@@ -12,9 +12,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { buildIsolatedUserHomeEnv } from "./isolated-user-home-env.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const keepTemp = process.argv.includes("--keep-temp");
+const PROJECTION_PACKAGE_RECEIPT_PURPOSE =
+  "primary-runtime-global-projection-package-runtime-bundle:receipt";
 
 const projectCases = [
   {
@@ -53,6 +56,18 @@ const projectCases = [
     absent: ["CLAUDE.md", ".claude", ".codex", ".agents", ".cursor"],
   },
   {
+    id: "project-gemini",
+    targets: ["gemini"],
+    present: ["AGENTS.md", ".gemini/settings.json", ".gemini/agents/meta-warden.md", ".gemini/hooks/meta-kim/native-runtime-adapter.mjs", ".agents/skills/meta-theory/SKILL.md"],
+    absent: ["CLAUDE.md", ".claude", ".codex", ".cursor", "openclaw", ".zcode"],
+  },
+  {
+    id: "project-zcode",
+    targets: ["zcode"],
+    present: ["AGENTS.md", ".zcode/config.json", ".zcode/agents/meta-warden.md", ".zcode/skills/meta-theory/SKILL.md"],
+    absent: ["CLAUDE.md", ".claude", ".codex", ".cursor", "openclaw", ".gemini", ".agents", ".zcode/hooks"],
+  },
+  {
     id: "project-default-claude-codex",
     targets: ["claude", "codex"],
     present: [
@@ -63,11 +78,11 @@ const projectCases = [
       ".agents/skills/meta-theory/SKILL.md",
       ".mcp.json",
     ],
-    absent: [".cursor", "openclaw"],
+    absent: [".cursor", "openclaw", ".gemini", ".zcode"],
   },
   {
     id: "project-all-explicit",
-    targets: ["claude", "codex", "openclaw", "cursor"],
+    targets: ["claude", "codex", "openclaw", "cursor", "gemini", "zcode"],
     present: [
       "CLAUDE.md",
       "AGENTS.md",
@@ -79,6 +94,11 @@ const projectCases = [
       "openclaw/openclaw.template.json",
       "openclaw/skills/meta-theory/SKILL.md",
       ".agents/skills/meta-theory/SKILL.md",
+      ".gemini/settings.json",
+      ".gemini/agents/meta-warden.md",
+      ".zcode/config.json",
+      ".zcode/agents/meta-warden.md",
+      ".zcode/skills/meta-theory/SKILL.md",
     ],
     absent: [],
   },
@@ -96,6 +116,30 @@ function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
+function normalizedPathText(value) {
+  const normalized = String(value).replaceAll("\\", "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function stablePackageRootFromManifest(manifest) {
+  const receiptEntry = manifest?.entries?.find((entry) =>
+    entry.source === "sync-global-meta-theory" &&
+    entry.purpose === PROJECTION_PACKAGE_RECEIPT_PURPOSE &&
+    entry.kind === "file"
+  );
+  if (!receiptEntry || !existsSync(receiptEntry.path)) return null;
+  const receipt = readJson(receiptEntry.path);
+  if (typeof receipt.packageRootRelative !== "string") return null;
+  const packageRoot = path.resolve(path.dirname(receiptEntry.path), receipt.packageRootRelative);
+  return existsSync(packageRoot) ? packageRoot : null;
+}
+
+function hookCommands(config) {
+  return Object.values(config?.hooks ?? {}).flatMap((blocks) =>
+    (blocks ?? []).flatMap((block) => block.hooks ?? [])
+  ).map((hook) => hook.command).filter((command) => typeof command === "string");
+}
+
 const runtimeCompatibilityCatalog = readJson(
   path.join(repoRoot, "config", "runtime-compatibility-catalog.json"),
 );
@@ -111,7 +155,7 @@ function runNode(args, options = {}) {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
-    timeout: 120_000,
+    timeout: 300_000,
     windowsHide: true,
     env: { ...process.env, ...(options.env ?? {}) },
   });
@@ -145,6 +189,9 @@ function parseSetupJson(result) {
 
 function inspectProjectCase(baseDir, entry) {
   const projectDir = path.join(baseDir, entry.id);
+  const projectUserHome = path.join(baseDir, "project-user-home");
+  const projectEnv = buildIsolatedUserHomeEnv(projectUserHome);
+  const targetExistedBeforeDryRun = existsSync(projectDir);
   const targetsArg = entry.targets.join(",");
   const commonArgs = [
     "setup.mjs",
@@ -155,11 +202,12 @@ function inspectProjectCase(baseDir, entry) {
     projectDir,
     "--json",
   ];
-  const dryResult = runNode([...commonArgs, "--dry-run"]);
+  const dryResult = runNode([...commonArgs, "--dry-run"], { env: projectEnv });
   const dryParsed = parseSetupJson(dryResult);
-  const applyResult = runNode([...commonArgs, "--apply"]);
+  const targetCreatedByDryRun = !targetExistedBeforeDryRun && existsSync(projectDir);
+  const applyResult = runNode([...commonArgs, "--apply"], { env: projectEnv });
   const applyParsed = parseSetupJson(applyResult);
-  const currentResult = runNode([...commonArgs, "--dry-run"]);
+  const currentResult = runNode([...commonArgs, "--dry-run"], { env: projectEnv });
   const currentParsed = parseSetupJson(currentResult);
   const manifestPath = toFsPath(projectDir, ".meta-kim/state/default/project-bootstrap.json");
   const manifest = existsSync(manifestPath) ? readJson(manifestPath) : null;
@@ -175,6 +223,7 @@ function inspectProjectCase(baseDir, entry) {
     JSON.stringify(activeTargets) !== JSON.stringify(entry.targets) ? activeTargets : null;
   const ok =
     dryParsed.ok &&
+    !targetCreatedByDryRun &&
     applyParsed.ok &&
     currentParsed.ok &&
     missingExpected.length === 0 &&
@@ -192,6 +241,7 @@ function inspectProjectCase(baseDir, entry) {
     layer: "project",
     targets: entry.targets,
     status: ok ? "pass" : "fail",
+    targetCreatedByDryRun,
     dryRunStatus: dryParsed.payload?.results?.[0]?.state?.status ?? null,
     applyStatus: applyParsed.payload?.results?.[0]?.state?.status ?? null,
     postApplyDryRunStatus: currentParsed.payload?.results?.[0]?.state?.status ?? null,
@@ -236,6 +286,8 @@ function inspectGlobalSync(baseDir, { id, targets, withGlobalHooks = false }) {
     codex: path.join(userHome, ".codex"),
     cursor: path.join(userHome, ".cursor"),
     openclaw: path.join(userHome, ".openclaw"),
+    gemini: path.join(userHome, ".gemini"),
+    zcode: path.join(userHome, ".zcode"),
   };
   const env = {
     USERPROFILE: userHome,
@@ -244,6 +296,8 @@ function inspectGlobalSync(baseDir, { id, targets, withGlobalHooks = false }) {
     META_KIM_CODEX_HOME: homes.codex,
     META_KIM_CURSOR_HOME: homes.cursor,
     META_KIM_OPENCLAW_HOME: homes.openclaw,
+    META_KIM_GEMINI_HOME: homes.gemini,
+    META_KIM_ZCODE_HOME: homes.zcode,
   };
   const args = [
     "scripts/sync-global-meta-theory.mjs",
@@ -276,12 +330,22 @@ function inspectGlobalSync(baseDir, { id, targets, withGlobalHooks = false }) {
       );
       const codexHooksJsonPath = path.join(homes.codex, "hooks.json");
       const codexHooksJson = existsSync(codexHooksJsonPath)
-        ? readFileSync(codexHooksJsonPath, "utf8")
-        : "";
+        ? readJson(codexHooksJsonPath)
+        : null;
+      const stablePackageRoot = stablePackageRootFromManifest(manifest);
+      const commands = hookCommands(codexHooksJson).map(normalizedPathText);
+      const stablePackageRootText = stablePackageRoot
+        ? normalizedPathText(stablePackageRoot)
+        : null;
+      const repoRootText = normalizedPathText(repoRoot);
       requiredChecks.codexGlobalHooksJson =
-        codexHooksJson.includes("activate-meta-theory-spine.mjs") &&
-        codexHooksJson.includes("--package-root") &&
-        codexHooksJson.includes(repoRoot.replace(/\\/g, "\\\\"));
+        stablePackageRootText !== null &&
+        commands.some((command) =>
+          command.includes("activate-meta-theory-spine.mjs") &&
+          command.includes("--package-root") &&
+          command.includes(stablePackageRootText)
+        ) &&
+        commands.every((command) => !command.includes(repoRootText));
     }
   }
   if (targets.includes("cursor")) {
@@ -290,7 +354,22 @@ function inspectGlobalSync(baseDir, { id, targets, withGlobalHooks = false }) {
   if (targets.includes("openclaw")) {
     requiredChecks.openclawSkill = existsRel(homes.openclaw, "skills/meta-theory/SKILL.md");
   }
+  for (const runtime of ["gemini", "zcode"]) {
+    if (!targets.includes(runtime)) continue;
+    requiredChecks[`${runtime}Skill`] = existsRel(homes[runtime], "skills/meta-theory/SKILL.md");
+    requiredChecks[`${runtime}Agent`] = existsRel(homes[runtime], "agents/meta-warden.md");
+    const settingsPath = path.join(homes[runtime], runtime === "gemini" ? "settings.json" : "cli/config.json");
+    const settings = existsSync(settingsPath) ? readJson(settingsPath) : null;
+    requiredChecks[`${runtime}Mcp`] = Boolean((runtime === "gemini" ? settings?.mcpServers : settings?.mcp?.servers)?.["meta-kim-runtime"]);
+    if (withGlobalHooks) {
+      requiredChecks[`${runtime}GlobalHooks`] = existsRel(homes[runtime], "hooks/meta-kim/native-runtime-adapter.mjs") &&
+        (runtime === "gemini" ? Array.isArray(settings?.hooks?.BeforeAgent) : settings?.hooks?.enabled === true && Boolean(settings?.hooks?.events?.UserPromptSubmit));
+    }
+  }
   const untouchedChecks = {};
+  for (const runtime of ["gemini", "zcode"]) {
+    if (!targets.includes(runtime)) untouchedChecks[`${runtime}HomeUntouched`] = listTopLevel(homes[runtime]).length === 0;
+  }
   if (!targets.includes("cursor")) {
     untouchedChecks.cursorHomeUntouched = listTopLevel(homes.cursor).length === 0;
   }
@@ -315,6 +394,8 @@ function inspectGlobalSync(baseDir, { id, targets, withGlobalHooks = false }) {
       codex: countFiles(homes.codex),
       cursor: countFiles(homes.cursor),
       openclaw: countFiles(homes.openclaw),
+      gemini: countFiles(homes.gemini),
+      zcode: countFiles(homes.zcode),
     },
     errors: result.status === 0 ? [] : [failPacket(result)],
   };
@@ -329,11 +410,11 @@ function classification() {
         sourceOfTruth: "config/runtime-compatibility-catalog.json",
         formalProjectionTargets: productIdsByTier("runtime_projection"),
         defaultSelectedTargets: ["claude", "codex"],
-        nonDefaultFormalProjectionTargets: ["openclaw", "cursor"],
+        nonDefaultFormalProjectionTargets: productIdsByTier("runtime_projection").filter((id) => !["claude", "codex"].includes(id)),
         dependencyInstallTargets: productIdsByTier("dependency_install_target"),
         candidateProbeTargets: productIdsByTier("candidate_probe"),
         boundary:
-          "Claude Code, Codex, OpenClaw, and Cursor are formal Meta_Kim projection targets; dependency_install_target and candidate_probe products are not project projections.",
+          "Claude Code, Codex, OpenClaw, Cursor, Gemini CLI, and ZCode are formal Meta_Kim projection targets; projection installation does not establish live host execution. dependency_install_target and candidate_probe products are not project projections.",
       },
       selectedByDefault: [
         {
@@ -353,6 +434,8 @@ function classification() {
       nonDefaultFormalTargets: [
         "~/.cursor/skills/meta-theory/",
         "~/.openclaw/skills/meta-theory/",
+        "~/.gemini/skills/meta-theory/",
+        "~/.zcode/skills/meta-theory/",
       ],
     },
     projectLayer: {
@@ -363,6 +446,8 @@ function classification() {
         codex: ["AGENTS.md", ".codex/"],
         cursor: ["AGENTS.md context", ".cursor/agents/", ".cursor/rules/", ".cursor/skills/", ".cursor/hooks.json", ".cursor/mcp.json"],
         openclaw: ["AGENTS.md team/context material", "openclaw/workspaces/", "openclaw/skills/", "openclaw/hooks/", "openclaw/openclaw.template.json"],
+        gemini: ["AGENTS.md", ".agents/skills/", ".gemini/agents/", ".gemini/settings.json", ".gemini/hooks/meta-kim/"],
+        zcode: ["AGENTS.md", ".zcode/skills/", ".zcode/agents/", ".zcode/config.json (MCP only; project hooks are not supported)"],
       },
       alwaysRecordsOnApply: [".meta-kim/state/default/project-bootstrap.json", ".meta-kim/backups/project-bootstrap/<timestamp> when existing files are backed up"],
     },
@@ -381,7 +466,7 @@ try {
     }),
     inspectGlobalSync(tempRoot, {
       id: "global-all-formal-targets",
-      targets: ["claude", "codex", "cursor", "openclaw"],
+      targets: ["claude", "codex", "cursor", "gemini", "openclaw", "zcode"],
       withGlobalHooks: true,
     }),
   ];
